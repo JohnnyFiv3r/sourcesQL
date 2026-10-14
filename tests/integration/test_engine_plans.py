@@ -1,0 +1,265 @@
+"""Engine fixture queries using the actual macOS sandboxed SQL worker.
+
+These use only fictional local provider fixtures. They do not qualify live
+semantic quality or a ChatGPT host surface.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from open_webql.contracts import WebQLError
+from open_webql.engine import Engine
+
+
+EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
+
+
+def imported(engine, columns, rows, classification="synthetic_fixture"):
+    return engine.import_table(
+        [{"key": key, "logical_type": logical_type} for key, logical_type in columns],
+        rows,
+        data_classification=classification,
+    )
+
+
+def binding(result):
+    return {"result_id": result["result_id"], "view": "original", "amendment_revision": None}
+
+
+def completed(result):
+    assert result["receipt"]["status"] == "completed"
+    assert result["receipt"]["settlement_status"] == "settled"
+    assert result["receipt"]["plan_complete"] is True
+    assert result["result_id"]
+
+
+def test_engine_six_reviewed_shapes_actual_worker(tmp_path):
+    engine = Engine(tmp_path / "engine")
+    discovery = engine.query(query=(EXAMPLES / "01_discovery.sql").read_text())
+    completed(discovery)
+    assert {r["project"] for r in discovery["rows"]} == {"Aurora Campus", "Birch Campus"}
+    by_project = {r["project"]: r for r in discovery["rows"]}
+    assert by_project["Aurora Campus"]["planned_mw"] == "500"
+    assert by_project["Aurora Campus"]["grid_status"] == "proposed"
+    assert by_project["Birch Campus"]["operating_mw"] is None
+    assert discovery["receipt"]["counts"]["search_queries"] == 2
+    assert all(s["content_basis"] == "synthetic_fixture" for s in discovery["source_versions"])
+    project_evidence = [e for e in discovery["evidence"] if e.get("field") == "project"]
+    assert project_evidence and all(e["support"] for e in project_evidence)
+
+    many = engine.query(query=(EXAMPLES / "02_many_entities.sql").read_text())
+    completed(many)
+    assert many["rows"] == [
+        {"url": "https://aurora.example/project", "project": "Aurora Campus", "planned_mw": "500"}
+    ]
+
+    refined = engine.query(
+        query=(EXAMPLES / "03_refine_saved.sql").read_text(),
+        inputs={"previous": binding(discovery)},
+    )
+    completed(refined)
+    assert [r["project"] for r in refined["rows"]] == ["Birch Campus", "Aurora Campus"]
+    assert [r["planned_mw"] for r in refined["rows"]] == ["750", "500"]
+    assert not refined["receipt"]["provider_events"]
+    assert refined["parents"][0]["result_id"] == discovery["result_id"]
+
+    private = imported(
+        engine,
+        [
+            ("private_entity_id", "VARCHAR"),
+            ("entity_key", "VARCHAR"),
+            ("expert_capacity_mw", "BIGINT"),
+        ],
+        [{"private_entity_id": "p1", "entity_key": "Aurora Campus", "expert_capacity_mw": "480"}],
+        "private_local",
+    )
+    observations = imported(
+        engine,
+        [("entity_key", "VARCHAR"), ("planned_mw", "BIGINT"), ("url", "VARCHAR")],
+        [
+            {
+                "entity_key": "Aurora Campus",
+                "planned_mw": "500",
+                "url": "https://aurora.example/project",
+            }
+        ],
+    )
+    joined = engine.query(
+        query=(EXAMPLES / "04_private_join.sql").read_text(),
+        inputs={"private_entities": binding(private), "public_observations": binding(observations)},
+    )
+    completed(joined)
+    assert joined["data_classification"] == "private_derived"
+    assert joined["rows"][0]["expert_capacity_mw"] == "480"
+    assert joined["rows"][0]["public_planned_mw"] == "500"
+    assert not joined["receipt"]["provider_events"]
+
+    selected = imported(engine, [("project", "VARCHAR")], [{"project": "Aurora Campus"}])
+    expanded = engine.query(
+        query=(EXAMPLES / "05_expand_row.sql").read_text(), inputs={"selected": binding(selected)}
+    )
+    completed(expanded)
+    assert expanded["rows"][0]["project"] == "Aurora Campus"
+    assert expanded["rows"][0]["url"] == "https://aurora.example/project"
+    assert expanded["receipt"]["counts"]["search_queries"] == 1
+
+    old = imported(
+        engine,
+        [("entity_key", "VARCHAR"), ("grid_status", "VARCHAR")],
+        [{"entity_key": "Aurora Campus", "grid_status": "not signed"}],
+    )
+    new = imported(
+        engine,
+        [("entity_key", "VARCHAR"), ("grid_status", "VARCHAR")],
+        [{"entity_key": "Aurora Campus", "grid_status": "signed"}],
+    )
+    diff = engine.query(
+        query=(EXAMPLES / "06_compare_snapshots.sql").read_text(),
+        inputs={"old_snapshot": binding(old), "new_snapshot": binding(new)},
+    )
+    completed(diff)
+    assert diff["rows"] == [
+        {
+            "entity_key": "Aurora Campus",
+            "prior_observation": "not signed",
+            "newer_observation": "signed",
+        }
+    ]
+    assert not diff["receipt"]["provider_events"]
+
+
+def test_engine_score_norm_and_typed_scalar_actual_worker(tmp_path):
+    engine = Engine(tmp_path / "engine")
+    scores = engine.query(
+        query="SELECT url,SEM_SCORE(content,'specific campus') AS score FROM WEB_SEARCH('fictional campuses') ORDER BY score DESC LIMIT 1"
+    )
+    completed(scores)
+    assert scores["rows"] == [{"url": "https://aurora.example/project", "score": 0.8}]
+    assert scores["receipt"]["counts"]["model_requests"] == 4
+    labels = imported(
+        engine,
+        [("label", "VARCHAR")],
+        [{"label": "Aurora"}, {"label": "Aurora Campus"}, {"label": "Birch"}, {"label": None}],
+    )
+    normalized = engine.query(
+        query="SELECT label,SEM_NORM(label,'resolve fixture names') AS normalized FROM input.names",
+        inputs={"names": binding(labels)},
+    )
+    completed(normalized)
+    assert [r["normalized"] for r in normalized["rows"]] == [
+        "Aurora Campus",
+        "Aurora Campus",
+        "Birch Campus",
+        None,
+    ]
+    assert normalized["receipt"]["counts"]["model_requests"] == 1
+    typed = engine.query(
+        query="SELECT SEM_EXTRACT(content,'planned capacity',type := 'BIGINT') AS capacity FROM WEB_FETCH('https://aurora.example/project')"
+    )
+    completed(typed)
+    assert typed["rows"] == [{"capacity": "500"}]
+    assert typed["columns"][0]["logical_type"] == "BIGINT"
+
+
+def test_engine_aggregate_and_json_cte_types_survive_materialization(tmp_path):
+    engine = Engine(tmp_path / "engine")
+    numeric = imported(
+        engine, [("amount", "BIGINT")], [{"amount": "9223372036854775807"}, {"amount": "1"}]
+    )
+    result = engine.query(
+        query="WITH totals AS (SELECT sum(amount) AS total FROM input.a) SELECT total FROM totals",
+        inputs={"a": binding(numeric)},
+    )
+    completed(result)
+    assert result["rows"] == [{"total": "9223372036854775808"}]
+    assert result["columns"][0]["logical_type"] == "HUGEINT"
+    json_data = imported(
+        engine, [("payload", "VARCHAR")], [{"payload": '{"name":"Aurora Campus"}'}]
+    )
+    result = engine.query(
+        query="WITH decoded AS (SELECT JSON_EXTRACT(payload,'$.name') AS json_name FROM input.a) SELECT CAST(json_name AS VARCHAR) AS name FROM decoded",
+        inputs={"a": binding(json_data)},
+    )
+    completed(result)
+    assert result["rows"] == [{"name": '"Aurora Campus"'}]
+
+
+def test_engine_invalid_grouping_has_no_provider_work_actual_worker(tmp_path):
+    engine = Engine(tmp_path / "engine")
+    with pytest.raises(WebQLError) as error:
+        engine.query(query="SELECT title FROM WEB_SEARCH('fixture campuses') GROUP BY url")
+    assert error.value.code == "invalid_query"
+    with engine.store.db() as db:
+        receipt_text = db.execute(
+            "SELECT receipt FROM runs ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()[0]
+    import json
+
+    receipt = json.loads(receipt_text)
+    assert receipt["status"] == "failed"
+    assert not receipt["counts"]
+    assert receipt.get("provider_events", []) == []
+
+
+def test_engine_null_semantic_evidence_has_unprocessed_partial_receipt(tmp_path):
+    engine = Engine(tmp_path / "engine")
+    data = imported(engine, [("content", "VARCHAR")], [{"content": None}])
+    query = "SELECT SEM_MATCH(content,'specific campus') AS matched FROM input.a"
+    with pytest.raises(WebQLError) as error:
+        engine.query(query=query, inputs={"a": binding(data)})
+    assert error.value.code == "invalid_output"
+    partial = engine.query(
+        query=query, inputs={"a": binding(data)}, partial_policy="retain_partial"
+    )
+    assert partial["rows"] == [{"matched": None}]
+    assert partial["receipt"]["status"] == "partial"
+    assert partial["receipt"]["plan_complete"] is False
+    assert partial["operator_outcomes"][0]["status"] == "unprocessed"
+    assert partial["receipt"]["counts"].get("model_requests", 0) == 0
+
+
+def test_engine_publication_filter_and_nested_declared_types(tmp_path):
+    engine = Engine(tmp_path / "engine")
+    dated = engine.query(
+        query="SELECT title FROM WEB_SEARCH('fictional campuses',published_after := '2026-01-01',undated_policy := 'exclude',allow_post_filter := true)"
+    )
+    completed(dated)
+    assert dated["rows"] == [{"title": "Aurora Campus planning"}]
+    assert dated["receipt"]["counts"]["search_queries"] == 1
+    payload = {"count": "42", "amount": "123.45", "seen": "2026-10-13", "labels": ["Aurora", None]}
+    data = imported(
+        engine,
+        [
+            ("payload", "STRUCT(count BIGINT,amount DECIMAL(18,2),seen DATE,labels VARCHAR[])"),
+            ("all_null", "BIGINT"),
+        ],
+        [{"payload": payload, "all_null": None}],
+    )
+    result = engine.query(query="SELECT payload,all_null FROM input.a", inputs={"a": binding(data)})
+    completed(result)
+    assert result["rows"] == [{"payload": payload, "all_null": None}]
+    assert result["columns"][1]["logical_type"] == "BIGINT"
+
+
+def test_oversized_intermediate_fails_instead_of_publishing_clipped_count(tmp_path):
+    engine = Engine(tmp_path / "engine")
+    data = imported(engine, [("id", "BIGINT")], [{"id": str(i)} for i in range(40)])
+    query = "WITH expanded AS (SELECT a.id AS a_id,b.id AS b_id FROM input.a a CROSS JOIN input.b b) SELECT count(*) AS n FROM expanded"
+    with pytest.raises(WebQLError) as error:
+        engine.query(query=query, inputs={"a": binding(data), "b": binding(data)})
+    assert error.value.code == "budget_exhausted"
+    assert error.value.stage == "worker"
+    with engine.store.db() as db:
+        import json
+
+        receipt = json.loads(
+            db.execute("SELECT receipt FROM runs ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        )
+        published = db.execute("SELECT count(*) FROM results").fetchone()[0]
+    assert receipt["status"] == "failed"
+    assert receipt["result_id"] is None
+    assert receipt["errors"][0]["code"] == "budget_exhausted"
+    assert published == 1  # The original imported input only; no clipped count.

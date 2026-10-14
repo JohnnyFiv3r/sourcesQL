@@ -1,0 +1,71 @@
+{
+  "reviewed_at": "2026-10-14",
+  "implementation_scope": "fixture and mock qualified; no live paid dispatches",
+  "versions": {
+    "httpx": "0.28.1",
+    "pydantic": "2.13.3",
+    "pydantic-ai-slim": "2.27.0",
+    "openai": "3.29.0",
+    "normalization": "text-v1",
+    "fixture_model": "fixture-facts-v1"
+  },
+  "references": [
+    {
+      "provider": "openai_embeddings",
+      "url": "https://developers.openai.com/api/reference/resources/embeddings/methods/create",
+      "verified_interfaces": ["POST /v1/embeddings", "model", "input string array", "encoding_format=float", "data[].index", "data[].embedding", "usage.total_tokens"],
+      "limitations": ["configured model is required", "scores are finite cosine similarity, not probability", "no lexical or LLM fallback", "billing unavailable"]
+    },
+    {
+      "provider": "brave",
+      "url": "https://api-dashboard.search.brave.com/documentation/services/web-search",
+      "verified_interfaces": ["GET /res/v1/web/search", "X-Subscription-Token", "count", "extra_snippets", "web.results", "more_results_available"],
+      "limitations": ["one page only", "publication filtering is explicit local filtering; freshness is not claimed as exact publication date", "snippet text is excerpt coverage", "billing unavailable"]
+    },
+    {
+      "provider": "exa",
+      "url": "https://exa.ai/docs/reference/search",
+      "verified_interfaces": ["POST /search", "x-api-key", "nested contents.text", "numResults", "startPublishedDate", "endPublishedDate", "results[].text"],
+      "limitations": ["no outputSchema synthesis", "provider-returned text scope is incomplete unless independently assured", "no historical search claim"]
+    },
+    {
+      "provider": "exa",
+      "url": "https://exa.ai/docs/reference/get-contents",
+      "verified_interfaces": ["POST /contents", "urls", "text", "maxAgeHours=0 fresh request", "costDollars is estimate not billing"],
+      "limitations": ["remote redirects remain provider controlled; direct SafeFetcher is the default", "one URL per request for explicit attempt accounting"]
+    },
+    {
+      "provider": "serper",
+      "url": "https://serper.dev/",
+      "verified_interfaces": ["organic response fields title/link/snippet/position", "ordinary search is separate from answer synthesis"],
+      "transport_reference": "https://serper.dev/playground",
+      "transport_verification": "official playground content requires authenticated interactive access; endpoint/auth request contract mock tested only, not live qualified",
+      "limitations": ["one page only", "relative date remains null", "billing unavailable", "live request contract remains unqualified"]
+    },
+    {
+      "provider": "pydantic_ai",
+      "url": "https://pydantic.dev/docs/ai/core-concepts/output/",
+      "verified_interfaces": ["Agent(output_type=Pydantic model)", "run_sync", "result.output", "result.usage property in installed 2.27.0"],
+      "limitations": ["structured output does not establish factual truth", "every non-null extracted field requires checked exact support"]
+    },
+    {
+      "provider": "pydantic_ai",
+      "url": "https://pydantic.dev/docs/ai/api/models/wrapper/",
+      "verified_interfaces": ["WrapperModel.request intercepts each semantic attempt", "retry dispatches share one run Budget"],
+      "limitations": ["OpenAI SDK retries disabled", "token totals reported after response", "strict cash/token profiles rejected before dispatch"]
+    }
+  ],
+  "fixtures": {
+    "path": "fixtures/research_sources.json",
+    "classification": "synthetic_fixture",
+    "provenance": "Newly fictional Aurora/Birch corpus carried from owner reviewed handoff fixture specification. Provider module embeds these six sources for installed-package execution.",
+    "quality_claim": "Deterministic source-specific fact lookup, normalization aliases and scores test mechanics only; no live semantic fallback and no semantic benchmark claim."
+  },
+  "qualification": {
+    "live_search": "not_run",
+    "live_fetch": "not_run",
+    "live_semantics": "not_run",
+    "live_embeddings": "not_run",
+    "provider_spending": "none"
+  }
+}

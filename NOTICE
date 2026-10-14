@@ -1,0 +1,10 @@
+Open WebQL
+Copyright 2026 John Inniger
+
+SQL admission, immutable result, accounting and evidence invariants are informed
+by selected public memoriesQL contracts and tests, Apache-2.0, at commit
+539fde637249fec68629ab25cbab5ffc95d5d055. Specific reuse is recorded in provenance/.
+
+SQLGlot is a separately installed MIT dependency; its source is not bundled.
+The research app derives from the owner's existing Results Demo source; its
+origin and modifications are recorded in provenance/app-reuse.json.

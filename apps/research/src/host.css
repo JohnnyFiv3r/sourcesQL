@@ -1,0 +1,120 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #f3f4f7;
+  color: #333;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+html,
+body,
+#host {
+  height: 100%;
+  overflow: hidden;
+  background: white;
+}
+#host {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+iframe {
+  display: block;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  background: white;
+}
+.embedded-preview#host {
+  background: #f3f4f7;
+}
+.embedded-preview iframe {
+  flex: none;
+  height: min(560px, 100dvh);
+  box-shadow: 0 1px #ddd;
+}
+#host-error:not(:empty) {
+  padding: 25px;
+  color: #943925;
+  background: #fff1ed;
+}
+dialog {
+  width: min(670px, 95vw);
+  border: 1px solid #e7e9ed;
+  border-radius: 12px;
+  box-shadow: 0 22px 80px #182b4d33;
+  padding: 25px;
+}
+dialog::backdrop {
+  background: #1f293766;
+  backdrop-filter: blur(2px);
+}
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dialog-header h2 {
+  font-size: 22px;
+  margin: 0;
+  font-weight: 550;
+  letter-spacing: -0.5px;
+}
+.dialog-header button {
+  border: 0;
+  background: none;
+  font-size: 16px;
+  cursor: pointer;
+}
+dialog p {
+  font-size: 12px;
+  color: #737984;
+  line-height: 1.65;
+}
+dialog textarea {
+  width: 100%;
+  height: 330px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  border: 1px solid #dfe2e9;
+  border-radius: 7px;
+  padding: 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-top: 16px;
+  font-size: 11px;
+  color: #737984;
+}
+.dialog-actions button {
+  border: 0;
+  background: #345ce3;
+  color: white;
+  font: inherit;
+  font-weight: 550;
+  padding: 10px 15px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #345ce3;
+  outline-offset: 3px;
+}
+@media (max-width: 720px) {
+  .dialog-actions {
+    align-items: flex-start;
+  }
+}

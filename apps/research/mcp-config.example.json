@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "open-webql-research": {
+      "command": "node",
+      "args": [
+        "--import",
+        "/absolute/path/open-webql/apps/research/node_modules/tsx/dist/loader.mjs",
+        "/absolute/path/open-webql/apps/research/server/main.ts",
+        "--stdio"
+      ],
+      "env": {
+        "RESEARCH_DATA_DIR": "/absolute/path/open-webql/local/research",
+        "WEBQL_DATA_DIR": "/absolute/path/open-webql/local/engine",
+        "WEBQL_PRINCIPAL": "local-owner",
+        "WEBQL_ALLOW_PRIVATE": "0"
+      }
+    }
+  }
+}

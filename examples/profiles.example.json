@@ -1,0 +1,61 @@
+{
+  "fixture": {
+    "mode": "fixture",
+    "provider": "fixture",
+    "fixture_version": "t1"
+  },
+  "exa": {
+    "mode": "live",
+    "provider": "exa",
+    "api_key_env": "EXA_API_KEY",
+    "allow_live": false,
+    "approved_cost_microusd": 0,
+    "metering_policy": "estimated",
+    "allowed_source_hosts": [],
+    "model": {
+      "name": "SET_APPROVED_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY",
+      "retries": 0
+    },
+    "embedding": {
+      "name": "SET_APPROVED_EMBEDDING_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  },
+  "brave": {
+    "mode": "live",
+    "provider": "brave",
+    "api_key_env": "BRAVE_SEARCH_API_KEY",
+    "allow_live": false,
+    "approved_cost_microusd": 0,
+    "metering_policy": "estimated",
+    "allowed_source_hosts": [],
+    "model": {
+      "name": "SET_APPROVED_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY",
+      "retries": 0
+    },
+    "embedding": {
+      "name": "SET_APPROVED_EMBEDDING_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  },
+  "serper": {
+    "mode": "live",
+    "provider": "serper",
+    "api_key_env": "SERPER_API_KEY",
+    "allow_live": false,
+    "approved_cost_microusd": 0,
+    "metering_policy": "estimated",
+    "allowed_source_hosts": [],
+    "model": {
+      "name": "SET_APPROVED_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY",
+      "retries": 0
+    },
+    "embedding": {
+      "name": "SET_APPROVED_EMBEDDING_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "component": "sql_admission_and_staged_planner",
+  "upstream": {
+    "repository": "https://github.com/JohnnyFiv3r/memoriesql",
+    "commit": "539fde637249fec68629ab25cbab5ffc95d5d055",
+    "license": "Apache-2.0",
+    "read_mode": "git show on public tracked files; upstream working tree unchanged",
+    "files": [
+      {
+        "path": "src/memoriesql/application/agent_sql_admission.py",
+        "sha256": "94c8fda14230ef54947edcdf8c364576037d95d1966e0ba475f011002daf769c",
+        "reviewed_ranges": ["1-335", "1232-1297"],
+        "adaptation": "Reimplemented exact AST class and populated argument-key closure, parser Command refusal without raw query logging, parser version pin, AST size/depth ceilings, authorized relation binding, duplicate output checks and exact parameter use. New DuckDB types, source operators, source-local shape validation and staging are independent Open WebQL code. No PostgreSQL authority/catalog/witness code was copied."
+      },
+      {
+        "path": "tests/unit/test_agent_sql_admission.py",
+        "sha256": "1bd1394c40bb762ab55dcff35671548e183eb1926102be9809f9feed25dc6cb1",
+        "reviewed_ranges": ["1-170"],
+        "adaptation": "Reimplemented invariant tests for bound values absent from emitted SQL, illegal relational phases, set composition and saved input relations using fictional DuckDB fixtures. No holdout or private fixtures were read or copied."
+      }
+    ]
+  },
+  "implementation": [
+    "src/open_webql/sql/admission.py",
+    "src/open_webql/execution/planner.py",
+    "tests/unit/test_sql_admission.py",
+    "tests/integration/test_planner_execution.py"
+  ],
+  "staging": {
+    "external_functions_inside_duckdb": false,
+    "bound_values_interpolated": false,
+    "provider_free_schema_preflight": true,
+    "argument_alignment": "explicit source ordinal identity, never implicit SQL row order",
+    "cte_materialization": "referenced CTEs only, preserving each CTE LIMIT and filter boundary",
+    "output_limit_caps_provider_work": false
+  },
+  "implemented_language": [
+    "one SELECT or nonrecursive WITH",
+    "explicit source bindings and web table sources",
+    "INNER, LEFT and CROSS joins",
+    "grouping, HAVING, DISTINCT and set operations",
+    "ROW_NUMBER, RANK, DENSE_RANK, LAG and LEAD",
+    "projected UNNEST, list and struct access",
+    "pure correlated EXISTS and scalar SQL subqueries",
+    "source-local semantic projections and top-level SEM_MATCH WHERE conjuncts",
+    "source-local row-dependent projected web lists",
+    "finite SEM_SCORE and collection-scoped SEM_NORM stage shapes"
+  ],
+  "limitations": [
+    "No general SQL optimizer or inference pushdown. Whole source-local eligible row population is evaluated before final LIMIT.",
+    "Recursive CTEs, arbitrary functions/readers/catalogs, table-form UNNEST, semantic OR/NOT/JOIN, aggregate/window semantic expressions and correlated external calls are refused.",
+    "Static output types are provisional; schema-only DuckDB validation and final worker schema are authoritative for deterministic expression types.",
+    "Fixture tests establish compiler/planner mechanics only, not provider quality, full lineage, actual sandbox qualification or hosted integration."
+  ],
+  "verification": {
+    "compiler_planner_fixture_tests": 104,
+    "actual_macOS_worker_engine_fixture_tests": 7,
+    "oversized_intermediate": "40 x 40 CROSS JOIN CTE previously published COUNT 1001 instead of 1600; now budget_exhausted with no published result. Exact 1001-row stage boundary retains every row.",
+    "typed_stage_round_trips": "BIGINT/HUGEINT, nested struct/list, DECIMAL, DATE, all-null and JSON CTEs passed in actual worker engine tests",
+    "six_reviewed_examples": "admitted and executed with fictional source/input fixtures",
+    "ruff": "passed",
+    "mypy": "passed for SQL and planner modules",
+    "live_provider_qualification": "not_run_by_this_lane"
+  }
+}

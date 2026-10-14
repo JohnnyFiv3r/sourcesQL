@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "source": "Synthetic v1 compatibility export",
+  "export_result_set_id": "r00000000001",
+  "rows": [
+    {
+      "issuer": "Synthetic city 1",
+      "opportunity": "Synthetic infrastructure request 1",
+      "closes_at": "2026-10-01 15:00:00",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2026-10-01 15:00:00",
+      "source_url": "https://example.com/fixtures/procurement/1"
+    },
+    {
+      "issuer": "Synthetic city 2",
+      "opportunity": "Synthetic infrastructure request 2",
+      "closes_at": "2026-10-01 15:00:00",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2026-10-01 15:00:00",
+      "source_url": "https://example.com/fixtures/procurement/2"
+    },
+    {
+      "issuer": "Synthetic city 3",
+      "opportunity": "Synthetic infrastructure request 3",
+      "closes_at": "2026-09-16",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2026-09-16",
+      "source_url": "https://example.com/fixtures/procurement/3"
+    },
+    {
+      "issuer": "Synthetic city 4",
+      "opportunity": "Synthetic infrastructure request 4",
+      "closes_at": "2026-09-03 1:30 p.m.",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2026-09-03 1:30 p.m.",
+      "source_url": "https://example.com/fixtures/procurement/4"
+    },
+    {
+      "issuer": "Synthetic city 5",
+      "opportunity": "Synthetic infrastructure request 5",
+      "closes_at": "2026-08-26 2:00 PM PST",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2026-08-26 2:00 PM PST",
+      "source_url": "https://example.com/fixtures/procurement/5"
+    },
+    {
+      "issuer": "Synthetic city 6",
+      "opportunity": "Synthetic infrastructure request 6",
+      "closes_at": "2026-03-27 5:00 pm",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2026-03-27 5:00 pm",
+      "source_url": "https://example.com/fixtures/procurement/6"
+    },
+    {
+      "issuer": "Synthetic city 7",
+      "opportunity": "Synthetic infrastructure request 7",
+      "closes_at": "2026-03-27 4:00 P.M.",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2026-03-27 4:00 P.M.",
+      "source_url": "https://example.com/fixtures/procurement/7"
+    },
+    {
+      "issuer": "Synthetic city 8",
+      "opportunity": "Synthetic infrastructure request 8",
+      "closes_at": "2026-02-04 at 2:30 PM",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2026-02-04 at 2:30 PM",
+      "source_url": "https://example.com/fixtures/procurement/8"
+    },
+    {
+      "issuer": "Synthetic city 9",
+      "opportunity": "Synthetic infrastructure request 9",
+      "closes_at": "2025-02-13 2:00 PM",
+      "explicit_status": null,
+      "disposition": "synthetic fixture",
+      "deadline_quote": "Synthetic published deadline: 2025-02-13 2:00 PM",
+      "source_url": "https://example.com/fixtures/procurement/9"
+    }
+  ]
+}

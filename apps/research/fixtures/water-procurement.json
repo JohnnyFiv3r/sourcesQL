@@ -1,0 +1,184 @@
+{
+  "id": "synthetic-procurement-20260930",
+  "title": "Synthetic procurement research",
+  "sourceResultSetId": "r00000000001",
+  "capturedAt": "2026-09-30",
+  "coverage": "Nine synthetic records for local compatibility tests; no live source or recall claim.",
+  "columns": [
+    {
+      "key": "issuer",
+      "label": "Issuer"
+    },
+    {
+      "key": "opportunity",
+      "label": "Opportunity"
+    },
+    {
+      "key": "closes_at",
+      "label": "Deadline"
+    },
+    {
+      "key": "explicit_status",
+      "label": "Source status"
+    },
+    {
+      "key": "disposition",
+      "label": "Disposition"
+    }
+  ],
+  "rows": [
+    {
+      "id": "record-1",
+      "values": {
+        "issuer": "Synthetic city 1",
+        "opportunity": "Synthetic infrastructure request 1",
+        "closes_at": "2026-10-01 15:00:00",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/1",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2026-10-01 15:00:00"
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    },
+    {
+      "id": "record-2",
+      "values": {
+        "issuer": "Synthetic city 2",
+        "opportunity": "Synthetic infrastructure request 2",
+        "closes_at": "2026-10-01 15:00:00",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/2",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2026-10-01 15:00:00"
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    },
+    {
+      "id": "record-3",
+      "values": {
+        "issuer": "Synthetic city 3",
+        "opportunity": "Synthetic infrastructure request 3",
+        "closes_at": "2026-09-16",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/3",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2026-09-16"
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    },
+    {
+      "id": "record-4",
+      "values": {
+        "issuer": "Synthetic city 4",
+        "opportunity": "Synthetic infrastructure request 4",
+        "closes_at": "2026-09-03 1:30 p.m.",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/4",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2026-09-03 1:30 p.m."
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    },
+    {
+      "id": "record-5",
+      "values": {
+        "issuer": "Synthetic city 5",
+        "opportunity": "Synthetic infrastructure request 5",
+        "closes_at": "2026-08-26 2:00 PM PST",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/5",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2026-08-26 2:00 PM PST"
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    },
+    {
+      "id": "record-6",
+      "values": {
+        "issuer": "Synthetic city 6",
+        "opportunity": "Synthetic infrastructure request 6",
+        "closes_at": "2026-03-27 5:00 pm",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/6",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2026-03-27 5:00 pm"
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    },
+    {
+      "id": "record-7",
+      "values": {
+        "issuer": "Synthetic city 7",
+        "opportunity": "Synthetic infrastructure request 7",
+        "closes_at": "2026-03-27 4:00 P.M.",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/7",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2026-03-27 4:00 P.M."
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    },
+    {
+      "id": "record-8",
+      "values": {
+        "issuer": "Synthetic city 8",
+        "opportunity": "Synthetic infrastructure request 8",
+        "closes_at": "2026-02-04 at 2:30 PM",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/8",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2026-02-04 at 2:30 PM"
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    },
+    {
+      "id": "record-9",
+      "values": {
+        "issuer": "Synthetic city 9",
+        "opportunity": "Synthetic infrastructure request 9",
+        "closes_at": "2025-02-13 2:00 PM",
+        "explicit_status": null,
+        "disposition": "synthetic fixture"
+      },
+      "sourceUrl": "https://example.com/fixtures/procurement/9",
+      "evidence": {
+        "closes_at": [
+          "Synthetic published deadline: 2025-02-13 2:00 PM"
+        ]
+      },
+      "verificationNote": "Synthetic fixture; never fetched from the web"
+    }
+  ]
+}

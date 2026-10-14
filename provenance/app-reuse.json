@@ -1,0 +1,259 @@
+{
+  "source": "owner-authored Results Demo (local baseline)",
+  "baseline_captured_at": "2026-10-14",
+  "baseline_files": [
+    {
+      "path": "src/schema.ts",
+      "sha256": "b4a3898b80f90852c2d039d5eb3419a9f53448198394099db50e76d52aa41b80",
+      "bytes": 8831
+    },
+    {
+      "path": "src/app.tsx",
+      "sha256": "5dd0d8dcb660142e1ac56dbb95c9f252303fb6ac62d1bf098e25595456f1698e",
+      "bytes": 74215
+    },
+    {
+      "path": "src/research-tree-panel.tsx",
+      "sha256": "cab6b99d9f8f6076dd37e10af24ed536b7a11f25f0de9ada72d0389134874052",
+      "bytes": 6708
+    },
+    {
+      "path": "src/research-links.ts",
+      "sha256": "74bad9c80740f737e0e884d540919e3cc06803974336d110467f55cb5aa553b9",
+      "bytes": 1506
+    },
+    {
+      "path": "src/styles.css",
+      "sha256": "8784598a771bd9273f396111c803b89815751c17c67c38917ce890ba3cb5b9d8",
+      "bytes": 26837
+    },
+    {
+      "path": "src/agent-messaging.ts",
+      "sha256": "c12b76335383cf1068c68d8f9703e7dc9425cbec64770aff70c4d7e7d4f68c6b",
+      "bytes": 1364
+    },
+    {
+      "path": "src/corrections.ts",
+      "sha256": "4654fbe4eb56f1450e7cdfc7c36b8bb768a675948bc872c32a60e7e6c767728b",
+      "bytes": 3180
+    },
+    {
+      "path": "src/host.css",
+      "sha256": "3856859d4c7816a05b71c9ae2baa150247a052449f12517ddd73420987025442",
+      "bytes": 2012
+    },
+    {
+      "path": "src/connection-errors.ts",
+      "sha256": "19f312d5141b9db86badff61190cc895710e86dd2aac2f2f2697d5e1e68f393a",
+      "bytes": 471
+    },
+    {
+      "path": "src/research-tree.ts",
+      "sha256": "7cd72f00b072adf09aa89eb6c80037796324932f4e8b9568b34369d44a8eea61",
+      "bytes": 1562
+    },
+    {
+      "path": "src/host.ts",
+      "sha256": "0b99487430b203fcebf3a26d7861ab54ddf6a9de4f9419a6b44c41d67865ab4b",
+      "bytes": 4771
+    },
+    {
+      "path": "src/ui.tsx",
+      "sha256": "fcf6eb1dfd76afed3f1e85a4497f4db5983cc4a501ff17a52a7cc8ae199151e4",
+      "bytes": 2559
+    },
+    {
+      "path": "src/fonts/stack-sans-headline-latin.woff2",
+      "sha256": "b67788a116d7dcbb116bd0f4c513bac0159f0bd782f21d4b3c598fc2d1ec8156",
+      "bytes": 31708
+    },
+    {
+      "path": "src/fonts/tasa-orbiter-latin.woff2",
+      "sha256": "f1f146c134f6b3f174dcec1fd2b6212af6b61fb5172a1f5b41ab435386b547db",
+      "bytes": 31324
+    },
+    {
+      "path": "src/fonts/README.md",
+      "sha256": "d25c207ce1343ea03812114f45ce6a303ce7dff3a18a1722d28dd6e0789afbdd",
+      "bytes": 602
+    },
+    {
+      "path": "src/fonts/tasa-orbiter-LICENSE.txt",
+      "sha256": "0673adc5fac52c6bd0782fa19f6f1554ac7af748a39f9c223058a2cb63c8c7fa",
+      "bytes": 4424
+    },
+    {
+      "path": "src/fonts/stack-sans-headline-LICENSE.txt",
+      "sha256": "ebffb381c127e2c8b2b4d7e9e2aa515bb44ba2c62bf1db2f75ce5ea25e7005bb",
+      "bytes": 4397
+    },
+    {
+      "path": "server/ui-resource.ts",
+      "sha256": "aa81c9d7bc956288da8b6d5b7f2e26b12f810a14aa0c533343625210c8bc94e2",
+      "bytes": 1456
+    },
+    {
+      "path": "server/main.ts",
+      "sha256": "fc48c23e79cfa8848a198c21c62a46cec6a12732a2a231c17d52f691c7930f9e",
+      "bytes": 2229
+    },
+    {
+      "path": "server/mcp.ts",
+      "sha256": "4f69dc423fe22c11a2c8b0bf0bde5bb53bfeb3d8f95bc2365c580ef7e0588743",
+      "bytes": 18601
+    },
+    {
+      "path": "server/research.ts",
+      "sha256": "0c4a2dc107add542b3793d6e63e52dae590d953d7cf2a65fdf89f36c3b455849",
+      "bytes": 7881
+    },
+    {
+      "path": "server/store.ts",
+      "sha256": "b7430ac0403a3e6e894677919a54fa71ccbcde752b8b8041e06c5286254c66a3",
+      "bytes": 28149
+    },
+    {
+      "path": "scripts/preview-workflow.ts",
+      "sha256": "cf79bc926693d78484aa1a5f7229d5ac07f4c29c85ebf6bdfe39710f0fee1c35",
+      "bytes": 3652
+    },
+    {
+      "path": "scripts/build.ts",
+      "sha256": "d21d6737433557f70fa176c11d13313598e49aec7951f4fb0bf2e29b2b993041",
+      "bytes": 482
+    },
+    {
+      "path": "tests/ui-resource.test.ts",
+      "sha256": "ac077ec761fcf9afb987432a94b4d289e253da85eaf88ffdb2c961ce95c944f6",
+      "bytes": 2548
+    },
+    {
+      "path": "tests/row-lookup.test.ts",
+      "sha256": "9415626962e568327434ad5dd88ec704836f242edb619a4f8066ef6aa2c484a5",
+      "bytes": 9027
+    },
+    {
+      "path": "tests/bridge.test.ts",
+      "sha256": "c8792cd88930df910cfd0e88a0d5d0756a32b45d4a1f183e9a601a00a9715cf6",
+      "bytes": 4056
+    },
+    {
+      "path": "tests/research.test.ts",
+      "sha256": "94487d4be9d5d292bb40723f4d29be1c228420e02fbf42211bf00ad2162dc514",
+      "bytes": 20452
+    },
+    {
+      "path": "tests/removal-tools.test.ts",
+      "sha256": "d8059482a1eee333cf1a4e0f721959b4f08b070e5161f8af8d60d51ac1da2590",
+      "bytes": 3369
+    },
+    {
+      "path": "tests/connection-errors.test.ts",
+      "sha256": "54eaf46115510c0fe91a35f1ab4483455edab8b45552257a1876ae6bfe65952a",
+      "bytes": 809
+    },
+    {
+      "path": "tests/research-links.test.ts",
+      "sha256": "bd1167752dc34fe0bcaf9da5ad3ea6a7b3dbf6027c7104c61a83ebd91585aa3c",
+      "bytes": 2826
+    },
+    {
+      "path": "tests/workflow.test.ts",
+      "sha256": "dae6a23a3ce3b80b5c81c6a6ec41a2e20c14a97e3fe0ffdb76850ad2a85b046a",
+      "bytes": 18630
+    },
+    {
+      "path": "tests/agent-messaging.test.ts",
+      "sha256": "52d7aa7e1344e3d56ba0abf6cc6d08d2597826b6ea5946bb71bca0bab8414d86",
+      "bytes": 2919
+    },
+    {
+      "path": "tests/research-tree.test.ts",
+      "sha256": "da31eac4a120255f1378546e85f97fecbe8aa39d1271df6f3132cad5af9a225f",
+      "bytes": 1605
+    },
+    {
+      "path": "fixtures/water-procurement.json",
+      "sha256": "cd5c22db937b945cf00651aeedd00c16cc21824b9c271b17f766a61317c11f81",
+      "bytes": 7326
+    },
+    {
+      "path": "fixtures/legacy-snapshot.json",
+      "sha256": "41b00e6dc3f41e0268c578c6c8d40d0f11f2c81bfa9320b44da83e2f7b478ffb",
+      "bytes": 6068
+    },
+    {
+      "path": "package.json",
+      "sha256": "c480f620eb181f739115e0139b78b9e45816718278b06f64f602ace192278c41",
+      "bytes": 1071
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "a747b88c3097fde98e5125b4f724bdcdb7a283b9d48c95e2ab775ec3ad3e66e1",
+      "bytes": 102582
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "3d80b54719c866da0b4dea6050463f88568df7109d9bb443fc84323a2d43c774",
+      "bytes": 421
+    },
+    {
+      "path": "index.html",
+      "sha256": "d217a811ed92c6bf2114461bf67242ab96d5d2f01153dcda3d460e001fdf3a37",
+      "bytes": 323
+    },
+    {
+      "path": "research.html",
+      "sha256": "012e94df2e80899c4289a5f7dabf99f5d01c3807904bd5a17bb48b63612cad5b",
+      "bytes": 311
+    },
+    {
+      "path": "mcp-config.example.json",
+      "sha256": "17d8d40b530888d973c74feedb3167058acfa8f4dbf0741808495fe5fe66629f",
+      "bytes": 481
+    }
+  ],
+  "baseline_kind": "isolated source copy before integration edits",
+  "excluded": [
+    ".data",
+    ".tunnel",
+    "dist",
+    "artifacts",
+    "private documentation",
+    "start-tunnel.sh"
+  ],
+  "legacy_fixture_origin": "Legacy local research export; baseline tests run before replacement. Public fixture files will be synthetic.",
+  "baseline_verification": {
+    "build": "passed",
+    "tests": 40,
+    "failures": 0
+  },
+  "integration_verification": {
+    "source_typecheck": "passed",
+    "build": "passed",
+    "baseline_tests": 40,
+    "added_tests_passing_in_tool_sandbox": 17,
+    "positive_sql_lifecycle_test": "retained; OS sandbox launch blocked by outer tool sandbox; requires authorized local execution",
+    "original_files_rechecked": 42,
+    "original_source_changes": [],
+    "total_tests": 59,
+    "positive_sql_lifecycle_tests": [
+      "actual engine bridge completes 205-row SQL and app reference lifecycle",
+      "actual refresh query preserves explicit scoped row identity through result_ref"
+    ],
+    "dependency_audit": {
+      "client": "2.2.0",
+      "removed": "vite-plugin-singlefile and glob dependencies",
+      "isolated_npm_ci": "passed",
+      "npm_audit_vulnerabilities": 0,
+      "checked_at": "2026-10-14"
+    },
+    "final_worker_suite": "awaiting coordinator authorized local execution after concurrency/dependency updates"
+  },
+  "font_provenance": {
+    "credits": "Bundled OFL fonts; upstream credits are retained in the adjacent license files",
+    "baseline_recorded_download_date": "2026-10-12",
+    "licenses": "apps/research/src/fonts/*-LICENSE.txt",
+    "use": "Bundled locally under their retained font licenses; no CDN dependency"
+  }
+}
