@@ -24,8 +24,44 @@
     }
   ],
   "public_distribution": {
-    "source_allowlist": ["src", "tests", "docs", "examples", "fixtures", "provenance", "apps/research/src", "apps/research/server", "apps/research/scripts", "apps/research/tests", "apps/research/fixtures", "apps/research/package.json", "apps/research/package-lock.json", "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html", "apps/research/mcp-config.example.json", "README.md", "STATUS.md", "LICENSE", "NOTICE", "AGENTS.md", "pyproject.toml", "uv.lock", ".gitignore"],
-    "excluded": ["private handoff", "runtime stores", "credentials", "installed dependencies", "tunnel files", "upstream checkout", "build caches", "unreviewed legacy exports"],
+    "source_allowlist": [
+      "src",
+      "tests",
+      "docs",
+      "examples",
+      "fixtures",
+      "provenance",
+      "apps/research/src",
+      "apps/research/server",
+      "apps/research/scripts",
+      "apps/research/tests",
+      "apps/research/fixtures",
+      "apps/research/package.json",
+      "apps/research/package-lock.json",
+      "apps/research/tsconfig.json",
+      "apps/research/index.html",
+      "apps/research/research.html",
+      "apps/research/mcp-config.example.json",
+      "README.md",
+      "STATUS.md",
+      "LICENSE",
+      "NOTICE",
+      "AGENTS.md",
+      "pyproject.toml",
+      "uv.lock",
+      ".gitignore",
+      "apps/research/.gitignore"
+    ],
+    "excluded": [
+      "private handoff",
+      "runtime stores",
+      "credentials",
+      "installed dependencies",
+      "tunnel files",
+      "upstream checkout",
+      "build caches",
+      "unreviewed legacy exports"
+    ],
     "publication": "not performed"
   }
 }

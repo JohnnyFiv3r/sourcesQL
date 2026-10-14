@@ -29,4 +29,3 @@ packages = ["src/open_webql"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/", "tests/", "docs/", "examples/", "fixtures/", "pyproject.toml", "uv.lock", "README.md", "LICENSE", "NOTICE", "AGENTS.md", "provenance/reuse-manifest.json"]
-
