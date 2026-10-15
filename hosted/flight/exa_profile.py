@@ -1,4 +1,4 @@
-"""Trusted, opt-in Exa search policy for the credential-bearing Flight parent.
+"""Trusted, opt-in search policy for the credential-bearing Flight parent.
 
 This module never contacts a provider or copies a secret into the profile.
 Fixture mode remains the engine default; requests cannot configure this policy.
@@ -34,20 +34,85 @@ LIMITS = {
     "max_input_tokens": 0,
     "max_output_tokens": 0,
 }
+SEARCH_POLICY_VERSIONS = {"brave": "brave-search.v1", "serper": "serper-search.v1"}
+
+
+def _approved_integer(environment: Mapping[str, str], key: str, default=None) -> int:
+    value = environment.get(key, default)
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,6}", value):
+        raise ValueError("Search requires a bounded positive integer approval")
+    result = int(value)
+    if result > MAX_APPROVED_COST_MICROUSD:
+        raise ValueError("Search approval exceeds the hosted policy ceiling")
+    return result
+
+
+def _load_search_configuration(provider: str, environment: Mapping[str, str]) -> dict:
+    prefix = "SOURCESQL_" + provider.upper()
+    version = SEARCH_POLICY_VERSIONS[provider]
+    if environment.get(prefix + "_POLICY_VERSION", version) != version:
+        raise ValueError("Unknown hosted search policy version")
+    approved = _approved_integer(
+        environment, prefix + "_APPROVED_COST_MICROUSD", str(DEFAULT_APPROVED_COST_MICROUSD)
+    )
+    request_cost = _approved_integer(environment, prefix + "_REQUEST_COST_MICROUSD")
+    if request_cost > approved:
+        raise ValueError("Search approval cannot cover one estimated request")
+    secret_name = environment.get(prefix + "_SECRET_NAME")
+    if not isinstance(secret_name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", secret_name):
+        raise ValueError("Use a simple configured MotherDuck Flight secret name")
+    descriptor = {
+        "approved_cost_microusd": approved,
+        "provider": provider,
+        "request_cost_microusd": request_cost,
+        "secret_name": secret_name,
+        "version": version,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    profile = {
+        "mode": "live",
+        "provider": provider,
+        "api_key_env": secret_name + "_" + provider.upper() + "_API_KEY",
+        "allow_live": True,
+        "approved_cost_microusd": approved,
+        "metering_policy": "estimated",
+        "allowed_source_hosts": [],
+        "hosted_profile_fingerprint": fingerprint,
+    }
+    return {
+        "profiles": {provider: profile},
+        "allowed_profiles": ("fixture", provider),
+        "provider_policy_sha256": fingerprint,
+        "descriptor": descriptor,
+    }
 
 
 def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     environment = os.environ if environment is None else environment
-    enabled = environment.get("SOURCESQL_ALLOW_LIVE_EXA", "0")
-    if enabled not in {"", "0", "1"}:
-        raise ValueError("Live Exa enablement must be 0 or 1")
-    if enabled != "1":
+    enabled_providers = []
+    for provider in ("exa", "brave", "serper"):
+        enabled = environment.get("SOURCESQL_ALLOW_LIVE_" + provider.upper(), "0")
+        if enabled not in {"", "0", "1"}:
+            raise ValueError("Live search enablement must be 0 or 1")
+        if enabled == "1":
+            enabled_providers.append(provider)
+    if len(enabled_providers) > 1:
+        raise ValueError("Configure one live search provider per reviewed Flight")
+    if not enabled_providers:
         return {
             "profiles": {},
             "allowed_profiles": ("fixture",),
             "provider_policy_sha256": None,
             "descriptor": None,
         }
+    if enabled_providers[0] != "exa":
+        return _load_search_configuration(enabled_providers[0], environment)
+    version = environment.get("SOURCESQL_EXA_POLICY_VERSION", POLICY_VERSION)
+    if version not in {"exa-search.v1", POLICY_VERSION}:
+        raise ValueError("Unknown hosted Exa policy version")
+    search_types = SEARCH_TYPES if version == POLICY_VERSION else {"exa": "auto"}
     approval = environment.get(
         "SOURCESQL_EXA_APPROVED_COST_MICROUSD", str(DEFAULT_APPROVED_COST_MICROUSD)
     )
@@ -62,9 +127,9 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     secret_environment = "EXA_API_KEY" if secret_name is None else secret_name + "_EXA_API_KEY"
     descriptor = {
         "approved_cost_microusd": approved,
-        "search_types": SEARCH_TYPES,
+        **({"search_types": search_types} if version == POLICY_VERSION else {}),
         "secret_name": secret_name,
-        "version": POLICY_VERSION,
+        "version": version,
     }
     fingerprint = hashlib.sha256(
         json.dumps(descriptor, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode(
@@ -85,9 +150,9 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     return {
         "profiles": {
             name: {**common_profile, "search_type": search_type}
-            for name, search_type in SEARCH_TYPES.items()
+            for name, search_type in search_types.items()
         },
-        "allowed_profiles": ("fixture", *SEARCH_TYPES),
+        "allowed_profiles": ("fixture", *search_types),
         "provider_policy_sha256": fingerprint,
         "descriptor": descriptor,
     }
@@ -104,7 +169,6 @@ def validate_request(
         return
     if (
         not isinstance(profile_name, str)
-        or profile_name not in SEARCH_TYPES
         or profile_name not in settings["allowed_profiles"]
     ):
         raise SourcesQLError("unsupported_capability", "Hosted profile is not enabled", "dispatch")
@@ -115,12 +179,14 @@ def validate_request(
             "unauthorized", "Hosted provider policy cannot be overridden", "dispatch"
         )
     profile = settings["profiles"][profile_name]
+    provider = settings["descriptor"].get("provider", "exa")
     if (
         not settings["provider_policy_sha256"]
         or profile.get("hosted_profile_fingerprint") != settings["provider_policy_sha256"]
         or profile.get("mode") != "live"
-        or profile.get("provider") != "exa"
-        or profile.get("search_type") != SEARCH_TYPES[profile_name]
+        or profile.get("provider") != provider
+        or (provider == "exa" and profile.get("search_type") != SEARCH_TYPES.get(profile_name))
+        or (provider != "exa" and profile_name != provider)
     ):
         raise SourcesQLError("unauthorized", "Hosted provider policy mismatch", "dispatch")
     secret = environment.get(profile["api_key_env"])
@@ -131,20 +197,29 @@ def validate_request(
         or any(ord(character) < 33 or ord(character) > 126 for character in secret)
     ):
         raise SourcesQLError(
-            "provider_unavailable", "Exa credentials are not configured", "dispatch"
+            "provider_unavailable", "Search credentials are not configured", "dispatch"
         )
     if request.get("source_mode") != "allow_excerpt":
         raise SourcesQLError(
-            "unsupported_capability", "Hosted Exa requires provider-returned text", "dispatch"
+            "unsupported_capability", "Hosted search requires provider-returned excerpts", "dispatch"
         )
     limits = Budget(request.get("budgets")).limits
     approved = profile["approved_cost_microusd"]
     if not 0 < limits["max_cost_microusd"] <= approved:
         raise SourcesQLError("unauthorized", "Request exceeds trusted Exa approval", "dispatch")
-    if any(limits[name] > ceiling for name, ceiling in LIMITS.items()):
+    ceilings = dict(LIMITS)
+    if provider != "exa" or settings["descriptor"]["version"] == "exa-search.v1":
+        ceilings["dispatch_deadline_seconds"] = 60
+    if any(limits[name] > ceiling for name, ceiling in ceilings.items()):
         raise SourcesQLError(
             "unauthorized", "Request exceeds trusted Exa execution limits", "dispatch"
         )
+    if provider != "exa":
+        request_cost = settings["descriptor"]["request_cost_microusd"]
+        if limits["max_search_requests"] * request_cost > limits["max_cost_microusd"]:
+            raise SourcesQLError(
+                "unauthorized", "Search attempts exceed the operator cost estimate", "dispatch"
+            )
 
 
 def validate_explain(explanation: dict) -> None:
@@ -156,5 +231,5 @@ def validate_explain(explanation: dict) -> None:
         for stage in stages
     ):
         raise SourcesQLError(
-            "unsupported_capability", "Hosted Exa currently supports search only", "dispatch"
+            "unsupported_capability", "Hosted profiles currently support search only", "dispatch"
         )

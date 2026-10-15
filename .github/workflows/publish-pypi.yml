@@ -1,0 +1,82 @@
+name: Publish Python package
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, tomllib
+          version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
+          package = pathlib.Path("src/sourcesql/__init__.py").read_text()
+          assert re.search(r'__version__ = "' + re.escape(version) + r'"', package)
+          if os.environ["GITHUB_REF_TYPE"] == "tag":
+              assert os.environ["RELEASE_TAG"] == "v" + version
+          PY
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+
+  qualify:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+      - run: python tests/packaging/qualify_distributions.py --dist dist --report package-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-qualification-${{ matrix.python }}
+          path: package-report.json
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, qualify]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/sourcesql/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+      - name: Publish verified distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true

@@ -17,6 +17,7 @@ import {
   flightSQL,
   outputSettings,
   parseArguments,
+  isRetryableFlightReceipt,
   main,
 } from "./setup.mjs";
 const require = createRequire(
@@ -31,6 +32,110 @@ const receipt = {
   flight_source_sha256: "b".repeat(64),
   requirements_sha256: "c".repeat(64),
 };
+
+for (const provider of ["brave", "serper"]) {
+  test(`${provider} setup selects exactly one named Flight secret and records a conservative estimate`, () => {
+    const options = parseArguments(
+      [
+        ...base,
+        `--${provider}-secret`,
+        `sourcesql_${provider}`,
+        `--${provider}-request-cost-microusd`,
+        "5000",
+      ],
+      {},
+    );
+    assert.equal(options.exa, undefined);
+    assert.deepEqual(options.search.descriptor, {
+      approved_cost_microusd: 50000,
+      provider,
+      request_cost_microusd: 5000,
+      secret_name: `sourcesql_${provider}`,
+      version: `${provider}-search.v1`,
+    });
+    const sql = flightSQL(
+      options,
+      "reviewed_test",
+      'print("reviewed")',
+      "duckdb==1.5.0",
+      namespace,
+      schema,
+    );
+    assert.ok(sql.includes(`flight_secret_names := ['sourcesql_${provider}']`));
+    assert.doesNotMatch(
+      sql,
+      /API_KEY|MOTHERDUCK_TOKEN|schedule_cron|md_run_flight/,
+    );
+    const settings = outputSettings(options, receipt);
+    assert.equal(
+      settings[`SOURCESQL_${provider.toUpperCase()}_REQUEST_COST_MICROUSD`],
+      "5000",
+    );
+    assert.equal(
+      settings[`SOURCESQL_${provider.toUpperCase()}_DAILY_COST_MICROUSD`],
+      "1000000",
+    );
+    assert.equal(settings.SOURCESQL_ALLOW_FLIGHT_SUBMISSION, "0");
+    assert.equal(
+      options.search.providerPolicySha256,
+      createHash("sha256")
+        .update(JSON.stringify(options.search.descriptor))
+        .digest("hex"),
+    );
+  });
+  test(`${provider} setup requires explicit estimates and refuses mixed live providers`, () => {
+    for (const extra of [
+      [`--${provider}-secret`, "name"],
+      [`--${provider}-request-cost-microusd`, "5000"],
+      [
+        `--${provider}-secret`,
+        "UPPERCASE",
+        `--${provider}-request-cost-microusd`,
+        "5000",
+      ],
+      [
+        `--${provider}-secret`,
+        "name",
+        `--${provider}-request-cost-microusd`,
+        "0",
+      ],
+      [
+        `--${provider}-secret`,
+        "name",
+        `--${provider}-request-cost-microusd`,
+        "50001",
+      ],
+      [
+        `--${provider}-secret`,
+        "name",
+        `--${provider}-request-cost-microusd`,
+        "1.5",
+      ],
+      [
+        `--${provider}-secret`,
+        "name",
+        `--${provider}-request-cost-microusd`,
+        "5000",
+        "--exa-secret",
+        "exa_name",
+      ],
+      [
+        "--brave-secret",
+        "brave_name",
+        "--brave-request-cost-microusd",
+        "5000",
+        "--serper-secret",
+        "serper_name",
+        "--serper-request-cost-microusd",
+        "5000",
+      ],
+    ])
+      assert.throws(
+        () => parseArguments([...base, ...extra], {}),
+        /invalid_configuration/,
+      );
+  });
+}
 
 test("fixture provisioning stays unscheduled, bounded and without secrets or Exa enablement", () => {
   const options = parseArguments(base, {});
@@ -74,7 +179,11 @@ test("Exa provisioning binds only the named secret and exports the exact token-f
   );
   assert.deepEqual(options.exa.descriptor, {
     approved_cost_microusd: 50000,
-    search_types: { exa: "auto", exa_deep: "deep", exa_deep_reasoning: "deep-reasoning" },
+    search_types: {
+      exa: "auto",
+      exa_deep: "deep",
+      exa_deep_reasoning: "deep-reasoning",
+    },
     secret_name: "sourcesql_exa",
     version: "exa-research.v2",
   });
@@ -231,6 +340,9 @@ test("a lost creation response leaves a private receipt and cannot blindly creat
       "5e31ea3484b972d2f9b0c9e69ad88f226582b19234e236bc6c3dca5bf0e1e901",
     );
     assert.ok(saved.flight_name);
+    assert.equal(saved.phase, "creating");
+    assert.equal(saved.flight_creation_attempted, true);
+    assert.equal(isRetryableFlightReceipt(saved), false);
     assert.equal(saved.flight_id, undefined);
     assert.equal(statSync(output).mode & 0o777, 0o600);
     assert.equal(existsSync(output + ".env"), false);
@@ -246,6 +358,203 @@ test("a lost creation response leaves a private receipt and cannot blindly creat
     process.exitCode = previousExit;
     if (previousToken === undefined) delete process.env.MOTHERDUCK_TOKEN;
     else process.env.MOTHERDUCK_TOKEN = previousToken;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function preparedBundle(directory) {
+  const source = "print('SAFE-PUBLIC-SOURCE')",
+    requirements = "duckdb==1.5.0\n";
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  writeFileSync(join(directory, "flight.py"), source);
+  writeFileSync(join(directory, "requirements.txt"), requirements);
+  writeFileSync(
+    join(directory, "manifest.json"),
+    JSON.stringify({
+      flight_source_sha256: hash(source),
+      requirements_sha256: hash(requirements),
+      wheel_sha256: "d".repeat(64),
+      credentials_embedded: false,
+    }),
+  );
+}
+
+test("only an explicit prepared receipt with no creation identity permits retry", () => {
+  const prepared = {
+    schema: "sourcesql.hosted-setup.v1",
+    phase: "prepared",
+    flight_creation_attempted: false,
+  };
+  assert.equal(isRetryableFlightReceipt(prepared), true);
+  for (const receipt of [
+    undefined,
+    null,
+    {},
+    { flight_name: "legacy_unknown" },
+    { ...prepared, flight_creation_attempted: true },
+    { ...prepared, phase: "creating" },
+    { ...prepared, phase: "created" },
+    { ...prepared, flight_name: "possibly_created" },
+    { ...prepared, flight_id: "11111111-1111-4111-a111-111111111111" },
+    { ...prepared, schema: "unknown" },
+  ])
+    assert.equal(isRetryableFlightReceipt(receipt), false);
+});
+
+test("a MotherDuck connection failure can resume safely before the Flight creation barrier", async (context) => {
+  const directory = mkdtempSync(join(tmpdir(), "sourcesql-setup-prepared-"));
+  const output = join(directory, "receipt.json");
+  const previousExit = process.exitCode,
+    previousToken = process.env.MOTHERDUCK_TOKEN;
+  preparedBundle(directory);
+  process.env.MOTHERDUCK_TOKEN = "SAFE-SYNTHETIC-SETUP-TOKEN";
+  let connections = 0,
+    creations = 0;
+  context.mock.method(Client.prototype, "connect", async () => {
+    connections++;
+    if (connections === 1) throw Error("SAFE-SYNTHETIC-CONNECTION-FAILURE");
+  });
+  context.mock.method(Client.prototype, "query", async (sql) => {
+    assert.match(sql, /md_create_flight/);
+    const saved = JSON.parse(readFileSync(output, "utf8"));
+    assert.equal(saved.phase, "creating");
+    assert.equal(saved.flight_creation_attempted, true);
+    assert.ok(saved.flight_name);
+    creations++;
+    return {
+      rows: [
+        {
+          flight_id: "11111111-1111-4111-a111-111111111111",
+          current_version: 1,
+        },
+      ],
+    };
+  });
+  context.mock.method(Client.prototype, "end", async () => {});
+  context.mock.method(console, "error", () => {});
+  context.mock.method(console, "log", () => {});
+  const args = [...base, "--bundle", directory, "--output", output];
+  try {
+    await main(args);
+    const prepared = JSON.parse(readFileSync(output, "utf8"));
+    assert.equal(isRetryableFlightReceipt(prepared), true);
+    assert.equal(creations, 0);
+    assert.equal(existsSync(output + ".lock"), false);
+    await main(args);
+    const saved = JSON.parse(readFileSync(output, "utf8"));
+    assert.equal(saved.phase, "created");
+    assert.equal(saved.flight_creation_attempted, true);
+    assert.equal(saved.creation_attempted_at, prepared.creation_attempted_at);
+    assert.equal(connections, 2);
+    assert.equal(creations, 1);
+    assert.equal(existsSync(output + ".env"), true);
+    assert.equal(existsSync(output + ".lock"), false);
+    assert.ok(!JSON.stringify(saved).includes("SAFE-SYNTHETIC-SETUP-TOKEN"));
+    await main(args);
+    assert.equal(connections, 2);
+    assert.equal(creations, 1);
+  } finally {
+    process.exitCode = previousExit;
+    if (previousToken === undefined) delete process.env.MOTHERDUCK_TOKEN;
+    else process.env.MOTHERDUCK_TOKEN = previousToken;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a prepared retry cannot change the reviewed owner, provider grant or bundle", async (context) => {
+  const directory = mkdtempSync(
+    join(tmpdir(), "sourcesql-setup-retry-change-"),
+  );
+  const output = join(directory, "receipt.json");
+  const previousExit = process.exitCode,
+    previousToken = process.env.MOTHERDUCK_TOKEN;
+  preparedBundle(directory);
+  process.env.MOTHERDUCK_TOKEN = "SAFE-SYNTHETIC-SETUP-TOKEN";
+  let connections = 0;
+  const errors = [];
+  context.mock.method(Client.prototype, "connect", async () => {
+    connections++;
+    throw Error("SAFE-SYNTHETIC-CONNECTION-FAILURE");
+  });
+  context.mock.method(Client.prototype, "end", async () => {});
+  context.mock.method(console, "error", (value) =>
+    errors.push(JSON.parse(value)),
+  );
+  const args = [
+    ...base,
+    "--bundle",
+    directory,
+    "--output",
+    output,
+    "--brave-secret",
+    "sourcesql_brave",
+    "--brave-request-cost-microusd",
+    "5000",
+  ];
+  try {
+    await main(args);
+    const saved = readFileSync(output, "utf8");
+    await main([...args, "--brave-approved-cost-microusd", "60000"]);
+    assert.equal(errors[1].reason, "setup_retry_configuration_changed");
+    assert.equal(connections, 1);
+    assert.equal(readFileSync(output, "utf8"), saved);
+    await main([...args.slice(0, -2), "--brave-request-cost-microusd", "5001"]);
+    assert.equal(errors[2].reason, "setup_retry_configuration_changed");
+    assert.equal(connections, 1);
+    assert.equal(readFileSync(output, "utf8"), saved);
+    await main([
+      "--database",
+      "synthetic_test",
+      "--principal",
+      "other-owner",
+      ...args.slice(4),
+    ]);
+    assert.equal(errors[3].reason, "setup_retry_configuration_changed");
+    const changedSource = "print('CHANGED-SAFE-PUBLIC-SOURCE')";
+    const manifestPath = join(directory, "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    writeFileSync(join(directory, "flight.py"), changedSource);
+    manifest.flight_source_sha256 = createHash("sha256")
+      .update(changedSource)
+      .digest("hex");
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    await main(args);
+    assert.equal(errors[4].reason, "setup_retry_configuration_changed");
+    assert.equal(connections, 1);
+    assert.equal(readFileSync(output, "utf8"), saved);
+  } finally {
+    process.exitCode = previousExit;
+    if (previousToken === undefined) delete process.env.MOTHERDUCK_TOKEN;
+    else process.env.MOTHERDUCK_TOKEN = previousToken;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing setup lock refuses a concurrent retry without opening a connection", async (context) => {
+  const directory = mkdtempSync(join(tmpdir(), "sourcesql-setup-locked-"));
+  const output = join(directory, "receipt.json"),
+    lock = output + ".lock";
+  const previousExit = process.exitCode;
+  writeFileSync(lock, "existing owner", { mode: 0o600 });
+  let connections = 0;
+  const errors = [];
+  context.mock.method(Client.prototype, "connect", async () => {
+    connections++;
+  });
+  context.mock.method(console, "error", (value) =>
+    errors.push(JSON.parse(value)),
+  );
+  try {
+    await main([...base, "--output", output]);
+    assert.equal(
+      errors[0].reason,
+      "setup_already_running_or_interrupted_inspect_lock",
+    );
+    assert.equal(connections, 0);
+    assert.equal(readFileSync(lock, "utf8"), "existing owner");
+    assert.equal(existsSync(output), false);
+  } finally {
+    process.exitCode = previousExit;
     rmSync(directory, { recursive: true, force: true });
   }
 });

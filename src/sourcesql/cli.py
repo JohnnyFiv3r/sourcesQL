@@ -4,14 +4,20 @@ import argparse
 import os
 from pathlib import Path
 import sys
+from sourcesql import __version__
 from sourcesql.contracts import SourcesQLError, canonical
 from sourcesql.engine import Engine, strict_json
 
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog="sourcesql")
+    parser.add_argument("--version", action="version", version=f"sourcesQL {__version__}")
     parser.add_argument("--store", default=os.environ.get("SOURCESQL_DATA_DIR", "local/engine"))
     commands = parser.add_subparsers(dest="command", required=True)
+    setup = commands.add_parser("setup", help="Prepare or resume an adopter-owned deployment")
+    setup.add_argument("setup_target", choices=["personal-cloud"])
+    setup.add_argument("arguments", nargs=argparse.REMAINDER)
     commands.add_parser("capabilities").add_argument("--json", action="store_true")
     for command in ["query", "explain"]:
         p = commands.add_parser(command)
@@ -33,7 +39,11 @@ def main():
     p = commands.add_parser("demo")
     p.add_argument("--profile", choices=["fixture"], default="fixture")
     p.add_argument("--output", type=Path, default=Path("artifacts/demo"))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.command == "setup":
+        from sourcesql.onboarding import run_personal_cloud
+
+        return run_personal_cloud(args.arguments)
     try:
         profile_path = os.environ.get("SOURCESQL_PROFILES_FILE")
         engine = Engine(
@@ -80,4 +90,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

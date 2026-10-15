@@ -4,11 +4,21 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sourcesql"
-version = "0.1.0a1"
+version = "0.1.0"
 description = "Provider-independent SQL research with durable evidence"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+keywords = ["sql", "web-research", "mcp", "duckdb"]
+classifiers = [
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Database",
+]
 dependencies = ["sqlglot==30.19.0", "duckdb==1.5.0", "pyarrow==23.0.1", "pydantic==2.13.3", "httpx==0.28.1", "pydantic-ai-slim[openai]==2.27.0"]
 
 [project.optional-dependencies]
@@ -36,5 +46,50 @@ line-length = 100
 [tool.hatch.build.targets.wheel]
 packages = ["src/sourcesql"]
 
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.sdist]
-include = ["src/", "tests/", "docs/", "examples/", "fixtures/", "pyproject.toml", "uv.lock", "README.md", "LICENSE", "NOTICE", "AGENTS.md", "provenance/reuse-manifest.json"]
+include = [
+  "src/",
+  "tests/",
+  "docs/",
+  "examples/",
+  "fixtures/",
+  "pyproject.toml",
+  "uv.lock",
+  "hatch_build.py",
+  "README.md",
+  "LICENSE",
+  "NOTICE",
+  "AGENTS.md",
+  "provenance/reuse-manifest.json",
+  "hosted/setup.mjs",
+  "hosted/personal-cloud.mjs",
+  "hosted/flight/*.py",
+  "apps/research/package.json",
+  "apps/research/package-lock.json",
+  "apps/research/tsconfig.json",
+  "apps/research/vercel.json",
+  "apps/research/.vercelignore",
+  "apps/research/index.html",
+  "apps/research/research.html",
+  "apps/research/api/*.ts",
+  "apps/research/server/*.ts",
+  "apps/research/src/*.ts",
+  "apps/research/src/*.tsx",
+  "apps/research/src/*.css",
+  "apps/research/src/brand/*.png",
+  "apps/research/src/fonts/*.woff2",
+  "apps/research/src/fonts/*LICENSE.txt",
+  "apps/research/src/fonts/README.md",
+  "apps/research/scripts/build.ts",
+  "apps/research/scripts/build-vercel.ts",
+  "apps/research/scripts/inline-html.ts",
+  "apps/research/fixtures/water-procurement.json",
+  "apps/research/ui-history/research-dfe1c3e8aec7c276.html",
+  "apps/research/ui-history/research-66390a91a9d5271f.html",
+  "apps/research/ui-history/research-b1349a13ba4d1fbe.html",
+  "apps/research/ui-history/research-be8725d56a366d19.html",
+  "apps/research/ui-history/research-b5ab74c900f06fdb.html",
+]

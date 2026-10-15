@@ -1,7 +1,15 @@
 // Provision one on-demand Flight. No research job is submitted by this command.
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+} from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -21,6 +29,12 @@ export function parseArguments(arguments_, environment = process.env) {
     "--exa-secret",
     "--exa-approved-cost-microusd",
     "--exa-daily-cost-microusd",
+    ...["brave", "serper"].flatMap((provider) => [
+      `--${provider}-secret`,
+      `--${provider}-approved-cost-microusd`,
+      `--${provider}-daily-cost-microusd`,
+      `--${provider}-request-cost-microusd`,
+    ]),
   ]);
   const switches = new Set([
     "--help",
@@ -69,7 +83,11 @@ export function parseArguments(arguments_, environment = process.env) {
     if (daily < approved) throw Error("invalid_configuration");
     const descriptor = {
       approved_cost_microusd: approved,
-      search_types: { exa: "auto", exa_deep: "deep", exa_deep_reasoning: "deep-reasoning" },
+      search_types: {
+        exa: "auto",
+        exa_deep: "deep",
+        exa_deep_reasoning: "deep-reasoning",
+      },
       secret_name: secretName,
       version: "exa-research.v2",
     };
@@ -84,15 +102,81 @@ export function parseArguments(arguments_, environment = process.env) {
   ) {
     throw Error("invalid_configuration");
   }
+  let search;
+  for (const provider of ["brave", "serper"]) {
+    const secret = selected.get(`--${provider}-secret`);
+    const costFlags = ["approved", "daily", "request"].map(
+      (kind) => `--${provider}-${kind}-cost-microusd`,
+    );
+    if (secret === undefined) {
+      if (costFlags.some((flag) => selected.has(flag)))
+        throw Error("invalid_configuration");
+      continue;
+    }
+    if (exa || search || !/^[a-z][a-z0-9_]{0,62}$/.test(secret))
+      throw Error("invalid_configuration");
+    const integer = (kind, fallback) => {
+      const value =
+        selected.get(`--${provider}-${kind}-cost-microusd`) ?? fallback;
+      if (
+        typeof value !== "string" ||
+        !/^[1-9][0-9]{0,6}$/.test(value) ||
+        Number(value) > 1_000_000
+      )
+        throw Error("invalid_configuration");
+      return Number(value);
+    };
+    const approved = integer("approved", "50000");
+    const daily = integer("daily", "1000000");
+    const requestCost = integer("request");
+    if (daily < approved || requestCost > approved)
+      throw Error("invalid_configuration");
+    const descriptor = {
+      approved_cost_microusd: approved,
+      provider,
+      request_cost_microusd: requestCost,
+      secret_name: secret,
+      version: `${provider}-search.v1`,
+    };
+    search = {
+      descriptor,
+      providerPolicySha256: hash(JSON.stringify(descriptor)),
+      dailyCostMicrousd: daily,
+    };
+  }
   return {
     database,
     principal,
     host,
     exa,
+    search,
     directory: resolve(selected.get("--bundle") ?? "artifacts/hosted-flight"),
     output: resolve(selected.get("--output") ?? "local/motherduck/setup.json"),
     createDatabase: selected.has("--create-database"),
     useLocalLogin: selected.has("--use-local-login"),
+  };
+}
+
+function searchSettings(options, includeDaily = false) {
+  if (!options.search) return {};
+  const { descriptor, dailyCostMicrousd } = options.search;
+  const provider = descriptor.provider.toUpperCase();
+  return {
+    [`SOURCESQL_ALLOW_LIVE_${provider}`]: "1",
+    [`SOURCESQL_${provider}_POLICY_VERSION`]: descriptor.version,
+    [`SOURCESQL_${provider}_SECRET_NAME`]: descriptor.secret_name,
+    [`SOURCESQL_${provider}_APPROVED_COST_MICROUSD`]: String(
+      descriptor.approved_cost_microusd,
+    ),
+    [`SOURCESQL_${provider}_REQUEST_COST_MICROUSD`]: String(
+      descriptor.request_cost_microusd,
+    ),
+    ...(includeDaily
+      ? {
+          [`SOURCESQL_${provider}_DAILY_COST_MICROUSD`]:
+            String(dailyCostMicrousd),
+        }
+      : {}),
   };
 }
 
@@ -103,6 +187,7 @@ export function flightConfiguration(options, namespace, schema) {
     NAMESPACE: namespace,
     JOB_ID: "unsubmitted",
     SOURCESQL_MOTHERDUCK_PG_HOST: options.host,
+    ...searchSettings(options),
     ...(options.exa
       ? {
           SOURCESQL_ALLOW_LIVE_EXA: "1",
@@ -130,7 +215,7 @@ export function flightSQL(
     config := MAP {${Object.entries(config)
       .map(([key, value]) => `${literal(key)}: ${literal(value)}`)
       .join(",")}},
-    ${options.exa ? `flight_secret_names := [${literal(options.exa.descriptor.secret_name)}],` : ""}
+    ${options.exa || options.search ? `flight_secret_names := [${literal((options.exa ?? options.search).descriptor.secret_name)}],` : ""}
     instance_type := 'F4',max_runtime_sec := 120)`;
 }
 
@@ -146,6 +231,7 @@ export function outputSettings(options, receipt) {
     SOURCESQL_ALLOW_FLIGHT_SUBMISSION: "0",
     SOURCESQL_FLIGHT_MAX_RUNTIME_SEC: "120",
     SOURCESQL_FLIGHT_DAILY_SECONDS: "600",
+    ...searchSettings(options, true),
     ...(options.exa
       ? {
           SOURCESQL_ALLOW_LIVE_EXA: "1",
@@ -162,22 +248,49 @@ export function outputSettings(options, receipt) {
   };
 }
 
+export function isRetryableFlightReceipt(receipt) {
+  return (
+    receipt?.schema === "sourcesql.hosted-setup.v1" &&
+    receipt.phase === "prepared" &&
+    receipt.flight_creation_attempted === false &&
+    !Object.hasOwn(receipt, "flight_name") &&
+    !Object.hasOwn(receipt, "flight_id")
+  );
+}
+
 export async function main(arguments_ = process.argv.slice(2)) {
-  let client;
+  let client, receiptLock, lockPath;
   try {
     const options = parseArguments(arguments_);
     if (options.help) {
       console.log(
-        "Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000]",
+        "Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]",
       );
       console.log(
-        "Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Optional Exa flags bind an existing Flight secret by name. Saves token-free settings with submission disabled.",
+        "Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Optional search flags bind one existing Flight secret by name. Brave/Serper require an operator-set conservative request cost estimate; provider billing is unavailable. Saves token-free settings with submission disabled.",
       );
       return;
     }
     const { database, principal, host, directory, output } = options;
-    if (existsSync(output))
-      throw Error("setup_already_attempted_inspect_saved_receipt");
+    mkdirSync(dirname(output), { recursive: true });
+    lockPath = output + ".lock";
+    try {
+      receiptLock = openSync(lockPath, "wx", 0o600);
+    } catch (error) {
+      if (error.code === "EEXIST")
+        throw Error("setup_already_running_or_interrupted_inspect_lock");
+      throw error;
+    }
+    let previous;
+    if (existsSync(output)) {
+      try {
+        previous = JSON.parse(readFileSync(output, "utf8"));
+      } catch {
+        throw Error("setup_already_attempted_inspect_saved_receipt");
+      }
+      if (!isRetryableFlightReceipt(previous))
+        throw Error("setup_already_attempted_inspect_saved_receipt");
+    }
     let token = process.env.MOTHERDUCK_TOKEN;
     if (!token && options.useLocalLogin)
       token = JSON.parse(
@@ -216,16 +329,35 @@ export async function main(arguments_ = process.argv.slice(2)) {
       max_runtime_sec: 120,
       scheduled: false,
       jobs_submitted: 0,
-      ...(options.exa
+      ...(options.exa || options.search
         ? {
-            provider_policy: options.exa.descriptor,
-            provider_policy_sha256: options.exa.providerPolicySha256,
-            provider_daily_cost_microusd: options.exa.dailyCostMicrousd,
+            provider_policy: (options.exa ?? options.search).descriptor,
+            provider_policy_sha256: (options.exa ?? options.search)
+              .providerPolicySha256,
+            provider_daily_cost_microusd: (options.exa ?? options.search)
+              .dailyCostMicrousd,
           }
         : {}),
     };
-    mkdirSync(dirname(output), { recursive: true });
-    let saved = false;
+    if (previous) {
+      const {
+        creation_attempted_at,
+        phase,
+        flight_creation_attempted,
+        ...priorConfiguration
+      } = previous;
+      const { creation_attempted_at: currentTime, ...currentConfiguration } =
+        receipt;
+      if (
+        JSON.stringify(priorConfiguration) !==
+        JSON.stringify(currentConfiguration)
+      )
+        throw Error("setup_retry_configuration_changed");
+      receipt.creation_attempted_at = creation_attempted_at;
+    }
+    receipt.phase = "prepared";
+    receipt.flight_creation_attempted = false;
+    let saved = previous !== undefined;
     const save = () => {
       writeFileSync(output, JSON.stringify(receipt, null, 2) + "\n", {
         mode: 0o600,
@@ -233,7 +365,7 @@ export async function main(arguments_ = process.argv.slice(2)) {
       });
       saved = true;
     };
-    save(); // A lost creation response must be inspected, never blindly repeated.
+    save(); // A connection/database failure is safely retryable before Flight creation.
     client = new Client({
       host,
       port: 5432,
@@ -249,7 +381,9 @@ export async function main(arguments_ = process.argv.slice(2)) {
       await client.query(`CREATE DATABASE IF NOT EXISTS "${database}"`);
     const name = "sourcesql_" + namespace.slice(0, 12) + "_" + Date.now();
     receipt.flight_name = name;
-    save();
+    receipt.phase = "creating";
+    receipt.flight_creation_attempted = true;
+    save(); // Persist the uncertainty fence before the platform can create a Flight.
     const rows = (
       await client.query(
         flightSQL(options, name, source, requirements, namespace, schema),
@@ -257,7 +391,7 @@ export async function main(arguments_ = process.argv.slice(2)) {
     ).rows;
     if (rows.length !== 1 || !/^[a-f0-9-]{36}$/.test(rows[0].flight_id))
       throw Error("uncertain_creation_inspect_receipt");
-    Object.assign(receipt, rows[0]);
+    Object.assign(receipt, rows[0], { phase: "created" });
     save();
     const settings = outputSettings(options, receipt);
     writeFileSync(
@@ -282,6 +416,8 @@ export async function main(arguments_ = process.argv.slice(2)) {
       "invalid_arguments",
       "invalid_configuration",
       "setup_already_attempted_inspect_saved_receipt",
+      "setup_already_running_or_interrupted_inspect_lock",
+      "setup_retry_configuration_changed",
       "configure_token_or_choose_local_login",
       "bundle_integrity",
       "uncertain_creation_inspect_receipt",
@@ -302,6 +438,10 @@ export async function main(arguments_ = process.argv.slice(2)) {
     process.exitCode = 1;
   } finally {
     await client?.end().catch(() => undefined);
+    if (receiptLock !== undefined) {
+      closeSync(receiptLock);
+      unlinkSync(lockPath);
+    }
   }
 }
 

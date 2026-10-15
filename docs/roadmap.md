@@ -1,7 +1,10 @@
-# Next adoption work
+# Adoption and product roadmap
 
 These are the next implementation priorities. They are planned work, not current
 installation instructions or additional qualified host claims.
+
+Complete the adoption release first. Compact research checkpoints and manual
+evidence-backed updates are the next product milestones.
 
 ## 1. PyPI distribution
 
@@ -49,3 +52,45 @@ source links, tree/Back navigation, durable corrections across reopen, tracked
 expansion, refresh review and app messaging. Begin with saved data and fixtures;
 use a small approved live run only where needed. Publish host-specific setup
 instructions and report unsupported host capabilities explicitly.
+
+## 5. Compact research checkpoints
+
+Add a versioned continuation record containing the research question, SQL and
+parameters, scope, selected canonical rows and fields, result and source-version
+references, timestamps, pinned amendment revisions, pending jobs, failure state
+and remaining work. Keep this small by referencing retained data. Full research
+bundles remain the way to transfer the underlying data between installations.
+
+An authorized agent must be able to resume from the checkpoint, resolve its
+references and continue with the recorded corrections. Reauthorize every
+dependency; report missing or inaccessible references rather than silently
+replacing them with a new search. Recover uncertain work through its existing
+request and job identities. Verify continuation across supported clients,
+interrupted runs, stale revisions and export/import identity mappings.
+
+## 6. Manual evidence-backed updates
+
+Add an explicit Check for updates workflow that both discovers new entities and
+revisits existing findings. Keep those scopes distinct: the current refresh
+contract updates existing rows and does not admit new rows implicitly. Produce
+a versioned change set covering additions, changed claims, contradictory
+evidence and findings not observed during the check. Missing search results do
+not establish that an entity or fact was deleted.
+
+Retain the source versions and observation times behind each proposal. Apply SQL
+filtering before costly semantic work where supported; revisit only affected
+findings when dependencies establish that scope. Preserve earlier observations
+and amendments, and require explicit review before updating accepted values.
+Validate against controlled source changes before a small budgeted live check.
+
+## Later: optional monitoring and expert feedback
+
+Build opt-in research subscriptions after checkpoints and manual updates are
+qualified. Evaluate provider change notifications or bounded polling, with
+declared coverage, per-watch budgets, visible usage and pause controls. Keep
+the current single-active-job and explicit queued-resume policy until a separate
+scheduling policy is chosen.
+
+Treat validated expert amendments as permissioned feedback records. Reuse beyond
+the originating research set, model training and broader propagation require
+their own product decisions and evaluation.

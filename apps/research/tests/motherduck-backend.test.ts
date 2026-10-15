@@ -13,6 +13,11 @@ import {
   type SqlClient,
 } from "../server/motherduck.js";
 import { exaFingerprint, type HostedExaPolicy } from "../server/hosted-exa.js";
+import {
+  hostedSearchConfiguration,
+  hostedSearchFingerprint,
+  type HostedSearchPolicy,
+} from "../server/hosted-search.js";
 import { ResearchStore } from "../server/store.js";
 import { snapshotSchema, effectiveValue } from "../src/schema.js";
 import sample from "../fixtures/water-procurement.json";
@@ -156,6 +161,7 @@ class Harness {
       allowSubmission?: boolean;
       dailySeconds?: number;
       exa?: HostedExaPolicy;
+      search?: HostedSearchPolicy;
     } = {},
   ) {
     const namespace = digest(principal),
@@ -171,6 +177,7 @@ class Harness {
       sourceSha256: reviewedSourceHash,
       requirementsSha256: reviewedRequirementsHash,
       exa: options.exa,
+      search: options.search,
       clientFactory: () => this.client(namespace, schema),
     });
   }
@@ -1548,6 +1555,332 @@ test("daily Exa reserve exhaustion refuses a second Flight before md_run_flight"
       "120",
       "Failed second reservation transaction must not consume runtime",
     );
+  } finally {
+    await h.close();
+  }
+});
+
+function searchPolicy(
+  provider: "brave" | "serper",
+  overrides: Partial<HostedSearchPolicy> = {},
+): HostedSearchPolicy {
+  return {
+    provider,
+    secretName: `sourcesql_${provider}`,
+    approvedCostMicrousd: 50_000,
+    dailyCostMicrousd: 1_000_000,
+    requestCostMicrousd: 5_000,
+    ...overrides,
+  };
+}
+
+function configureSearch(h: Harness, policy: HostedSearchPolicy) {
+  h.flightConfig = hostedSearchConfiguration(policy);
+  h.flightSecrets = [policy.secretName];
+}
+
+for (const provider of ["brave", "serper"] as const) {
+  const providerQuery = () => ({ ...liveQuery(), profile: provider });
+
+  test(`${provider} capabilities expose only the selected live search profile and leave fixture jobs unchanged`, async () => {
+    const h = await harness();
+    try {
+      const policy = searchPolicy(provider);
+      const engine = h.engine("owner-a", { search: policy });
+      await engine.initialize();
+      const capabilities = await engine.call<Row>("capabilities");
+      assert.equal(capabilities.default_profile, "fixture");
+      assert.equal(capabilities.recommended_research_profile, provider);
+      assert.deepEqual(
+        capabilities.profiles.map((p: Row) => p.name),
+        ["fixture", provider],
+      );
+      const selected = capabilities.profiles[1];
+      assert.equal(selected.provider, provider);
+      assert.equal(selected.mode, "live");
+      assert.equal(selected.live_qualified, false);
+      assert.equal(selected.source_mode, "allow_excerpt");
+      assert.deepEqual(selected.operators, ["WEB_SEARCH"]);
+      assert.equal(selected.model_configured, false);
+      assert.equal(selected.embedding_configured, false);
+      assert.equal(selected.cost_reporting, "unavailable");
+      assert.equal(selected.search_limits.max_search_requests, 2);
+      assert.equal(selected.search_limits.max_search_queries, 2);
+      assert.equal(selected.search_limits.max_candidates, 10);
+      assert.equal(selected.search_limits.dispatch_deadline_seconds, 60);
+      const fixture = await engine.call<Row>("query", query());
+      const saved = (
+        await engine.connection((client) =>
+          client.query(
+            `SELECT request_json,provider_policy_sha256 FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+            [fixture.job_id],
+          ),
+        )
+      ).rows[0];
+      assert.equal(JSON.parse(saved.request_json).profile, "fixture");
+      assert.equal(saved.provider_policy_sha256, null);
+      for (const profile of [
+        "exa",
+        "exa_deep",
+        "exa_deep_reasoning",
+        provider === "brave" ? "serper" : "brave",
+      ])
+        await assert.rejects(
+          engine.call("query", { ...providerQuery(), profile }),
+          { code: "invalid_request" },
+        );
+      assert.equal(h.submissions, 0);
+      assert.equal(await providerReserve(engine), "0");
+    } finally {
+      await h.close();
+    }
+  });
+
+  test(`${provider} jobs bind the exact public policy and bound attempts by the request cost estimate`, async () => {
+    const h = await harness();
+    try {
+      const policy = searchPolicy(provider);
+      const engine = h.engine("owner-a", { search: policy });
+      await engine.initialize();
+      const queued = await engine.call<Row>("query", {
+        ...providerQuery(),
+        budgets: { max_cost_microusd: 5_000 },
+      });
+      const saved = (
+        await engine.connection((client) =>
+          client.query(
+            `SELECT request_json,provider_policy_sha256,provider_cost_reserved_microusd FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+            [queued.job_id],
+          ),
+        )
+      ).rows[0];
+      const normalized = JSON.parse(saved.request_json);
+      assert.equal(
+        saved.provider_policy_sha256,
+        hostedSearchFingerprint(policy),
+      );
+      assert.equal(normalized.profile, provider);
+      assert.equal(normalized.source_mode, "allow_excerpt");
+      assert.equal(normalized.budgets.max_search_requests, 1);
+      assert.equal(normalized.budgets.max_search_queries, 1);
+      assert.equal(normalized.budgets.max_candidates, 10);
+      assert.equal(normalized.budgets.dispatch_deadline_seconds, 60);
+      assert.equal(normalized.budgets.max_cost_microusd, 5_000);
+      for (const field of [
+        "max_fetches",
+        "max_model_requests",
+        "max_semantic_documents",
+        "max_input_tokens",
+        "max_output_tokens",
+      ])
+        assert.equal(normalized.budgets[field], 0);
+      for (const budgets of [
+        { max_cost_microusd: 4_999 },
+        { max_cost_microusd: 50_001 },
+        { max_search_requests: 3 },
+        { max_candidates: 11 },
+        { dispatch_deadline_seconds: 61 },
+        { max_fetches: 1 },
+        { max_model_requests: 1 },
+      ])
+        await assert.rejects(
+          engine.call("query", { ...providerQuery(), budgets }),
+          { code: "invalid_request" },
+        );
+      await assert.rejects(
+        engine.call("query", {
+          ...providerQuery(),
+          source_mode: "require_document",
+        }),
+        { code: "unsupported_capability" },
+      );
+      assert.equal(Number(saved.provider_cost_reserved_microusd), 0);
+      assert.equal(await providerReserve(engine), "0");
+      assert.equal(h.submissions, 0);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test(`${provider} Flight secret and every policy configuration field must match before reserving or dispatching`, async () => {
+    const h = await harness();
+    try {
+      const policy = searchPolicy(provider);
+      configureSearch(h, policy);
+      const queuedEngine = h.engine("owner-a", { search: policy });
+      await queuedEngine.initialize();
+      const queued = await queuedEngine.call<Row>("query", providerQuery());
+      const submitter = h.engine("owner-a", {
+        search: policy,
+        allowSubmission: true,
+      });
+      const expected = { ...h.flightConfig };
+      for (const key of Object.keys(expected)) {
+        h.flightConfig = {
+          ...expected,
+          [key]: key.includes("SECRET_NAME") ? "other_secret" : "unreviewed",
+        };
+        await assert.rejects(
+          submitter.call("start_job", { job_id: queued.job_id }),
+          { code: "unsupported_capability" },
+        );
+        assert.equal(h.submissions, 0);
+        assert.equal(await providerReserve(submitter), "0");
+      }
+      h.flightConfig = expected;
+      h.flightSecrets = [];
+      await assert.rejects(
+        submitter.call("start_job", { job_id: queued.job_id }),
+        { code: "unsupported_capability" },
+      );
+      assert.equal(await providerReserve(submitter), "0");
+      h.flightSecrets = [policy.secretName];
+      await submitter.call("start_job", { job_id: queued.job_id });
+      assert.equal(h.submissions, 1);
+      assert.equal(await providerReserve(submitter), "50000");
+      const saved = (
+        await submitter.connection((client) =>
+          client.query(
+            `SELECT dispatch_intent_at,provider_cost_reserved_microusd FROM ${submitter.table("jobs")} WHERE id=$1::UUID`,
+            [queued.job_id],
+          ),
+        )
+      ).rows[0];
+      assert.ok(saved.dispatch_intent_at);
+      assert.equal(Number(saved.provider_cost_reserved_microusd), 50_000);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test(`${provider} changed queued policy cannot dispatch under a newly configured grant`, async () => {
+    const h = await harness();
+    try {
+      const original = searchPolicy(provider);
+      const changed = searchPolicy(provider, { requestCostMicrousd: 5_001 });
+      const queuedEngine = h.engine("owner-a", { search: original });
+      await queuedEngine.initialize();
+      const queued = await queuedEngine.call<Row>("query", providerQuery());
+      configureSearch(h, changed);
+      const submitter = h.engine("owner-a", {
+        search: changed,
+        allowSubmission: true,
+      });
+      await assert.rejects(
+        submitter.call("start_job", { job_id: queued.job_id }),
+        { code: "unsupported_capability" },
+      );
+      assert.equal(h.submissions, 0);
+      assert.equal(await providerReserve(submitter), "0");
+    } finally {
+      await h.close();
+    }
+  });
+
+  test(`${provider} lost-response replay preserves the reservation without duplicate Flight submission`, async () => {
+    const h = await harness();
+    try {
+      const policy = searchPolicy(provider);
+      configureSearch(h, policy);
+      const engine = h.engine("owner-a", {
+        search: policy,
+        allowSubmission: true,
+      });
+      await engine.initialize();
+      h.loseSubmissionResponse = true;
+      const request = {
+        ...providerQuery(),
+        budgets: { max_cost_microusd: 5_000 },
+      };
+      const first = await engine.call<Row>("query", request);
+      assert.equal(first.status, "submission_unknown");
+      assert.equal(await providerReserve(engine), "5000");
+      const replay = await h
+        .engine("owner-a", { search: policy, allowSubmission: true })
+        .call<Row>("query", { ...request, source_mode: "allow_excerpt" });
+      assert.equal(replay.job_id, first.job_id);
+      await engine.call("job_status", { job_id: first.job_id });
+      assert.equal(h.submissions, 1);
+      assert.equal(await providerReserve(engine), "5000");
+      await assert.rejects(
+        engine.call("query", { ...request, query: "SELECT 2 AS value" }),
+        { code: "idempotency_conflict" },
+      );
+      assert.equal(h.submissions, 1);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test(`${provider} exhausted daily estimate refuses a second Flight without consuming execution allowance`, async () => {
+    const h = await harness();
+    try {
+      const policy = searchPolicy(provider, { dailyCostMicrousd: 50_000 });
+      configureSearch(h, policy);
+      const engine = h.engine("owner-a", {
+        search: policy,
+        allowSubmission: true,
+      });
+      await engine.initialize();
+      const first = await engine.call<Row>("query", providerQuery());
+      const second = await engine.call<Row>("query", providerQuery());
+      assert.equal(second.status, "queued");
+      h.runs[0].status = "RUN_STATUS_FAILED";
+      await engine.call("job_status", { job_id: first.job_id });
+      await assert.rejects(
+        engine.call("start_job", { job_id: second.job_id }),
+        { code: "budget_exhausted" },
+      );
+      assert.equal(h.submissions, 1);
+      assert.equal(await providerReserve(engine), "50000");
+      const saved = (
+        await engine.connection((client) =>
+          client.query(
+            `SELECT status,dispatch_intent_at,provider_cost_reserved_microusd FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+            [second.job_id],
+          ),
+        )
+      ).rows[0];
+      assert.equal(saved.status, "queued");
+      assert.equal(saved.dispatch_intent_at, null);
+      assert.equal(Number(saved.provider_cost_reserved_microusd), 0);
+      const runtime = (
+        await engine.connection((client) =>
+          client.query(
+            `SELECT CAST(sum(reserved_seconds) AS VARCHAR) AS seconds FROM ${engine.table("flight_allowances")}`,
+          ),
+        )
+      ).rows[0];
+      assert.equal(runtime.seconds, "120");
+    } finally {
+      await h.close();
+    }
+  });
+}
+
+test("hosted search providers stay opt-in and mixed Exa plus search configuration fails closed", async () => {
+  const h = await harness();
+  try {
+    const fixture = h.engine();
+    await fixture.initialize();
+    const capabilities = await fixture.call<Row>("capabilities");
+    assert.deepEqual(
+      capabilities.profiles.map((p: Row) => p.name),
+      ["fixture"],
+    );
+    for (const provider of ["brave", "serper"] as const) {
+      await assert.rejects(
+        fixture.call("query", { ...liveQuery(), profile: provider }),
+        { code: "invalid_request" },
+      );
+      assert.throws(() =>
+        h.engine("owner-a", {
+          exa: exaPolicy(),
+          search: searchPolicy(provider),
+        }),
+      );
+    }
+    assert.equal(h.submissions, 0);
   } finally {
     await h.close();
   }

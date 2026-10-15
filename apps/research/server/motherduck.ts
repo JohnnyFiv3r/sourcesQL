@@ -13,6 +13,15 @@ import {
   type HostedExaPolicy,
 } from "./hosted-exa.js";
 import { tableDefinitions, tableMigrations } from "./motherduck-schema.js";
+import {
+  isHostedSearchProfile,
+  validateHostedSearchPolicy,
+  hostedSearchFingerprint,
+  hostedSearchBudgets,
+  hostedSearchConfiguration,
+  HOSTED_SEARCH_POLICY_VERSIONS,
+  type HostedSearchPolicy,
+} from "./hosted-search.js";
 
 type Row = Record<string, any>;
 export interface SqlClient {
@@ -42,9 +51,17 @@ export type MotherDuckOptions = {
   sourceSha256?: string;
   requirementsSha256?: string;
   exa?: HostedExaPolicy;
+  search?: HostedSearchPolicy;
   clientFactory?: () => SqlClient;
   poolFactory?: (configuration: PoolConfig) => SqlPool;
 };
+function livePolicyFingerprint(options: MotherDuckOptions): string | null {
+  return options.exa
+    ? exaFingerprint(options.exa)
+    : options.search
+      ? hostedSearchFingerprint(options.search)
+      : null;
+}
 const uuidPattern =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const resultPattern = /^[A-Za-z0-9_-]{1,100}$/;
@@ -139,7 +156,13 @@ export class MotherDuckEngine implements ResearchEngine {
         "invalid_request",
         "Flight submission requires the reviewed source and requirements fingerprints",
       );
+    if (options.exa && options.search)
+      throw new BackendError(
+        "invalid_request",
+        "Choose one live search provider per Flight",
+      );
     if (options.exa) validateExaPolicy(options.exa);
+    if (options.search) validateHostedSearchPolicy(options.search);
     this.namespace = digest(options.principal);
     this.schema = "sourcesql_" + this.namespace.slice(0, 32);
     this.maxRuntime = bounded(options.maxRuntimeSeconds ?? 120, 30, 120);
@@ -477,6 +500,7 @@ export class MotherDuckEngine implements ResearchEngine {
           ...(this.options.exa
             ? Object.keys(exaSearchTypes(this.options.exa))
             : []),
+          ...(this.options.search ? [this.options.search.provider] : []),
         ].includes(params.profile ?? "fixture")
       )
         throw new BackendError(
@@ -521,6 +545,28 @@ export class MotherDuckEngine implements ResearchEngine {
           throw new BackendError(
             "invalid_request",
             "Hosted Exa budget exceeds operator approval",
+          );
+        }
+        request.source_mode = "allow_excerpt";
+      } else if (isHostedSearchProfile(request.profile)) {
+        if (
+          params.source_mode !== undefined &&
+          params.source_mode !== "allow_excerpt"
+        )
+          throw new BackendError(
+            "unsupported_capability",
+            "Hosted search supports retained excerpts only",
+          );
+        try {
+          request.budgets = hostedSearchBudgets(
+            budgets,
+            this.options.search!,
+            deadline,
+          );
+        } catch {
+          throw new BackendError(
+            "invalid_request",
+            "Hosted search budget exceeds operator approval",
           );
         }
         request.source_mode = "allow_excerpt";
@@ -600,8 +646,10 @@ export class MotherDuckEngine implements ResearchEngine {
           time,
           this.options.flightId,
           this.maxRuntime,
-          operation === "query" && isExaProfile(input.request.profile)
-            ? exaFingerprint(this.options.exa!)
+          operation === "query" &&
+          (isExaProfile(input.request.profile) ||
+            isHostedSearchProfile(input.request.profile))
+            ? livePolicyFingerprint(this.options)
             : null,
         ],
       );
@@ -646,12 +694,11 @@ export class MotherDuckEngine implements ResearchEngine {
       );
     if (
       candidate.provider_policy_sha256 &&
-      (!this.options.exa ||
-        candidate.provider_policy_sha256 !== exaFingerprint(this.options.exa))
+      candidate.provider_policy_sha256 !== livePolicyFingerprint(this.options)
     )
       throw new BackendError(
         "unsupported_capability",
-        "Queued Exa approval changed; reconcile the existing job",
+        "Queued provider approval changed; reconcile the existing job",
       );
     const previous = await this.transaction(
       false,
@@ -700,6 +747,8 @@ export class MotherDuckEngine implements ResearchEngine {
         const secrets = JSON.parse(detail.secrets_json ?? "[]");
         if (
           config.SOURCESQL_ALLOW_LIVE_EXA !== "1" ||
+          config.SOURCESQL_ALLOW_LIVE_BRAVE === "1" ||
+          config.SOURCESQL_ALLOW_LIVE_SERPER === "1" ||
           config.SOURCESQL_EXA_APPROVED_COST_MICROUSD !==
             String(policy.approvedCostMicrousd) ||
           config.SOURCESQL_EXA_SECRET_NAME !== policy.secretName ||
@@ -711,6 +760,27 @@ export class MotherDuckEngine implements ResearchEngine {
           throw new BackendError(
             "unsupported_capability",
             "Flight Exa approval or secret binding differs from the operator policy",
+          );
+      }
+      if (this.options.search) {
+        const policy = this.options.search;
+        const required = hostedSearchConfiguration(policy);
+        const secrets = JSON.parse(detail.secrets_json ?? "[]");
+        const enabled = ["EXA", "BRAVE", "SERPER"].filter(
+          (provider) => config[`SOURCESQL_ALLOW_LIVE_${provider}`] === "1",
+        );
+        if (
+          enabled.length !== 1 ||
+          enabled[0] !== policy.provider.toUpperCase() ||
+          Object.entries(required).some(
+            ([key, value]) => config[key] !== value,
+          ) ||
+          !Array.isArray(secrets) ||
+          !secrets.includes(policy.secretName)
+        )
+          throw new BackendError(
+            "unsupported_capability",
+            "Flight search approval or secret binding differs from the operator policy",
           );
       }
       return number;
@@ -741,19 +811,20 @@ export class MotherDuckEngine implements ResearchEngine {
           "Daily Flight execution reserve is exhausted",
         );
       if (job.provider_policy_sha256) {
-        const policy = this.options.exa!;
+        const policy = this.options.exa ?? this.options.search;
         const cost = Number(
           JSON.parse(job.request_json).budgets.max_cost_microusd,
         );
         if (
-          job.provider_policy_sha256 !== exaFingerprint(policy) ||
+          !policy ||
+          job.provider_policy_sha256 !== livePolicyFingerprint(this.options) ||
           !Number.isSafeInteger(cost) ||
           cost < 1 ||
           cost > policy.approvedCostMicrousd
         )
           throw new BackendError(
             "invalid_request",
-            "Stored Exa approval is unavailable",
+            "Stored provider approval is unavailable",
           );
         await client.query(
           `INSERT OR IGNORE INTO ${this.table("provider_allowances")} VALUES($1,0)`,
@@ -768,7 +839,7 @@ export class MotherDuckEngine implements ResearchEngine {
         if (Number(used.used) + cost > policy.dailyCostMicrousd)
           throw new BackendError(
             "budget_exhausted",
-            "Daily Exa reserve is exhausted",
+            "Daily provider reserve is exhausted",
           );
         await client.query(
           `UPDATE ${this.table("provider_allowances")} SET reserved_microusd=reserved_microusd+$1::BIGINT WHERE day=$2`,
@@ -1019,7 +1090,7 @@ export class MotherDuckEngine implements ResearchEngine {
     let result: unknown;
     if (method === "capabilities")
       result = {
-        engine_version: "0.1.0a1",
+        engine_version: "0.1.0",
         dialect: "duckdb",
         sqlglot_version: "30.19.0",
         operators: [
@@ -1032,7 +1103,9 @@ export class MotherDuckEngine implements ResearchEngine {
           "SEM_NORM",
         ],
         default_profile: "fixture",
-        recommended_research_profile: this.options.exa ? "exa" : null,
+        recommended_research_profile: this.options.exa
+          ? "exa"
+          : (this.options.search?.provider ?? null),
         profiles: [
           {
             name: "fixture",
@@ -1068,6 +1141,31 @@ export class MotherDuckEngine implements ResearchEngine {
                 }),
               )
             : []),
+          ...(this.options.search
+            ? [
+                {
+                  name: this.options.search.provider,
+                  mode: "live",
+                  provider: this.options.search.provider,
+                  live_qualified: false,
+                  operators: ["WEB_SEARCH"],
+                  source_mode: "allow_excerpt",
+                  model_configured: false,
+                  embedding_configured: false,
+                  search_limits: hostedSearchBudgets(
+                    {},
+                    this.options.search,
+                    this.maxRuntime - 20,
+                  ),
+                  cost_reporting: "unavailable",
+                  estimated_request_cost_microusd:
+                    this.options.search.requestCostMicrousd,
+                  broad_discovery:
+                    "Separate diverse WEB_SEARCH queries preserve per-query source attribution",
+                  research_agent_configured: false,
+                },
+              ]
+            : []),
         ],
         execution_mode: "async_jobs",
         storage: "motherduck",
@@ -1075,7 +1173,7 @@ export class MotherDuckEngine implements ResearchEngine {
         daily_execution_reserve_seconds: this.dailySeconds,
         flight_submission_enabled: !!this.options.allowSubmission,
         limitations: [
-          "Hosted private profiles are not configured; optional Exa is search-only",
+          "Hosted private profiles are not configured; optional live providers are search-only",
           "Explain requires local engine",
           "Queued jobs require explicit start; status never dispatches",
           "Execution reserves are not an account-wide billing cap",
@@ -1202,6 +1300,39 @@ export async function createMotherDuckBackend(
       "unsupported_capability",
       "Hosted private/live profiles require separate configuration",
     );
+  const enabledProviders = ["EXA", "BRAVE", "SERPER"].filter(
+    (provider) => environment[`SOURCESQL_ALLOW_LIVE_${provider}`] === "1",
+  );
+  if (enabledProviders.length > 1)
+    throw new BackendError(
+      "invalid_request",
+      "Choose one live search provider per Flight",
+    );
+  const selected = enabledProviders[0]?.toLowerCase();
+  let search: HostedSearchPolicy | undefined;
+  if (selected === "brave" || selected === "serper") {
+    const prefix = `SOURCESQL_${selected.toUpperCase()}`;
+    if (
+      environment[`${prefix}_POLICY_VERSION`] !== undefined &&
+      environment[`${prefix}_POLICY_VERSION`] !==
+        HOSTED_SEARCH_POLICY_VERSIONS[selected]
+    )
+      throw new BackendError(
+        "invalid_request",
+        "Unsupported hosted search policy version",
+      );
+    search = {
+      provider: selected,
+      secretName: environment[`${prefix}_SECRET_NAME`] ?? "",
+      approvedCostMicrousd: Number(
+        environment[`${prefix}_APPROVED_COST_MICROUSD`],
+      ),
+      dailyCostMicrousd: Number(environment[`${prefix}_DAILY_COST_MICROUSD`]),
+      requestCostMicrousd: Number(
+        environment[`${prefix}_REQUEST_COST_MICROUSD`],
+      ),
+    };
+  }
   const engine = new MotherDuckEngine({
     database: environment.MOTHERDUCK_DB ?? "",
     host: environment.MOTHERDUCK_HOST ?? "",
@@ -1215,6 +1346,7 @@ export async function createMotherDuckBackend(
     dailySeconds: Number(environment.SOURCESQL_FLIGHT_DAILY_SECONDS ?? 600),
     sourceSha256: environment.SOURCESQL_FLIGHT_SOURCE_SHA256,
     requirementsSha256: environment.SOURCESQL_FLIGHT_REQUIREMENTS_SHA256,
+    search,
     exa:
       environment.SOURCESQL_ALLOW_LIVE_EXA === "1"
         ? {

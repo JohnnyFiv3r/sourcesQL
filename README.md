@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/brand/sourcesql-mcp-icon.png" width="112" alt="sourcesQL logo">
+  <img src="https://raw.githubusercontent.com/JohnnyFiv3r/sourcesQL/main/assets/brand/sourcesql-mcp-icon.png" width="112" alt="sourcesQL logo">
 </p>
 
 # sourcesQL
@@ -11,8 +11,8 @@ sourcesQL is an open-source research engine and MCP App. A connected assistant t
 Use it when the answer needs rows: a vendor comparison, a project pipeline, an organization inventory or a collection of claims with supporting sources. The result stays available for further SQL instead of becoming another table trapped in a conversation.
 
 <p>
-  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
-  <a href="docs/python-linux-qualification.md"><img alt="Python: 3.12–3.14" src="https://img.shields.io/badge/Python-3.12%E2%80%933.14-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
+  <a href="https://github.com/JohnnyFiv3r/sourcesQL/blob/main/LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
+  <a href="https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/python-linux-qualification.md"><img alt="Python: 3.12–3.14" src="https://img.shields.io/badge/Python-3.12%E2%80%933.14-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
 </p>
 
 ## Keep working with saved research
@@ -24,7 +24,7 @@ Saved research includes the result, its supporting sources and the investigation
 - **Refresh.** Check a field, row or table again, then review the proposed changes. Explicitly accept supported updates or keep the current values; earlier observations and amendments remain available.
 - **Portable snapshots.** Export a research tree as a bundle and restore it in another compatible sourcesQL store. Bundles carry original results, sources, amendments, linked investigations and refresh decisions. Reopen saved findings without repeating web discovery.
 
-See the [research lifecycle](docs/app-integration.md#contracts-and-lifecycle) and [snapshot/export contracts](docs/app-integration.md#snapshots-presentation-and-export) for supported scopes, review behavior and bundle limits.
+See the [research lifecycle](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/app-integration.md#contracts-and-lifecycle) and [snapshot/export contracts](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/app-integration.md#snapshots-presentation-and-export) for supported scopes, review behavior and bundle limits.
 
 ## How research works
 
@@ -54,7 +54,7 @@ WHERE SEM_MATCH(content, 'describes a specific data-center campus')
 ORDER BY project, source_url;
 ```
 
-The engine supports `WEB_SEARCH`, `WEB_FETCH`, `SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL`, `SEM_SCORE` and `SEM_NORM`. It accepts an explicit subset of DuckDB-style `SELECT` and nonrecursive `WITH` queries. See the [SQL reference](docs/language.md) for signatures, supported staging and refusals. Operator availability also depends on the selected provider profile.
+The engine supports `WEB_SEARCH`, `WEB_FETCH`, `SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL`, `SEM_SCORE` and `SEM_NORM`. It accepts an explicit subset of DuckDB-style `SELECT` and nonrecursive `WITH` queries. See the [SQL reference](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/language.md) for signatures, supported staging and refusals. Operator availability also depends on the selected provider profile.
 
 ## The interactive workspace
 
@@ -90,32 +90,33 @@ To connect a local MCP client over stdio, first build the app image:
 docker compose build sourcesql-mcp
 ```
 
-Then configure the client to run `docker compose run --rm -T --no-deps sourcesql-mcp` from this checkout. The [Docker guide](docs/docker.md#mcp-over-stdio) includes a complete MCP configuration, storage details and the CLI container. The default stdio container has no network; live providers require deliberate network and credential configuration.
+Then configure the client to run `docker compose run --rm -T --no-deps sourcesql-mcp` from this checkout. The [Docker guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/docker.md#mcp-over-stdio) includes a complete MCP configuration, storage details and the CLI container. The default stdio container has no network; live providers require deliberate network and credential configuration.
 
 A local endpoint alone is not reachable by hosted ChatGPT. Use the hosted path below for a remotely accessible, authenticated connection.
 
 ### Python and CLI
 
-Install [uv](https://docs.astral.sh/uv/) and Python 3.12–3.14, then run from the repository root:
+Install with Python 3.12–3.14 on macOS or Linux:
 
 ```sh
-uv sync --frozen
-uv run sourcesql --store local/cli capabilities --json
-uv run sourcesql --store local/cli demo --profile fixture --output artifacts/demo
-uv run sourcesql --store local/cli query --file examples/01_discovery.sql
+python -m pip install sourcesql
+sourcesql --store ./research-data demo --output ./research-demo
+sourcesql --store ./research-data capabilities --json
 ```
 
-Each successful query returns an immutable `result_id`, typed columns, a bounded row preview and an execution receipt. Read later pages or export the full result:
+The installed demo includes fictional sources and needs no credentials or checkout. Each successful query returns an immutable `result_id`, typed columns, a bounded row preview and an execution receipt. Use the ID printed by `demo` to reopen or export it:
 
 ```sh
-uv run sourcesql --store local/cli read <result_id> --offset 100 --limit 100
-uv run sourcesql --store local/cli export --result <result_id> --output result-bundle.json
-uv run sourcesql --store local/restored import result-bundle.json --no-network
+sourcesql --store ./research-data read RESULT_ID --offset 0 --limit 100
+sourcesql --store ./research-data export --result RESULT_ID --output result-bundle.json
+sourcesql --store ./restored import result-bundle.json --no-network
 ```
 
-For Python integration, import `Engine` from `sourcesql.engine`. The [examples](examples/) cover discovery, saved-result refinement, row expansion and snapshot comparison.
+For source development, clone this repository, install [uv](https://docs.astral.sh/uv/) and run `uv sync --frozen`. Then use `uv run sourcesql` in place of `sourcesql`. See [package installation and release checks](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/package.md).
 
-To run the app from source, install **Node.js 24**, keep the root Python environment above, then run:
+For Python integration, import `Engine` from `sourcesql.engine`. The [examples](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/examples/) cover discovery, saved-result refinement, row expansion and snapshot comparison.
+
+To run the app from source, install **Node.js 24**, prepare the root Python environment with `uv sync --frozen`, then run:
 
 ```sh
 cd apps/research
@@ -124,9 +125,9 @@ npm run build
 npm start
 ```
 
-Open [localhost:3117](http://127.0.0.1:3117), or use `npm run stdio` with a local MCP client. See the [example client configuration](apps/research/mcp-config.example.json). CLI and app stores are separate by default; use the MCP query/result-reference workflow for app research, or research bundles to move it between stores.
+Open [localhost:3117](http://127.0.0.1:3117), or use `npm run stdio` with a local MCP client. See the [example client configuration](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/apps/research/mcp-config.example.json). CLI and app stores are separate by default; use the MCP query/result-reference workflow for app research, or research bundles to move it between stores.
 
-Actual SQL execution requires the supported OS protections: macOS `sandbox-exec`, or Linux Landlock and seccomp. Missing protection causes a refusal. Use Docker on Windows. See [runtime qualification](docs/python-linux-qualification.md) for the tested environments.
+Actual SQL execution requires the supported OS protections: macOS `sandbox-exec`, or Linux Landlock and seccomp. Missing protection causes a refusal. Use Docker on Windows. See [runtime qualification](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/python-linux-qualification.md) for the tested environments.
 
 ### Personal cloud: Vercel + MotherDuck
 
@@ -146,33 +147,38 @@ MotherDuck: saved research, evidence, corrections, jobs
 
 Ordinary reads, tree navigation and corrections use stored records without starting Python. Research runs as a bounded asynchronous job. One job runs at a time per owner namespace; queued jobs resume explicitly. A lost response is recovered using the same request and job IDs.
 
-Setup is manual today:
+The installed package includes guided setup:
 
-1. Build and provision a reviewed execution bundle with the [MotherDuck setup guide](docs/motherduck-backend.md#build-the-reviewed-flight). Submission starts disabled.
-2. Create a Vercel project rooted at `apps/research`, then configure the gateway and encrypted secrets using the [Vercel guide](docs/vercel.md).
-3. For hosted ChatGPT, configure your OAuth provider and sole owner identity. The documented path uses an adopter-owned Auth0 tenant, a public PKCE client and `sourcesql:access`. Follow [OAuth setup](docs/vercel.md#optional-oauth-for-chatgpt), then connect your stable HTTPS `/mcp` URL in ChatGPT.
-4. Verify fixture execution and saved-result reopening before enabling live providers.
+```sh
+sourcesql setup personal-cloud --help
+sourcesql setup personal-cloud plan --config personal.json --workspace ./my-cloud
+sourcesql setup personal-cloud apply --workspace ./my-cloud --approve-plan PLAN_SHA256
+```
+
+Follow the [personal-cloud setup guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/personal-cloud-setup.md) to prepare your accounts, owner identity and token-free configuration. The plan records the exact destination, public source hashes, execution policy and proposed changes before applying them. Repeating an approved plan recovers its saved resources; uncertain creation stops for inspection.
+
+Setup provisions a Vercel Preview gateway and a bounded MotherDuck Flight. It keeps credentials server-side, defaults to fixture mode and leaves account creation, OAuth registration and the exact-domain protection exception as visible account steps. Verify one fixture job and reopen its stored result before enabling live research. The [client guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/clients.md) covers ChatGPT, Claude and Cursor, including which host interactions have actually been qualified.
 
 Eligible personal, non-commercial adopters can choose Vercel Hobby; no Pro-only feature is required by this configuration. MotherDuck, search and model consumption are separate. Included allowances may cover light use, but application budgets do not guarantee that a platform account with billing enabled stops before overage.
 
 ## Configure live search and models
 
-Start with the [provider guide](docs/providers.md) and [profile template](examples/profiles.example.json). Keep real configuration and secrets outside version control.
+Start with the [provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/providers.md) and [profile template](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/examples/profiles.example.json). Keep real configuration and secrets outside version control.
 
 | Capability | Configuration |
 | --- | --- |
 | Local live search | Exa, Brave or Serper adapter; its API key, live permission and finite budget |
 | Semantic extraction / matching / normalization | An explicitly named model and its credential |
 | Semantic scoring | An explicitly configured embedding adapter |
-| Hosted Exa | A bound MotherDuck Flight secret plus matching gateway/Flight policy; keep the key out of the frontend |
+| Hosted Exa, Brave or Serper | Choose one live provider per reviewed Flight; bind its secret and matching gateway policy |
 
 For search-only work, omit model and embedding settings. An Exa API key does not enable semantic operators or authorize spending. Request budgets must fit the trusted profile; source fetching also requires approved destination hosts.
 
-The currently qualified hosted profile, **`exa-search.v1`**, uses Exa Auto and retained excerpts. It permits **two searches and ten candidate pages per job**, with no extra fetches or model calls. It is a small search-only configuration, not broad entity-research capacity. Larger fanout and semantic research need separately configured and qualified execution profiles. See the [hosted policy](docs/hosted-flight.md#opt-in-exa-search) and [Exa research notes](docs/exa-research.md).
+The existing owner deployment’s qualified hosted profile, **`exa-search.v1`**, uses Exa Auto and retained excerpts. It permits **two searches and ten candidate pages per job**, with no extra fetches or model calls. It is a small search-only configuration, not broad entity-research capacity. Larger fanout and semantic research need separately configured and qualified execution profiles. The [hosted provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/providers-hosted.md) describes the new Brave/Serper options and their qualification limits; see also the [hosted policy](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/hosted-flight.md#opt-in-exa-search) and [Exa research notes](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/exa-research.md).
 
 ## Status and development
 
-The project includes the engine, local Docker app, durable MotherDuck jobs and storage, and hosted ChatGPT OAuth/app rendering. Fixture tests, live provider quality and host integration are different checks; the [current status](STATUS.md) records their scope and remaining gaps. Broad live research quality, hosted semantic models and Claude rendering are not qualified by the small Exa integration.
+The project includes the Python package, local Docker app, guided personal-cloud setup, durable MotherDuck jobs and storage, and hosted ChatGPT OAuth/app rendering. Fixture tests, live provider quality and host integration are different checks; the [current status](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/STATUS.md) records their scope and remaining gaps. Broad live research quality, hosted semantic models and Claude rendering are not qualified by the small Exa integration.
 
 Run local checks from the repository root:
 
@@ -182,6 +188,8 @@ npm ci --prefix apps/research
 npm --prefix apps/research run check
 ```
 
-Positive SQL worker tests need permission to launch the OS sandbox. A sandbox refusal is not a passing execution test. See [qualification](docs/qualification.md) and [app integration](docs/app-integration.md) for the execution, evidence and storage contracts.
+Positive SQL worker tests need permission to launch the OS sandbox. A sandbox refusal is not a passing execution test. See [qualification](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/qualification.md) and [app integration](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/app-integration.md) for the execution, evidence and storage contracts.
 
-Licensed under [Apache 2.0](LICENSE). Attribution and source reuse are recorded in [NOTICE](NOTICE) and [provenance](provenance/).
+The [roadmap](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/roadmap.md) puts compact research checkpoints and manual evidence-backed updates after adoption. These extend saved research; they are planned capabilities.
+
+Licensed under [Apache 2.0](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/LICENSE). Attribution and source reuse are recorded in [NOTICE](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/NOTICE) and [provenance](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/provenance/).

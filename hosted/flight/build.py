@@ -8,9 +8,11 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import csv
 from email.parser import Parser
 import hashlib
 import io
+import importlib.util
 import json
 import lzma
 from pathlib import Path
@@ -116,6 +118,21 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
         names = archive.namelist()
         if len(names) != len(set(names)):
             raise ValueError("Wheel contains duplicate paths")
+        records = list(csv.reader(io.StringIO(archive.read(metadata_prefix + "RECORD").decode())))
+        if len(records) != len(names) or any(len(row) != 3 for row in records):
+            raise ValueError("Wheel RECORD does not describe every file exactly once")
+        record_paths = [row[0] for row in records]
+        if len(record_paths) != len(set(record_paths)) or set(record_paths) != set(names):
+            raise ValueError("Wheel RECORD paths differ from the distribution")
+        for name, expected_hash, expected_size in records:
+            if name == metadata_prefix + "RECORD":
+                if expected_hash or expected_size:
+                    raise ValueError("Wheel RECORD must not hash itself")
+                continue
+            data = archive.read(name)
+            encoded = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode("ascii")
+            if expected_hash != "sha256=" + encoded or expected_size != str(len(data)):
+                raise ValueError("Wheel RECORD content differs from the distribution")
         source_hashes = {}
         for path in sorted((root / "src/sourcesql").rglob("*.py")):
             relative = path.relative_to(root / "src").as_posix()
@@ -123,7 +140,17 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
             if relative not in names or archive.read(relative) != data:
                 raise ValueError("Engine wheel differs from current source: " + relative)
             source_hashes[relative] = digest(data)
-        if set(names) != set(source_hashes) | allowed_metadata:
+        resource_path = "sourcesql/_resources/personal-cloud.zip"
+        specification = importlib.util.spec_from_file_location(
+            "sourcesql_build_resources", root / "src/sourcesql/resources.py"
+        )
+        if specification is None or specification.loader is None:
+            raise ValueError("Public provisioning template builder is unavailable")
+        resources = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(resources)
+        if resource_path not in names or archive.read(resource_path) != resources.build_personal_cloud_archive(root):
+            raise ValueError("Wheel provisioning templates differ from current public source")
+        if set(names) != set(source_hashes) | allowed_metadata | {resource_path}:
             raise ValueError("Wheel contains files outside the reviewed public allowlist")
         for name in ("LICENSE", "NOTICE"):
             if archive.read(metadata_prefix + "licenses/" + name) != (root / name).read_bytes():
@@ -158,14 +185,48 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
     return source_hashes
 
 
+def execution_wheel(distribution: bytes) -> bytes:
+    """Remove only the validated installer templates, retaining exact runtime code.
+
+    The public distribution includes its guided provisioning application. Flights
+    execute research and do not need that archive. RECORD is recalculated so the
+    offline installer still validates every retained byte.
+    """
+    removed = "sourcesql/_resources/personal-cloud.zip"
+    with zipfile.ZipFile(io.BytesIO(distribution)) as original:
+        names = original.namelist()
+        if names.count(removed) != 1 or len(names) != len(set(names)):
+            raise ValueError("Expected one reviewed provisioning template archive")
+        record_names = [name for name in names if name.endswith(".dist-info/RECORD")]
+        if len(record_names) != 1:
+            raise ValueError("Expected one wheel RECORD")
+        record_name = record_names[0]
+        entries = {name: original.read(name) for name in names if name not in {removed, record_name}}
+        record = io.StringIO(newline="")
+        writer = csv.writer(record, lineterminator="\n")
+        for name, content in sorted(entries.items()):
+            encoded = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=").decode("ascii")
+            writer.writerow((name, "sha256=" + encoded, len(content)))
+        writer.writerow((record_name, "", ""))
+        entries[record_name] = record.getvalue().encode("utf-8")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+            for name, content in sorted(entries.items()):
+                info = original.getinfo(name)
+                target.writestr(info, content, compress_type=zipfile.ZIP_DEFLATED)
+        return buffer.getvalue()
+
+
 def build(wheel: Path, output: Path) -> dict:
     directory = Path(__file__).resolve().parent
     root = directory.parents[1]
     wheel = wheel.resolve()
     runtime, requirements = runtime_requirements(root)
     source_hashes = validate_wheel(root, wheel, runtime)
+    distribution_bytes = wheel.read_bytes()
+    execution_bytes = execution_wheel(distribution_bytes)
     profile_source = (directory / "exa_profile.py").read_bytes()
-    files = {"wheel/" + wheel.name: wheel.read_bytes(), "hosted/exa_profile.py": profile_source}
+    files = {"wheel/" + wheel.name: execution_bytes, "hosted/exa_profile.py": profile_source}
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
         for name, data in sorted(files.items()):
@@ -178,7 +239,10 @@ def build(wheel: Path, output: Path) -> dict:
     manifest = {
         "schema": "sourcesql.hosted-flight-bundle.v1",
         "wheel": wheel.name,
-        "wheel_sha256": digest(wheel.read_bytes()),
+        "wheel_sha256": digest(execution_bytes),
+        "distribution_wheel_sha256": digest(distribution_bytes),
+        "execution_wheel_sha256": digest(execution_bytes),
+        "execution_wheel_omitted_files": ["sourcesql/_resources/personal-cloud.zip"],
         "archive_sha256": digest(bundle),
         "archive_bytes": len(bundle),
         "compressed_sha256": digest(compressed),
