@@ -6,7 +6,7 @@
 
 **Web research you can query, inspect and keep working with.**
 
-sourcesQL is an open-source research engine and MCP App. A connected assistant turns your request into SQL, searches the web, builds a structured dataset and presents the finished table in chat. You can inspect its sources, correct a field, branch into a follow-up investigation and review a later refresh without losing the original result.
+sourcesQL is an open-source research engine and MCP App. A connected assistant turns your request into SQL, searches the web, builds a structured dataset and presents the finished table in chat. You can inspect its sources, expand a row into a follow-up investigation, amend a field, review a later refresh and move the saved research between compatible installations.
 
 Use it when the answer needs rows: a vendor comparison, a project pipeline, an organization inventory or a collection of claims with supporting sources. The result stays available for further SQL instead of becoming another table trapped in a conversation.
 
@@ -14,6 +14,17 @@ Use it when the answer needs rows: a vendor comparison, a project pipeline, an o
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
   <a href="docs/python-linux-qualification.md"><img alt="Python: 3.12–3.14" src="https://img.shields.io/badge/Python-3.12%E2%80%933.14-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
 </p>
+
+## Keep working with saved research
+
+Saved research includes the result, its supporting sources and the investigations that follow from it.
+
+- **Expand.** Choose a row or a field within it and ask a follow-up question. The findings open in a linked child table, with the research tree keeping the path back to the parent. For example, expand one company into a table of its announced facilities.
+- **Amend.** Correct a value and record why. Amendments have a separate revision history, so original observations stay available. Follow-up SQL can use the original result or a pinned amended view.
+- **Refresh.** Check a field, row or table again, then review the proposed changes. Explicitly accept supported updates or keep the current values; earlier observations and amendments remain available.
+- **Portable snapshots.** Export a research tree as a bundle and restore it in another compatible sourcesQL store. Bundles carry original results, sources, amendments, linked investigations and refresh decisions. Reopen saved findings without repeating web discovery.
+
+See the [research lifecycle](docs/app-integration.md#contracts-and-lifecycle) and [snapshot/export contracts](docs/app-integration.md#snapshots-presentation-and-export) for supported scopes, review behavior and bundle limits.
 
 ## How research works
 
@@ -45,15 +56,9 @@ ORDER BY project, source_url;
 
 The engine supports `WEB_SEARCH`, `WEB_FETCH`, `SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL`, `SEM_SCORE` and `SEM_NORM`. It accepts an explicit subset of DuckDB-style `SELECT` and nonrecursive `WITH` queries. See the [SQL reference](docs/language.md) for signatures, supported staging and refusals. Operator availability also depends on the selected provider profile.
 
-## A workspace for the result
+## The interactive workspace
 
-The MCP App adds an interactive table to compatible clients, including ChatGPT. Other MCP clients can use the same tools without rendering the app.
-
-- **Saved research:** typed columns, stable row identities, retained sources and immutable engine results.
-- **Corrections:** edit a value with a separate revision history; the original engine result remains intact. Follow-up SQL can explicitly use the original or a pinned corrected view.
-- **Linked investigations:** expand a row or field into a child research table, then navigate its tree and return to the parent.
-- **Refresh review:** compare proposed updates and accept or reject them explicitly.
-- **Portable research:** export and restore bundles with their results, corrections and linked history.
+The MCP App adds an interactive table to compatible clients, including ChatGPT. Use contextual table actions or ask the connected assistant to continue from a saved result. Linked tables are accessible through the research tree. Other MCP clients can use the same tools without rendering the app.
 
 The app decorates column labels and source addresses without rewriting data. Missing values stay missing. Search excerpts remain identified as excerpts, and a supporting quote establishes what a source says rather than proving the claim true.
 
