@@ -62,6 +62,10 @@ test("new UI builds change discovery's cache key and keep older resources readab
       assert.equal(contents[0].uri, uri);
       assert.equal(contents[0].mimeType, "text/html;profile=mcp-app");
       assert.equal("text" in contents[0] && contents[0].text, html);
+      assert.match(
+        String(contents[0]._meta?.["openai/widgetDescription"]),
+        /app is the primary result; avoid repeating its rows/,
+      );
     }
     await assert.rejects(
       client.readResource({ uri: "ui://research-legacy/research-unknown.html" }),

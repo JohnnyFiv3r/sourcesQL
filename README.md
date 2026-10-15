@@ -58,7 +58,9 @@ The engine supports `WEB_SEARCH`, `WEB_FETCH`, `SEM_MATCH`, `SEM_EXTRACT`, `SEM_
 
 ## The interactive workspace
 
-The MCP App adds an interactive table to compatible clients, including ChatGPT. Use contextual table actions or ask the connected assistant to continue from a saved result. Linked tables are accessible through the research tree. Other MCP clients can use the same tools without rendering the app.
+The MCP App adds an interactive table to compatible clients, including ChatGPT, Claude and Cursor. Use contextual table actions or ask the connected assistant to continue from a saved result. Linked tables are accessible through the research tree. Other MCP clients can use the same tools without rendering the app.
+
+The [client guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/clients.md) covers connection steps and supported interactions. Host support varies: Cursor can render the table while leaving actions that require agent messaging disabled.
 
 The app decorates column labels and source addresses without rewriting data. Missing values stay missing. Search excerpts remain identified as excerpts, and a supporting quote establishes what a source says rather than proving the claim true.
 
@@ -96,7 +98,7 @@ A local endpoint alone is not reachable by hosted ChatGPT. Use the hosted path b
 
 ### Python and CLI
 
-Install with Python 3.12–3.14 on macOS or Linux:
+Install from [PyPI](https://pypi.org/project/sourcesql/) with Python 3.12–3.14 on macOS or Linux:
 
 ```sh
 python -m pip install sourcesql
@@ -174,11 +176,13 @@ Start with the [provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/ma
 
 For search-only work, omit model and embedding settings. An Exa API key does not enable semantic operators or authorize spending. Request budgets must fit the trusted profile; source fetching also requires approved destination hosts.
 
-The existing owner deployment’s qualified hosted profile, **`exa-search.v1`**, uses Exa Auto and retained excerpts. It permits **two searches and ten candidate pages per job**, with no extra fetches or model calls. It is a small search-only configuration, not broad entity-research capacity. Larger fanout and semantic research need separately configured and qualified execution profiles. The [hosted provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/providers-hosted.md) describes the new Brave/Serper options and their qualification limits; see also the [hosted policy](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/hosted-flight.md#opt-in-exa-search) and [Exa research notes](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/exa-research.md).
+Hosted setup binds one search provider to each reviewed Flight. The configured profile determines the available search modes, candidate limits, fetching and semantic operators. Start with a small search, inspect its receipt, and configure wider coverage deliberately. A search-only profile returns source excerpts; it does not provide semantic extraction or a complete entity census.
+
+See the [hosted provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/providers-hosted.md), [hosted policy](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/hosted-flight.md#opt-in-exa-search) and [Exa research notes](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/exa-research.md) for configuration and current limits.
 
 ## Status and development
 
-The project includes the Python package, local Docker app, guided personal-cloud setup, durable MotherDuck jobs and storage, and hosted ChatGPT OAuth/app rendering. Fixture tests, live provider quality and host integration are different checks; the [current status](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/STATUS.md) records their scope and remaining gaps. Broad live research quality, hosted semantic models and Claude rendering are not qualified by the small Exa integration.
+The [current status](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/STATUS.md) records package, Docker, provider and host qualification separately. Fresh-account Hobby onboarding, broad live research quality and the complete Claude/Cursor lifecycle still need qualification. Hosted semantic models are unavailable in the reviewed profiles.
 
 Run local checks from the repository root:
 

@@ -66,7 +66,7 @@ export function createServer(
   const server = new McpServer(
     {
       name: "sourcesql-research-app",
-      version: "0.1.0",
+      version: "0.1.1",
       title: "sourcesQL",
       websiteUrl: "https://github.com/JohnnyFiv3r/sourcesQL",
       icons: [
@@ -287,6 +287,7 @@ export function createServer(
       "started_at",
       "finished_at",
       "error_code",
+      "dispatch_blocked",
       ...(completed ? ["result_id", "run_id"] : []),
     ];
     const result = Object.fromEntries(
@@ -301,11 +302,13 @@ export function createServer(
         : receipt.status === "cancelled" && pending
           ? "Cancellation is durably recorded and result publication is blocked. Platform stop is not confirmed yet; poll sourcesql_job_status with this same job_id."
           : pending
-            ? continuation
-              ? "Poll sourcesql_job_status with this job_id. If queued, use sourcesql_start_job with the same job_id when capacity is available. This dependency job must complete before the original operation can resume. No result is available yet."
-              : receipt.status === "queued"
-                ? "This job is queued. Poll sourcesql_job_status for state; when capacity is available, call sourcesql_start_job with this same job_id to resume. A new request ID starts different work. No result is available yet."
-                : "Poll sourcesql_job_status with this job_id. Reuse the same request_id to recover this job; a new ID starts different work. No result is available yet."
+            ? receipt.status === "queued" && receipt.dispatch_blocked
+              ? `This saved job is queued: ${(receipt.dispatch_blocked as { message: string }).message}. No Flight was submitted for this attempt. Keep the same job_id and request_id; wait for the allowance to become available, then explicitly resume with sourcesql_start_job using this same job_id. Do not bypass the cap or create another request to retry. No result is available yet.`
+              : continuation
+                ? "Poll sourcesql_job_status with this job_id. If queued, use sourcesql_start_job with the same job_id when capacity is available. This dependency job must complete before the original operation can resume. No result is available yet."
+                : receipt.status === "queued"
+                  ? "This job is queued. Poll sourcesql_job_status for state; when capacity is available, call sourcesql_start_job with this same job_id to resume. A new request ID starts different work. No result is available yet."
+                  : "Poll sourcesql_job_status with this job_id. Reuse the same request_id to recover this job; a new ID starts different work. No result is available yet."
             : completed
               ? `Query execution completed; the stored result can be reused by further SQL without rendering. ${SOURCESQL_PRESENTATION_GUIDANCE}`
               : "This job is terminal. No result was published; inspect this job before deciding whether to start new work.";
@@ -1233,6 +1236,8 @@ export function createServer(
         mimeType: RESOURCE_MIME_TYPE,
         text: html,
         _meta: {
+          "openai/widgetDescription":
+            "Interactive sourcesQL research table with source evidence, saved research navigation and corrections. The app is the primary result; avoid repeating its rows in prose or a Markdown table.",
           ui: {
             prefersBorder: true,
             csp: { connectDomains: [], resourceDomains: [] },

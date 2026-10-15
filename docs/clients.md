@@ -7,12 +7,34 @@ message. Fixture or saved data is enough for the first connection checks.
 
 | Client path | Connection | Current evidence |
 | --- | --- | --- |
-| ChatGPT | Personal HTTPS `/mcp` endpoint with OAuth | Owner deployment has passed OAuth, saved-table rendering and bounded workspace interactions; see [status](../STATUS.md) |
-| Claude | Remote custom connector with OAuth | Host documents interactive MCP Apps and custom connectors; sourcesQL client qualification must be recorded separately |
-| Cursor | Remote Streamable HTTP with owner bearer or OAuth; local stdio also available | Cursor documents MCP Apps; sourcesQL client qualification must be recorded separately |
+| ChatGPT | Personal HTTPS `/mcp` endpoint with OAuth | Saved-table rendering restored after tool refresh; private package 1.0.2 uploaded; earlier bounded lifecycle checks remain scoped in [status](../STATUS.md) |
+| Claude | Personal HTTPS `/mcp` endpoint with an encrypted owner bearer header; OAuth is also supported by the gateway | Actual table rendering, child/Back navigation and correction persistence across reload passed; full research lifecycle remains unqualified |
+| Cursor | Local Docker fixture tested; remote Streamable HTTP configuration is documented below | Actual nine-row fixture rendering and paging passed; host-agent messaging was unavailable in this setup and refresh stayed disabled |
 | Other MCP clients | Supported HTTP or stdio transport | Tools can be used without an interactive renderer; host features vary |
 
+## ChatGPT: reopen after updating the app
+
+The installed private package was updated to **1.0.2**. On the existing owner
+deployment, ChatGPT rendered saved synthetic research again after **Refresh
+tools** and reopening the saved result. That check started no research query.
+
+If an updated app reports that it could not open a component, refresh its tool
+definitions in the plugin's settings, then call `open_research` with the same
+saved `snapshot_id` or retry that saved component. Do not rerun SQL, expansion or
+refresh to repair rendering. If it still fails, keep the error and inspect the
+connection/resource response before claiming the table opened.
+
+ChatGPT can hide tool details or its work trace. A missing visible trace is not
+evidence that no tool ran, and an assistant saying a table opened is not evidence
+that the component rendered. Confirm the actual table. Authentication or mutation
+errors need their own recovery; preserve the original IDs rather than treating
+them as display failures.
+
 ## Claude first
+
+The measured personal connection used an encrypted `Authorization: Bearer …`
+request header, configured through Claude's custom-connector authentication
+settings. Its OAuth connection path was not exercised by that check.
 
 Create the [personal-cloud endpoint](personal-cloud-setup.md) and configure its
 OAuth API audience as the exact stable `/mcp` URL. Only the configured immutable
@@ -32,9 +54,11 @@ the app anonymous to get past a login error.
 Complete consent as the configured application owner, enable the connector in a
 new conversation and ask it to reopen an existing fixture research table with
 `open_research`. Confirm the table appears in chat, not just a text response.
-Then inspect source links and research-tree/Back navigation. A later qualified
-fixture journey should exercise correction/reopen, expansion completion and
-refresh review; preserve the exact IDs and report unsupported app messaging or
+Then inspect source links and research-tree/Back navigation. The measured connection used an encrypted owner bearer header and passed
+rendering, child-table/Back navigation, a synthetic 500-to-501 correction, reload
+persistence and restoration to 500. This did not run new provider research.
+Expansion execution, refresh review and the complete lifecycle remain separate
+qualification work; preserve the exact IDs and report unsupported app messaging or
 view modes rather than assuming they match another host.
 
 For a personal connector, Claude also documents encrypted **Request headers** for
@@ -85,6 +109,11 @@ view appears. Qualify tree navigation, source opening, correction persistence,
 refresh review and host messages independently. Cursor states that a tool can
 fall back to ordinary MCP output when an app UI is unavailable; that is useful
 fallback behavior, not a passed app-rendering check.
+
+The measured Cursor connection rendered a nine-row local Docker fixture and
+passed paging. Host-agent messaging was unavailable in that setup; refresh was
+disabled accordingly. This does not qualify hosted Cursor authentication,
+expansion, refresh review or the full lifecycle.
 
 For local stdio, use the [Docker MCP configuration](docker.md#mcp-over-stdio).
 A locally running server does not make an HTTP endpoint reachable from a hosted

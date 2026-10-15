@@ -100,8 +100,8 @@ dialog textarea {
 }
 .dialog-actions button {
   border: 0;
-  background: #17654b;
-  color: white;
+  background: #2cd8b6;
+  color: #0e221d;
   font: inherit;
   font-weight: 550;
   padding: 10px 15px;
@@ -110,7 +110,7 @@ dialog textarea {
 }
 button:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid #17654b;
+  outline: 2px solid #2cd8b6;
   outline-offset: 3px;
 }
 @media (max-width: 720px) {

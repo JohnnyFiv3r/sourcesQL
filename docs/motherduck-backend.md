@@ -60,7 +60,7 @@ From the repository root, with the development build tools installed:
 
 ```sh
 uv build --wheel
-python hosted/flight/build.py dist/sourcesql-0.1.0-py3-none-any.whl \
+python hosted/flight/build.py dist/sourcesql-0.1.1-py3-none-any.whl \
   --output artifacts/hosted-flight
 ```
 
@@ -83,9 +83,12 @@ node hosted/setup.mjs \
   --use-local-login
 ```
 
-This uses the token saved by an authenticated MotherDuck CLI login. Alternatively,
-configure `MOTHERDUCK_TOKEN` securely in the command's environment and omit
-`--use-local-login`. Choose `MOTHERDUCK_HOST` for the account's region; the
+The explicit `--use-local-login` option uses the cached MotherDuck CLI login
+credential for this provisioning session only. Do not copy that ephemeral login
+credential into a persistent gateway. Alternatively, configure an operator-created
+Read/Write API/access token as `MOTHERDUCK_TOKEN` securely in the command's
+environment and omit `--use-local-login`. The deployed gateway needs its own
+explicitly configured durable credential and rotation policy. Choose `MOTHERDUCK_HOST` for the account's region; the
 default is the US endpoint. The database must exist unless you explicitly add
 `--create-database`.
 
@@ -139,7 +142,7 @@ example.
 | `RESEARCH_AUTH_MODE` | `protected` for HTTP; stdio is already protected |
 | `RESEARCH_BEARER_TOKEN` | A strong secret for protected HTTP requests |
 | `SOURCESQL_PRINCIPAL` | Explicit, stable owner identifier |
-| `MOTHERDUCK_TOKEN` | Gateway credential for that owner's MotherDuck account |
+| `MOTHERDUCK_TOKEN` | Operator-created Read/Write API/access token for the owner account; choose expiry and rotation for persistent hosting |
 | `MOTHERDUCK_DB` | Database identifier, up to 63 characters |
 | `MOTHERDUCK_HOST` | `pg.us-east-1-aws.motherduck.com` or `pg.eu-central-1-aws.motherduck.com` |
 | `SOURCESQL_FLIGHT_ID` | The reviewed Flight's UUID |
@@ -166,6 +169,34 @@ npm --prefix apps/research start
 This starts the Node gateway; its presence is not evidence of a qualified Vercel
 deployment. A serverless entry point, deployment environment and MCP connection
 must also be tested in their actual host.
+
+## Gateway token lifetime and rotation
+
+Use a named Read/Write API/access token from the intended owner's account for
+persistent hosting. MotherDuck documents token creation and expiration choices in
+[access-token authentication](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/authenticating-to-motherduck/#authentication-using-an-access-token).
+A cached interactive CLI-login credential can expire independently of the app;
+`motherduck status` reporting authenticated does not qualify that credential's
+remaining lifetime. `--use-local-login` is a provisioning convenience, not a
+persistent-gateway credential strategy. A service account is optional when
+appropriate to the adopter's account; do not enable a paid feature merely to
+satisfy this setup.
+
+Rotate the existing Vercel project's encrypted **Preview** `MOTHERDUCK_TOKEN`,
+update the private local credential input, and redeploy the same reviewed app.
+Keep its owner, database, Flight ID, source/dependency fingerprints, OAuth settings
+and stable alias unchanged. Updating an environment variable does not replace a
+running deployment's environment. This rotation requires neither another Flight
+nor a research job. Confirm authenticated saved-result reads on the replacement
+deployment, settle in-flight work, and then revoke the old token. Keep Production
+credentials separate. See the [personal-cloud rotation steps](personal-cloud-setup.md#motherduck-credentials-for-a-persistent-gateway).
+
+If authentication fails during a mutation or job response, retain the exact IDs.
+After restoring access, inspect the canonical revision and the same mutation/job
+before deciding whether an identical retry is needed. Failed authentication is
+not proof that an earlier request never committed. Never switch to a new request
+or mutation ID merely to recover an uncertain response, and do not recreate the
+Flight to fix an expired gateway token.
 
 ## Durable jobs and explicit resume
 

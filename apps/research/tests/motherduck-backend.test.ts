@@ -10,6 +10,7 @@ import { createInterface } from "node:readline";
 import {
   MotherDuckEngine,
   MotherDuckStateBackend,
+  BackendError,
   type SqlClient,
 } from "../server/motherduck.js";
 import { exaFingerprint, type HostedExaPolicy } from "../server/hosted-exa.js";
@@ -19,6 +20,8 @@ import {
   type HostedSearchPolicy,
 } from "../server/hosted-search.js";
 import { ResearchStore } from "../server/store.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { createServer } from "../server/mcp.js";
 import { snapshotSchema, effectiveValue } from "../src/schema.js";
 import sample from "../fixtures/water-procurement.json";
 
@@ -1879,6 +1882,275 @@ test("hosted search providers stay opt-in and mixed Exa plus search configuratio
           search: searchPolicy(provider),
         }),
       );
+    }
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+async function reserveRuntimeDay(engine: MotherDuckEngine, seconds: number) {
+  await engine.connection((client) =>
+    client.query(
+      `INSERT INTO ${engine.table("flight_allowances")} VALUES($1,$2::BIGINT)`,
+      [new Date().toISOString().slice(0, 10), seconds],
+    ),
+  );
+}
+
+async function runtimeReserve(engine: MotherDuckEngine) {
+  return (
+    await engine.connection((client) =>
+      client.query(
+        `SELECT CAST(coalesce(sum(reserved_seconds),0) AS VARCHAR) AS seconds FROM ${engine.table("flight_allowances")}`,
+      ),
+    )
+  ).rows[0].seconds;
+}
+
+test("an exhausted automatic start preserves one queued handle across replay and cancellation without changing limits", async () => {
+  const h = await harness();
+  try {
+    configureExa(h);
+    const engine = h.engine("owner-a", {
+      allowSubmission: true,
+      exa: exaPolicy(),
+    });
+    await engine.initialize();
+    await reserveRuntimeDay(engine, 600);
+    const request = liveQuery();
+    const first = await engine.call<Row>("query", request);
+    assert.equal(first.status, "queued");
+    assert.equal(first.pending, true);
+    assert.equal(first.request_id, request.request_id);
+    assert.deepEqual(first.dispatch_blocked, {
+      code: "budget_exhausted",
+      message: "Daily Flight execution reserve is exhausted",
+    });
+    const replay = await engine.call<Row>("query", request);
+    assert.equal(replay.job_id, first.job_id);
+    assert.deepEqual(replay.dispatch_blocked, first.dispatch_blocked);
+    await assert.rejects(engine.call("start_job", { job_id: first.job_id }), {
+      code: "budget_exhausted",
+    });
+    const saved = (
+      await engine.connection((client) =>
+        client.query(
+          `SELECT count(*)::INTEGER AS count,max(dispatch_intent_at) AS intent,CAST(sum(provider_cost_reserved_microusd) AS VARCHAR) AS reserved FROM ${engine.table("jobs")}`,
+        ),
+      )
+    ).rows[0];
+    assert.equal(saved.count, 1);
+    assert.equal(saved.intent, null);
+    assert.equal(saved.reserved, "0");
+    const caps = await engine.call<Row>("capabilities");
+    assert.equal(caps.daily_execution_reserve_seconds, 600);
+    assert.equal(caps.max_flight_runtime_seconds, 120);
+    assert.equal(
+      caps.profiles.find((p: Row) => p.name === "exa").search_limits
+        .max_cost_microusd,
+      50_000,
+    );
+    assert.equal(await runtimeReserve(engine), "600");
+    assert.equal(await providerReserve(engine), "0");
+    assert.equal(h.submissions, 0);
+    const cancelled = await engine.call<Row>("cancel_job", {
+      job_id: first.job_id,
+    });
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.pending, false);
+    const cancelledReplay = await engine.call<Row>("query", request);
+    assert.equal(cancelledReplay.job_id, first.job_id);
+    assert.equal(cancelledReplay.status, "cancelled");
+    assert.equal(cancelledReplay.dispatch_blocked, undefined);
+    assert.equal(h.submissions, 0);
+    assert.equal(await runtimeReserve(engine), "600");
+  } finally {
+    await h.close();
+  }
+});
+
+test("an exhausted provider allowance returns the queued handle and rolls back execution reservation", async () => {
+  const h = await harness();
+  try {
+    const policy = searchPolicy("brave", { dailyCostMicrousd: 50_000 });
+    configureSearch(h, policy);
+    const engine = h.engine("owner-a", {
+      allowSubmission: true,
+      search: policy,
+    });
+    await engine.initialize();
+    await engine.connection((client) =>
+      client.query(
+        `INSERT INTO ${engine.table("provider_allowances")} VALUES($1,50000)`,
+        [new Date().toISOString().slice(0, 10)],
+      ),
+    );
+    const request = { ...liveQuery(), profile: "brave" };
+    const first = await engine.call<Row>("query", request);
+    assert.equal(first.status, "queued");
+    assert.deepEqual(first.dispatch_blocked, {
+      code: "budget_exhausted",
+      message: "Daily provider reserve is exhausted",
+    });
+    assert.equal(
+      (await engine.call<Row>("query", request)).job_id,
+      first.job_id,
+    );
+    assert.equal(await runtimeReserve(engine), "0");
+    assert.equal(await providerReserve(engine), "50000");
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("MCP returns the blocked queued receipt and same-ID resume guidance rather than an error", async () => {
+  const h = await harness();
+  const client = new Client({ name: "budget-boundary-test", version: "1" });
+  let server: ReturnType<typeof createServer> | undefined;
+  try {
+    configureExa(h);
+    const engine = h.engine("owner-a", {
+      allowSubmission: true,
+      exa: exaPolicy(),
+    });
+    await engine.initialize();
+    await reserveRuntimeDay(engine, 600);
+    const store = new ResearchStore(h.directory, seed, undefined, 3000, {
+      backend: new MotherDuckStateBackend(engine),
+    });
+    server = createServer(
+      store,
+      join(root, "apps/research/dist/research.html"),
+      {
+        engine,
+        access: {
+          mode: "protected",
+          principal: "owner-a",
+          allowPrivateDisclosure: false,
+        },
+      },
+    );
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const request = liveQuery();
+    const result = await client.callTool({
+      name: "sourcesql_query",
+      arguments: request,
+    });
+    assert.notEqual(result.isError, true);
+    const queued = result.structuredContent as Row;
+    assert.equal(queued.status, "queued");
+    assert.equal(queued.request_id, request.request_id);
+    assert.equal(queued.dispatch_blocked.code, "budget_exhausted");
+    const guidance = result.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("\n");
+    assert.ok(guidance.includes(queued.job_id));
+    assert.match(guidance, /No Flight was submitted for this attempt/);
+    assert.match(guidance, /same job_id and request_id/);
+    assert.match(guidance, /allowance/);
+    assert.match(guidance, /explicitly resume with sourcesql_start_job/);
+    assert.match(guidance, /Do not bypass the cap/);
+    const replay = await client.callTool({
+      name: "sourcesql_query",
+      arguments: request,
+    });
+    assert.notEqual(replay.isError, true);
+    assert.equal((replay.structuredContent as Row).job_id, queued.job_id);
+    assert.deepEqual(
+      (replay.structuredContent as Row).dispatch_blocked,
+      queued.dispatch_blocked,
+    );
+    const cancelled = await client.callTool({
+      name: "sourcesql_cancel_job",
+      arguments: { job_id: queued.job_id },
+    });
+    assert.notEqual(cancelled.isError, true);
+    assert.equal((cancelled.structuredContent as Row).status, "cancelled");
+    assert.equal((cancelled.structuredContent as Row).pending, false);
+    assert.equal(h.submissions, 0);
+    assert.equal(await runtimeReserve(engine), "600");
+    assert.equal(await providerReserve(engine), "0");
+  } finally {
+    await client.close();
+    await server?.close();
+    await h.close();
+  }
+});
+
+test("automatic start does not turn unexpected, authorization or configuration errors into budget receipts", async (context) => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    for (const error of [
+      new Error("Unexpected controlled failure"),
+      Object.assign(new Error("Budget-shaped uncontrolled failure"), {
+        code: "budget_exhausted",
+      }),
+      new BackendError("unauthorized", "Controlled authorization refusal"),
+      new BackendError(
+        "unsupported_capability",
+        "Controlled configuration refusal",
+      ),
+    ]) {
+      const mock = context.mock.method(engine, "startJob", async () => {
+        throw error;
+      });
+      try {
+        await assert.rejects(
+          engine.call("query", query()),
+          (observed) => observed === error,
+        );
+      } finally {
+        mock.mock.restore();
+      }
+    }
+    assert.equal(h.submissions, 0);
+    assert.equal(await runtimeReserve(engine), "0");
+  } finally {
+    await h.close();
+  }
+});
+
+test("a budget error after a dispatch marker or reservation is never described as an undispatched queue block", async (context) => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    for (const mutation of [
+      "status='dispatching'",
+      "dispatch_intent_at='controlled-dispatch-marker'",
+      "flight_run_id='11111111-1111-4111-a111-111111111111'::UUID",
+      "provider_cost_reserved_microusd=1",
+    ]) {
+      const error = new BackendError(
+        "budget_exhausted",
+        "Controlled post-dispatch refusal",
+      );
+      const mock = context.mock.method(
+        engine,
+        "startJob",
+        async (id: string) => {
+          await engine.connection((client) =>
+            client.query(
+              `UPDATE ${engine.table("jobs")} SET ${mutation} WHERE id=$1::UUID`,
+              [id],
+            ),
+          );
+          throw error;
+        },
+      );
+      try {
+        await assert.rejects(
+          engine.call("query", query()),
+          (observed) => observed === error,
+        );
+      } finally {
+        mock.mock.restore();
+      }
     }
     assert.equal(h.submissions, 0);
   } finally {

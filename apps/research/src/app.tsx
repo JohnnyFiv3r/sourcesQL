@@ -1817,10 +1817,7 @@ function Workspace() {
               )}
             </div>
             <footer className="app-footer">
-              <span className="wordmark">
-                <img src={brandIcon} alt="" />
-                <span>sourcesQL</span>
-              </span>
+              <img className="footer-logo" src={brandIcon} alt="sourcesQL" />
             </footer>
           </div>
         </section>

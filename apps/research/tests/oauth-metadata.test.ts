@@ -112,6 +112,8 @@ test("OAuth discovery exposes the complete owner scope on all tools while preser
       prefersBorder: true,
       csp: { connectDomains: [], resourceDomains: [] },
     },
+    "openai/widgetDescription":
+      "Interactive sourcesQL research table with source evidence, saved research navigation and corrections. The app is the primary result; avoid repeating its rows in prose or a Markdown table.",
   });
   assert.ok(
     bearer.tools.every((t) => t._meta?.securitySchemes === undefined),

@@ -3,6 +3,7 @@
 !Dockerfile
 !.dockerignore
 !pyproject.toml
+!hatch_build.py
 !uv.lock
 !README.md
 !LICENSE
@@ -21,6 +22,7 @@
 !apps/research/index.html
 !apps/research/research.html
 !apps/research/vercel.json
+!apps/research/.vercelignore
 !apps/research/server/
 !apps/research/server/**
 !apps/research/src/
@@ -36,11 +38,14 @@
 !apps/research/ui-history/
 !apps/research/ui-history/*.html
 !hosted/
+!hosted/setup.mjs
+!hosted/personal-cloud.mjs
 !hosted/flight/
+!hosted/flight/build.py
 !hosted/flight/runner.py
 !hosted/flight/exa_profile.py
 !hosted/flight/tests/
-!hosted/flight/tests/test_exa_profile.py
+!hosted/flight/tests/*.py
 **/__pycache__/**
 **/*.pyc
 **/.env*

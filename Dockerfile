@@ -14,6 +14,11 @@ COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
 RUN --mount=type=cache,id=sourcesql-uv,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 COPY src ./src
+# The wheel bundles reviewed cloud setup templates as well as the engine.
+COPY hatch_build.py ./
+COPY hosted/setup.mjs hosted/personal-cloud.mjs ./hosted/
+COPY hosted/flight/build.py hosted/flight/runner.py hosted/flight/exa_profile.py ./hosted/flight/
+COPY apps/research ./apps/research
 RUN --mount=type=cache,id=sourcesql-uv,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
@@ -23,8 +28,7 @@ RUN --mount=type=cache,id=sourcesql-uv,target=/root/.cache/uv \
     uv sync --frozen --no-editable
 COPY tests ./tests
 COPY examples ./examples
-COPY hosted/flight/runner.py hosted/flight/exa_profile.py ./hosted/flight/
-COPY hosted/flight/tests/test_exa_profile.py ./hosted/flight/tests/
+COPY hosted/flight/tests ./hosted/flight/tests
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \
@@ -49,7 +53,7 @@ WORKDIR /workspace/apps/research
 COPY apps/research/package.json apps/research/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY apps/research ./
-RUN npm run build && npx tsc --noEmit false --outDir compiled
+RUN npm run build:vercel && npx tsc --noEmit false --outDir compiled
 
 # Full existing app tests run against the actual installed Linux engine.
 FROM qualification AS app-qualification
@@ -75,7 +79,7 @@ COPY --from=app-builder /workspace/apps/research/compiled/server /workspace/apps
 COPY --from=app-builder /workspace/apps/research/compiled/src /workspace/apps/research/src
 COPY --from=app-builder /workspace/apps/research/fixtures /workspace/apps/research/fixtures
 COPY --from=app-builder /workspace/apps/research/dist /workspace/apps/research/dist
-COPY --from=app-builder /workspace/apps/research/.ui-builds /opt/sourcesql-ui-archives
+COPY --from=app-builder /workspace/apps/research/.vercel-assets/.ui-builds /opt/sourcesql-ui-archives
 COPY --from=app-builder /workspace/apps/research/src/fonts/*LICENSE.txt /usr/share/licenses/sourcesql/fonts/
 RUN mkdir -p /data/research && chown -R 10001:10001 /data && \
     ln -s /data/research /workspace/apps/research/.data && \

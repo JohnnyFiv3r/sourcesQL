@@ -19,8 +19,10 @@ execution also makes that provider available under its reviewed usage policy.
 
 - Python 3.12–3.14 with `sourcesql` installed; see [package installation](package.md).
 - Node.js **24** and npm on `PATH`. The gateway deployment also pins Node 24.
-- Your own MotherDuck account and database permission. Have `MOTHERDUCK_TOKEN`
-  available in the setup process's environment.
+- Your own MotherDuck account and database permission, with an operator-created
+  **Read/Write API/access token** suitable for a persistent gateway. Choose its
+  expiration and rotation policy; do not copy an ephemeral CLI-login credential
+  into Vercel. Make it available as `MOTHERDUCK_TOKEN` in the setup environment.
 - Your own Vercel account and `VERCEL_TOKEN` with access to the intended account.
   Use a Hobby account when eligible for personal, non-commercial work. An existing
   Pro account also works; setup never upgrades or chooses a subscription.
@@ -31,6 +33,42 @@ execution also makes that provider available under its reviewed usage policy.
 An Exa, Brave or Serper key is optional. Begin with `fixture` to test the
 installation without provider calls. MotherDuck SQL queries, storage and Flights
 are separate usage; local application limits do not prove a billing hard stop.
+
+## MotherDuck credentials for a persistent gateway
+
+Create a named API/access token in MotherDuck's account settings using its
+[access-token instructions](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/authenticating-to-motherduck/#authentication-using-an-access-token).
+Use the owner account and database permissions intended for this workspace;
+a Read Scaling token cannot provide the required writes. Choose an appropriate
+expiry and plan rotation before it expires. A personal operator token is enough;
+this setup does not require buying a service-account feature.
+
+`motherduck login` and a successful `motherduck status` are useful for an
+interactive provisioning session. They do not establish that the cached login
+credential is suitable for an unattended deployment. The lower-level
+`hosted/setup.mjs --use-local-login` option is for provisioning only. Configure the
+persistent gateway's encrypted `MOTHERDUCK_TOKEN` separately using the named
+API/access token. Never embed either token in Flight source, app files or a URL.
+
+To rotate an existing gateway credential:
+
+1. Create the replacement token for the same intended account and database, then
+   update the private local credential input.
+2. Replace **only** `MOTHERDUCK_TOKEN` in the existing Vercel project's encrypted
+   **Preview** environment. Keep Production credentials separate.
+3. Redeploy the same reviewed app and retain its stable alias, OAuth settings,
+   Flight ID and fingerprints. An environment edit does not update an already
+   deployed function. No new Flight or research execution is needed.
+4. Verify authenticated saved-result reads through the replacement deployment.
+   Revoke the old token after verifying the replacement and settling in-flight
+   work that may still use it.
+
+Do not delete setup receipts or rerun provisioning to rotate a credential. A
+completed setup's ordinary resume does not rotate already-provisioned secrets.
+If expiry causes a failed query or correction response, restore authentication
+and inspect the **same** job, request or mutation IDs and canonical revision
+before retrying. An authentication error does not prove that an earlier operation
+was absent or rolled back. Do not create a fresh ID to bypass an uncertain result.
 
 ## Prepare the destination
 
@@ -240,8 +278,9 @@ saved result through a fresh connection without another Flight. A queued job
 still needs an explicit `sourcesql_start_job` call with its exact ID; there is no
 queue-draining scheduler. Pending, failed and unknown states remain visible.
 
-This operator check does not establish OAuth login, app rendering or interaction
-in a model host. Follow [client setup and qualification](clients.md) for those.
+The measured installed-package path used an existing operator account/project;
+a brand-new adopter account remains a separate qualification check. This operator
+check does not establish OAuth login, app rendering or interaction in a model host. Follow [client setup and qualification](clients.md) for those.
 
 ## Choose a live provider
 

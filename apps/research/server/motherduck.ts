@@ -658,8 +658,32 @@ export class MotherDuckEngine implements ResearchEngine {
     let job = await this.transaction(false, (client) =>
       this.getJob(client, jobId),
     );
-    if (job.status === "queued" && this.options.allowSubmission)
-      job = await this.startJob(jobId);
+    let dispatchBlocked: { code: string; message: string } | undefined;
+    if (job.status === "queued" && this.options.allowSubmission) {
+      try {
+        job = await this.startJob(jobId);
+      } catch (error) {
+        if (
+          !(error instanceof BackendError) ||
+          error.code !== "budget_exhausted"
+        )
+          throw error;
+        const retained = await this.transaction(false, (client) =>
+          this.getJob(client, jobId),
+        );
+        // A known allowance refusal before dispatch leaves a recoverable queue
+        // handle. Never describe an uncertain or already dispatched job as blocked.
+        if (
+          retained.status !== "queued" ||
+          retained.dispatch_intent_at !== null ||
+          retained.flight_run_id !== null ||
+          Number(retained.provider_cost_reserved_microusd) !== 0
+        )
+          throw error;
+        job = retained;
+        dispatchBlocked = { code: error.code, message: error.message };
+      }
+    }
     if (operation !== "query" && job.status === "completed") {
       const result = await this.readResult({ result_id: job.result_id });
       return {
@@ -674,7 +698,10 @@ export class MotherDuckEngine implements ResearchEngine {
       );
     if (job.status === "completed")
       await this.readResult({ result_id: job.result_id, limit: 0 });
-    return this.envelope(job);
+    return {
+      ...this.envelope(job),
+      ...(dispatchBlocked ? { dispatch_blocked: dispatchBlocked } : {}),
+    };
   }
   async startJob(id: string): Promise<Row> {
     id = identity(id);

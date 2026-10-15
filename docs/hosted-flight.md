@@ -17,7 +17,7 @@ From the repository root:
 ```sh
 uv build --wheel --out-dir artifacts/hosted-wheel
 uv run --frozen python hosted/flight/build.py \
-  artifacts/hosted-wheel/sourcesql-0.1.0-py3-none-any.whl \
+  artifacts/hosted-wheel/sourcesql-0.1.1-py3-none-any.whl \
   --output artifacts/hosted-flight
 ```
 
