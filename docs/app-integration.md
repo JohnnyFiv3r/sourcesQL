@@ -94,3 +94,5 @@ These checks do not qualify broad entity-research coverage, hosted semantic
 models, live refresh quality, a fresh adopter's account setup or Claude
 rendering. See [current status](../STATUS.md), [provider setup](providers.md) and
 [runtime qualification](python-linux-qualification.md) for the current boundaries.
+
+UI bundles use content-derived resource identifiers. When a retired bundle is unavailable, reopen the saved snapshot with `open_research` to render it with the current UI; the saved research itself is unchanged.

@@ -222,7 +222,7 @@
     "private documentation",
     "start-tunnel.sh"
   ],
-  "legacy_fixture_origin": "Legacy local research export; baseline tests run before replacement. Public fixture files will be synthetic.",
+  "legacy_fixture_origin": "Private baseline export replaced with synthetic compatibility fixtures before public distribution.",
   "baseline_verification": {
     "build": "passed",
     "tests": 40,
