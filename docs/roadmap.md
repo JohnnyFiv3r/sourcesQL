@@ -1,9 +1,9 @@
 # Adoption and product roadmap
 
-The published package is **0.1.2**. The current source and personal Preview include
-the **0.2.0 candidate**: compact checkpoints and bounded manual evidence-backed
-updates. Its wheel and source distribution are prepared and qualified locally;
-they are not yet published on PyPI.
+**0.2.0** includes compact checkpoints and bounded manual evidence-backed
+updates. Installed distributions, controlled engine/app/Docker paths, and actual
+ChatGPT/Claude manual review and publication have been exercised. Fresh-adopter
+and remaining client checks stay separate.
 
 Implementation, release and actual host qualification are separate milestones.
 See [current status](../STATUS.md) for recorded evidence and
@@ -54,14 +54,14 @@ and actual provider billing. No setup path promises free hosting.
 ## 2. Qualify continuation and updates in actual MCP hosts
 
 ChatGPT checkpoint saving and fresh-Claude continuation have passed, as have
-current table rendering and update-request read/cancellation in both hosts.
+current table rendering, update-request read/cancellation, evidence inspection,
+revised review choices and saved successor publication in both hosts.
 Claude prepares a composer draft that requires Send before its agent continues.
 
-Use saved data and controlled fixtures first. In ChatGPT and Claude, verify
-checkpoint saving and reopening, stale-revision blockers, host-message delivery,
-evidence inspection, revised Accept/Keep choices, publication and reopening the
-accepted successor. Confirm the original table and amendments remain unchanged.
-A successful tool response or local browser test does not establish host rendering.
+Use saved data and controlled fixtures for remaining checkpoint stale-revision
+and file-download checks. Preserve canonical IDs and original revisions in each
+host receipt. Successful tool responses and local browser tests remain separate
+from actual host rendering.
 
 Complete the remaining tracked expansion and refresh-review checks in Claude.
 For Cursor, qualify hosted authentication and the supported lifecycle separately
@@ -69,10 +69,10 @@ from local Docker rendering. Keep actions that require unavailable app messaging
 disabled and describe that limitation explicitly. Use a small approved provider
 run only when fixture or saved-data checks cannot establish the behavior.
 
-## 3. Release the qualified continuation version
+## 3. Keep released artifacts and hosted runtimes aligned
 
-Keep 0.2.0 candidate source, installed artifacts, Docker and deployed resources in
-agreement. Publish only the artifacts covered by the release checks and identify
+Keep released source, installed artifacts, Docker and deployed resources in
+agreement. Publish only artifacts covered by release checks and identify
 any remaining host or adopter gates in the release notes. Refresh client tool
 definitions after a server update; reopen saved results rather than repeating
 research to repair a display failure.

@@ -22,36 +22,32 @@ creation, and explicit retries for a failed deployment. These are synthetic API
 checks; they do not establish that a newly registered account can complete every
 signup, consent or plan requirement.
 
-## Current candidate: 0.2.0
+## 0.2.0 qualification
 
-Compact checkpoints and bounded manual evidence-backed updates are implemented
-in source and the personal Preview. The candidate wheel and source distribution
-each passed installed qualification outside the checkout on Python 3.12, 3.13
-and 3.14. The app, restricted Docker runtime and actual Python/SQL worker passed
-controlled checks, including review changes, successor publication, repeatable
-materialization and subsequent SQL.
+The wheel and source distribution pass installed qualification outside the
+checkout on Python 3.12, 3.13 and 3.14. Controlled app, restricted Docker and
+actual Python/SQL-worker checks cover canonical evidence, revised choices,
+successor publication, repeatable materialization and subsequent SQL.
 
-The authenticated hosted MCP endpoint passed checkpoint recovery with the
-original saved ID, fresh-connection continuation, durable manual-request reopening
-and explicit cancellation. Those checks used stored synthetic data without new
-Flights or provider requests. Actual ChatGPT controls then passed selected-field
-checkpoint saving and update-request delivery/read/cancellation. A fresh Claude
-chat resumed the same checkpoint as `ready`; an older chat had retained its old
-tool list. Claude also rendered the current controls, saved an update request
-and prepared a composer message. After Send, the agent read and cancelled that
-exact request. Snapshot values, amendments, accepted sources and revision stayed
-unchanged. Actual proposal review/publication and checkpoint file download remain
-separate host gates. Candidate checks do not change the published PyPI version or
-qualify a fresh adopter's account.
+Actual ChatGPT and Claude app controls also passed manual evidence inspection,
+Accept → Keep → Accept, Skip → Accept for a separate addition, gated publication,
+locked decisions after publication, original-table preservation and saved
+successor reopening. The fixture engine acquired fresh sources locally; normal
+bundle export/import through the documented MotherDuck adapter preserved their
+canonical identities, timestamps, hashes and evidence in the existing workspace.
+Hosted review/publication then used those stored results. No new Flight, live
+provider call or allowance change was needed. This does not qualify the hosted
+acquisition stage or broad research quality.
 
-A subsequent notification patch explains that some hosts prepare a composer
-message requiring Send. Its build, targeted UI/deployment checks and Python
-packaging checks passed. Authenticated resource reads match the exact local UI
-and retain the previous immutable bundle; the actual-host observations above
-used that previous bundle. This copy change did not repeat full engine checks.
+ChatGPT checkpoint saving and fresh-Claude continuation passed with the same
+canonical selection/revision. Both hosts also saved, read and cancelled an update
+request. Claude's prepared composer message requires Send before its agent
+continues. The measured ChatGPT host did not offer checkpoint file download.
 
-Use the direct authenticated HTTPS MCP connection for hosted clients. There is
-no separate packaged-plugin installation requirement.
+Use the authenticated HTTPS MCP connection; there is no packaged-plugin
+installation requirement. Refresh host tool definitions and reopen saved data
+after an update. Existing hosted Flights embed a pinned wheel and require their
+own reviewed runtime upgrade; publishing a package does not upgrade them.
 
 ## Qualification boundaries
 
@@ -61,10 +57,10 @@ no separate packaged-plugin installation requirement.
 | Personal cloud | Existing-account provisioning, bounded fixture execution and subsequent stored reads | Fresh-account Hobby onboarding and its manual account steps |
 | Exa | Earlier bounded hosted Auto research and durable results | Current provider configuration and broad research quality |
 | Brave and Serper | One bounded search per provider in real MotherDuck Flights, provenance, replay and fresh stored reads through a local MCP gateway | Dispatch through Vercel HTTP and host rendering for those configurations |
-| ChatGPT | Direct HTTPS with OAuth, current table rendering, checkpoint saving and update-request delivery/read/cancellation | Actual evidence review, revised choices, successor publication and checkpoint file download |
-| Claude | Saved-table rendering, current controls, child/Back navigation, correction persistence, checkpoint continuation from ChatGPT and update-request read/cancel after Send | Tracked expansion, refresh review and manual-update evidence review/publication |
+| ChatGPT | Direct HTTPS with OAuth, current table rendering, checkpoint saving, update-request delivery/read/cancellation and manual evidence review/publication | Checkpoint file download and fresh hosted acquisition |
+| Claude | Saved-table rendering, current controls, child/Back navigation, correction persistence, checkpoint continuation from ChatGPT, update-request read/cancel after Send, and manual evidence review/publication | Tracked expansion and refresh review; fresh hosted acquisition |
 | Cursor | Local Docker fixture rendering and paging | Hosted authentication and full lifecycle; app messaging was unavailable in the tested setup |
-| Continuation candidate | Installed artifacts, controlled engine/app/Docker/browser checks and stored-data hosted MCP recovery | Actual client workflows and fresh-adopter verification for the changed release |
+| Continuation 0.2.0 | Installed artifacts, controlled engine/app/Docker/browser checks and stored-data hosted MCP recovery | Remaining client lifecycle paths and fresh-adopter verification |
 
 See [client connection details](clients.md) for the actual host boundaries and
 [current status](../STATUS.md) for release evidence.
@@ -73,9 +69,11 @@ See [client connection details](clients.md) for the actual host boundaries and
 
 1. Install the published package outside a source checkout. Run the local fixture
    example and reopen its stored result before configuring paid providers.
-2. Prepare a personal-cloud plan with `fixture` and execution disabled. Review the
-   account, database, alias, owner identity and finite limits before applying its
-   exact digest. Keep the workspace and receipts private.
+2. Prepare an unapplied `fixture` preflight with execution disabled. If one
+   bounded fixture job is approved, enable execution before preparing a separate
+   plan/workspace intended for apply. Review its account, database, alias, owner
+   identity and finite limits, then apply only its exact digest. Keep receipts
+   private; `--run-fixture` cannot enable a disabled saved plan.
 3. Finish account login, OAuth consent and any exact-domain protection exception
    deliberately. Setup does not create accounts, accept terms, add a card or
    change a subscription.
@@ -87,7 +85,7 @@ See [client connection details](clients.md) for the actual host boundaries and
    the saved result and confirm the actual component, source opening, navigation
    and supported actions; a successful MCP response alone does not prove
    rendering or app-message delivery.
-6. For the continuation candidate, save and reopen a compact checkpoint. Inspect
+6. For continuation, save and reopen a compact checkpoint. Inspect
    its exact revision and selected canonical IDs, then use controlled evidence
    to review a manual update. Change a choice before publication, reopen the
    published successor and confirm the original table is unchanged. Record these

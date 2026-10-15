@@ -14,6 +14,7 @@ configure a schedule, promote to Production or execute live searches.
 `enable_execution` controls all gateway submissions. With the default fixture
 provider, only fixtures run. With a deliberately selected live provider, enabling
 execution also makes that provider available under its reviewed usage policy.
+This choice is bound to the reviewed plan; changing it requires a new plan.
 
 ## Prerequisites
 
@@ -30,9 +31,9 @@ execution also makes that provider available under its reviewed usage policy.
   accepts one immutable owner subject and the `sourcesql:access` scope.
   [Configure OAuth](vercel.md#optional-oauth-for-chatgpt) before provisioning.
 
-An Exa, Brave or Serper key is optional. Begin with `fixture` to test the
-installation without provider calls. MotherDuck SQL queries, storage and Flights
-are separate usage; local application limits do not prove a billing hard stop.
+Begin with `fixture`; no search or model API key is needed for that path.
+Exa, Brave and Serper credentials are only needed when choosing a live provider.
+MotherDuck SQL queries, storage and Flights are separate usage; local application limits do not prove a billing hard stop.
 
 ## MotherDuck credentials for a persistent gateway
 
@@ -123,13 +124,12 @@ keys. There is no need for one file per provider:
 ```dotenv
 VERCEL_TOKEN=your-private-vercel-token
 MOTHERDUCK_TOKEN=your-private-motherduck-token
-EXA_API_KEY=your-private-exa-key
-BRAVE_API_KEY=your-private-brave-key
-SERPER_API_KEY=your-private-serper-key
 ```
 
-Include only the provider keys you use. Create this file in an editor or secret
-manager, keep its directory private, and set `chmod 600 local/credentials/.env`.
+Those two credentials are enough for fixture provisioning. Add `EXA_API_KEY`,
+`BRAVE_API_KEY` or `SERPER_API_KEY` only for the live provider you choose. Create
+this file in an editor or secret manager, keep its directory private, and set
+`chmod 600 local/credentials/.env`.
 Pass its path with `--env-file local/credentials/.env` on `apply` and `verify`.
 The CLI uses Node's native dotenv loader; key values are not shell commands,
 arguments or setup output. A symlink or a file readable by other users is refused.
@@ -143,6 +143,18 @@ is local input and never becomes an uploaded source asset or public state.
 
 ## Review a concrete plan
 
+Planning requires no account credentials. It prepares local artifacts and may
+download the exact public wheel; it does not provision cloud resources. For a
+local preflight, keep `enable_execution` false and use an unapplied workspace
+such as `~/.config/sourcesql/cloud/preflight`.
+
+Before preparing the plan you intend to apply, choose whether to qualify one
+fixture job. If that execution is approved, keep `provider.name` as `fixture`
+and set `enable_execution` true with the agreed daily reservation. Otherwise,
+leave it false for connection checks only. Use a separate workspace when the
+configuration changes; keep the preflight receipts rather than editing its
+saved plan.
+
 ```sh
 sourcesql setup personal-cloud plan \
   --config ~/.config/sourcesql/personal.json \
@@ -153,24 +165,26 @@ Planning materializes the package's reviewed public templates and prepares the
 Flight locally. It downloads only the exact installed sourcesQL wheel from PyPI,
 verifies the published SHA-256, then checks its source and runtime requirements.
 For an unpublished build or offline preparation, pass `--wheel /path/to/the-current.whl`.
-Neither path contacts your cloud accounts or runs research.
+Neither path contacts your cloud accounts or runs research. An unpublished
+version requires the explicit matching wheel until that version is on PyPI.
 
 Read `plan.json`, including the destination, exact public file hashes, Flight
 fingerprints, mutations, daily reservation and manual steps. The output includes
 `plan_sha256`. No credential value is printed. Preparation will stop if the
 exact wheel is unavailable, Node 24 is missing or reviewed inputs differ.
 
-Keep this workspace private. It contains plan/state receipts and a generated
-owner fallback credential in `owner-secret.json`, with owner-only permissions.
-An explicitly provided `RESEARCH_BEARER_TOKEN` is persisted once as the owner
-fallback. A conflicting value on resume or verification is refused before
+Keep this workspace private. It contains plan/state receipts; applying the plan
+also saves an owner fallback credential in `owner-secret.json`, with owner-only
+permissions. An explicitly provided `RESEARCH_BEARER_TOKEN` is persisted once
+as the owner fallback. A conflicting value on resume or verification is refused before
 account access; rotate deployed credentials deliberately outside a setup resume.
 The deployment uploader includes only declared app build inputs; this directory,
 provider keys and setup configuration are never uploaded as app files.
 
 ## Apply and resume
 
-With `VERCEL_TOKEN` and `MOTHERDUCK_TOKEN` in the process environment:
+After reviewing the planned resources, provide `VERCEL_TOKEN` and
+`MOTHERDUCK_TOKEN` through the private environment file or process environment:
 
 ```sh
 sourcesql setup personal-cloud apply \
@@ -187,12 +201,17 @@ Ready. Provider credentials stay in MotherDuck Flight secrets. The database
 credential and generated owner bearer are encrypted Vercel Preview variables;
 neither is placed in the frontend or source upload.
 
+Applying a plan provisions these resources even when `enable_execution` is false.
+It does not start a Flight. MotherDuck SQL, storage and Vercel usage remain
+separate from research execution and provider charges.
+
 A build can still be pending when the command returns. Repeat the same command
 and approved digest to inspect it and finish alias assignment. A normal resume
 reuses the project, Flight, environment and deployment. Changes to the owner,
-destination, public sources, Flight or approved policy invalidate the plan.
-Use a separate workspace and review a new plan for an intentional change; inspect
-existing resources before authorizing more provisioning.
+destination, public sources, Flight or approved policy—including
+`enable_execution`—invalidate the plan. Use a separate workspace and review a new
+plan for an intentional change; inspect existing resources before authorizing
+more provisioning.
 
 ```sh
 sourcesql setup personal-cloud status \
@@ -261,9 +280,10 @@ protection still enabled, an independently configured
 `VERCEL_AUTOMATION_BYPASS_SECRET` can be supplied in the environment for this
 operator check; remote chat clients need their own supported access path.
 
-To qualify Python execution deliberately, keep `provider.name` set to `fixture`
-and set `enable_execution` to `true` **before creating the initial plan**. That
-authorizes bounded gateway submissions under the reviewed reservation. Then run:
+If the applied plan already approved fixture execution, the following command
+qualifies Python execution without search or model calls. Keep `provider.name`
+as `fixture` for this onboarding check. The reviewed plan must have approved
+`enable_execution: true`; adding `--run-fixture` cannot enable a disabled plan. Run:
 
 ```sh
 sourcesql setup personal-cloud verify \
@@ -272,15 +292,21 @@ sourcesql setup personal-cloud verify \
   --run-fixture
 ```
 
-The command saves one fixture request UUID before dispatch. Repeating it polls
-the same durable job. Run ordinary `verify` again after completion to read the
-saved result through a fresh connection without another Flight. A queued job
+The command saves one fixture request UUID before dispatch. Repeating it recovers
+the same request and polls its durable job; retain the workspace after an
+interruption rather than starting setup again. Run ordinary `verify` again after
+completion to read the saved result through a fresh connection without another
+Flight. A queued job
 still needs an explicit `sourcesql_start_job` call with its exact ID; there is no
 queue-draining scheduler. Pending, failed and unknown states remain visible.
 
-The measured installed-package path used an existing operator account/project;
-a brand-new adopter account remains a separate qualification check. This operator
-check does not establish OAuth login, app rendering or interaction in a model host. Follow [client setup and qualification](clients.md) for those.
+The measured installed-package path used an existing account/project. A fresh
+eligible Hobby account still needs the complete plan, apply, fixture execution
+and fresh-connection read checks above. A successful Pro-account check does not
+qualify that path. Setup also does not verify subscription eligibility or accept
+account terms for the adopter. OAuth login, app rendering and interaction need
+separate checks in the intended client; follow
+[client setup and qualification](clients.md).
 
 ## Choose a live provider
 

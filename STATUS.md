@@ -1,15 +1,11 @@
 # Project status
 
 sourcesQL includes a research SQL engine, an MCP App, local Docker packaging
-and an optional Vercel/MotherDuck backend. **0.1.2 is published on PyPI**,
-including self-contained personal-cloud setup, the updated app branding and adoption fixes. Source and local Docker
-installation remain available.
+and optional Vercel/MotherDuck hosting. **0.2.0** adds compact checkpoints and
+manual evidence-backed updates. See the [release notes](docs/releases/0.2.0.md)
+for adoption and qualification boundaries.
 
-## Continuation and manual updates: 0.2.0 candidate
-
-The current source and personal Preview endpoint include compact checkpoints and
-manual evidence-backed updates. **PyPI remains at 0.1.2**; the 0.2.0 wheel and source
-distribution are prepared and qualified locally.
+## Continuation and manual updates: 0.2.0
 
 - Checkpoints retain canonical selections, query provenance, exact amendment and
   source pins, pending identities and remaining work within 24 KiB. Inspection is
@@ -17,72 +13,70 @@ distribution are prepared and qualified locally.
 - Manual checks separate existing findings from discovery. Canonical fresh source
   versions support proposals; missing hits never delete findings. Accept/Keep
   choices can change before publication, with every decision retained. Publication
-  creates an immutable successor preserving the original observations/amendments.
-- The initial update path accepts complete tables up to 100 rows/200 KB. Explicit
-  materialization preserves accepted row IDs for further SQL and can consume a
-  provider-free hosted Flight. Checkpoint inspection and publication do not start one.
-- Durable retries compare JSON values independent of key ordering. A real hosted
-  retry exposed the earlier ordering bug; seven sorted-backend regressions fail
-  on the prior implementation and pass with the correction, including lost
+  creates an immutable successor preserving original observations and amendments.
+- Complete update tables are limited to 100 rows and 200 KB. Explicit
+  materialization retains accepted row IDs for further SQL and can consume a
+  provider-free hosted Flight. Checkpoint inspection, review and publication
+  do not start one.
+- Durable retries compare JSON values independent of key ordering. Seven
+  sorted-backend regressions cover the earlier ordering failure, including lost
   post-commit acknowledgments without an additional write.
 
-The checkpoint/update implementation passed **289 tests on macOS and Linux**. Linux passes **477 Python
-and Flight tests**, with four macOS-only skips; the root macOS Python suite passes
-**360**, with 44 Linux-only skips. The wheel and source distribution each pass
-installed qualification outside the checkout on Python **3.12, 3.13 and 3.14**.
+The implementation passed **289 app tests on macOS and Linux**. Linux passes
+**477 Python and Flight tests**, with four macOS-only skips; the root macOS
+Python suite passes **360**, with 44 Linux-only skips. Wheel and source
+installations pass outside the checkout on Python **3.12, 3.13 and 3.14**.
 Package audits exclude private documents, credentials and operator state.
+An actual Python/SQL-worker fixture run covers fresh observations, canonical
+source evidence, review, publication, repeatable materialization and subsequent
+SQL. Restricted Docker checks use no networking, a read-only filesystem and a
+nonroot user. These checks measure fixture behavior, not live semantic quality.
 
-An actual Python/SQL-worker fixture run passes new observations, source evidence,
-manual review, successor publication, repeatable materialization and subsequent
-SQL. The restricted Docker runtime passes compiled MCP checks with no networking,
-a read-only filesystem and a nonroot user. Local browser checks pass checkpoint
-saving, changing review choices, inspecting additions, publication, original-value
-preservation and research-tree reopening. These checks measure fixture behavior.
+ChatGPT and Claude both rendered canonical synthetic proposals, including the
+retained quote, observation time, previous/proposed values and a separate
+discovery candidate. Actual app controls saved Accept → Keep → Accept for the
+changed field and Skip → Accept for the addition. Publication stayed disabled
+until both findings were reviewed, created a two-row successor, and froze review
+choices. Back navigation preserved the original one-row table and its separate
+correction. The accepted tables were then reopened from saved state.
 
-The authenticated Preview endpoint passes checkpoint recovery with the **original
-saved ID**, fresh-connection continuation, durable manual-request reopening and
-explicit cancellation. Original fixture observations and amendments stay unchanged.
-This uses stored data only, with **zero new Flights or provider calls**. The current
-resource is `ui://sourcesql/research-a19abdd86f97fd03.html`; ten previous immutable
-resources remain available to older chat components.
+Fresh fixture observations were acquired by the local protected Python worker,
+exported normally and imported through the documented MotherDuck storage adapter
+into the existing owner workspace. Canonical rows, hashes and evidence survived
+a fresh native read. Hosted review/publication used those retained results;
+this does not qualify a new hosted acquisition Flight. No live provider calls,
+Flights or allowance changes were needed for these host checks.
 
-The current ChatGPT app passes saved-table rendering, selected-field checkpoint
-saving and a manual-update app-message round trip followed by explicit
-cancellation. A separate MCP session resumes that checkpoint as `ready`. A fresh
-Claude conversation also resumes the ChatGPT checkpoint with the exact canonical
-selection and revision; an older conversation retained an earlier tool list.
-Claude also renders the current controls and saves an update request into its
-composer. After Send, its agent reads and cancels that exact request.
-Original snapshot values, amendments, accepted sources and revision remain
-unchanged. These checks start no Flights or provider calls. Evidence review,
-revising Accept/Keep choices and successor publication inside actual hosts remain
-separate checks. The checkpoint download control was unavailable in the measured
-ChatGPT session. These actual-host checks used the preceding immutable UI.
-The subsequent notification patch explains prepared composer messages rather
-than claiming an agent has started. Its build, targeted messaging/review/resource
-checks, deployment packaging checks and eight Python packaging tests pass. The
-Preview serves the exact new build and preserves the preceding UI byte-for-byte;
-this wording patch did not repeat the full engine qualification.
-The current app removes the separate branding footer and reserves consistent
-clearance for selection actions. Controlled browser checks reproduced the old
-88-pixel selection jump; the revised frame keeps the same height before selection,
-with the toolbar visible and after dismissal at desktop and mobile widths. Final
-page navigation remains usable. The app build, ten existing deployment/resource
-checks and eight packaging checks pass; authenticated Preview reads match the
-exact new UI and retain the preceding version. No research execution was needed.
+ChatGPT also saved a selected-field checkpoint; a fresh Claude conversation
+resumed that same canonical selection/revision as `ready`. Both hosts saved,
+read and cancelled a manual update request. Claude prepares a composer draft
+that requires Send. The checkpoint file-download control was unavailable in the
+measured ChatGPT session and remains unqualified.
 
-Connect the hosted MCP App directly through its authenticated HTTPS endpoint;
-a separate packaged plugin is not required. Refresh the host's tool definitions
-after updating the server before using the new controls.
+The current immutable UI is
+`ui://sourcesql/research-a19abdd86f97fd03.html`; ten earlier resources remain
+available to older components. The branding footer is removed. Controlled checks
+reproduced the old 88-pixel selection jump; the new layout stays the same height
+before selection, with its toolbar visible and after dismissal at desktop/mobile
+widths. Actual ChatGPT and Claude checks also retained a 240-pixel frame for the
+one-row fixture. Targeted resource, deployment and packaging checks pass.
 
-Remaining adoption gates are recorded in [adoption verification](docs/adoption-verification.md):
-new-account Hobby onboarding, Vercel Brave/Serper dispatch, and unqualified client
-lifecycle paths. Earlier provider dispatch attempts reached the configured daily
-reservations; their pending checks must wait for capacity under the same limits.
-Protected test Previews require an approved private access path. A temporary
-test-access grant does not qualify a provider or change execution allowances.
+Connect directly through the authenticated HTTPS MCP endpoint; no packaged
+plugin is required. Refresh the existing host's tool definitions after an update.
+In Claude, use **Connectors → Yours → sourcesQL → More options → Refresh tools
+list**, then reopen saved research. A fresh chat alone may retain cached UI
+metadata.
 
-See [the continuation guide](docs/continuation.md) for supported scopes and recovery.
+Remaining gates are [fresh-account Hobby onboarding, bounded Vercel Brave/Serper
+dispatch and the unqualified client paths](docs/adoption-verification.md).
+Earlier provider attempts exhausted their daily reservations; resume under the
+same limits after capacity returns. A temporary test-access grant must be revoked
+after use. Application reservations do not guarantee account-wide free usage.
+Existing Flight definitions embed their reviewed wheel; PyPI publication alone
+does not replace that runtime. Fresh hosted acquisition must be checked separately
+from stored-data interactions.
+
+See the [continuation guide](docs/continuation.md) for scopes and recovery.
 
 ## Working paths
 

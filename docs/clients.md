@@ -8,7 +8,7 @@ message. Fixture or saved data is enough for the first connection checks.
 | Client path | Connection | Current evidence |
 | --- | --- | --- |
 | ChatGPT | Personal HTTPS `/mcp` endpoint with OAuth | Direct OAuth connection, saved-table rendering and tool refresh; bounded lifecycle checks remain scoped in [status](../STATUS.md) |
-| Claude | Personal HTTPS `/mcp` endpoint with an encrypted owner bearer header; OAuth is also supported by the gateway | Actual table rendering, child/Back navigation, correction persistence and cross-client checkpoint continuation passed; full research lifecycle remains unqualified |
+| Claude | Personal HTTPS `/mcp` endpoint with an encrypted owner bearer header; OAuth is also supported by the gateway | Actual table rendering, child/Back navigation, correction persistence cross-client checkpoint continuation and manual evidence review/publication passed; other lifecycle paths remain unqualified |
 | Cursor | Local Docker fixture tested; remote Streamable HTTP configuration is documented below | Actual nine-row fixture rendering and paging passed; host-agent messaging was unavailable in this setup and refresh stayed disabled |
 | Other MCP clients | Supported HTTP or stdio transport | Tools can be used without an interactive renderer; host features vary |
 
@@ -50,12 +50,12 @@ The measured personal connection used an encrypted `Authorization: Bearer …`
 request header, configured through Claude's custom-connector authentication
 settings. Its OAuth connection path was not exercised by that check.
 
-After a server update, an existing Claude conversation can retain its earlier
-tool list. In the 0.2.0 check, an older conversation could not discover
-`resume_research_checkpoint`; a fresh conversation on the same connector found
-it and resumed the checkpoint saved in ChatGPT with the same row, field and
-amendment revision. Try a fresh conversation before recreating a working
-connector or changing its credentials.
+After a server update, open **Customize → Connectors → Yours → sourcesQL →
+More options → Refresh tools list**, then reopen saved research. A fresh
+conversation alone did not refresh cached UI metadata in the measured host.
+Keep the existing connector and credentials. An older chat also retained its
+prior tool list; after refreshing, a fresh chat resumed a checkpoint saved in
+ChatGPT with the same row, field and amendment revision.
 
 Create the [personal-cloud endpoint](personal-cloud-setup.md) and configure its
 OAuth API audience as the exact stable `/mcp` URL. Only the configured immutable
@@ -176,10 +176,22 @@ A fresh Claude conversation resumed that same checkpoint as `ready`, preserving
 its canonical selection and revision, and rendered the current table and controls.
 Its manual-update action saved a request and prepared a composer message; after
 Send, the agent read and cancelled the exact request. These stored-data checks
-started no Flight or provider request. They do not qualify proposal evidence
-review, changing Accept/Keep choices or successor publication inside either host.
+started no Flight or provider request. These initial request-only checks were
+followed by the manual review/publication checks below.
 
 The checkpoint download control was unavailable in the measured ChatGPT session.
 The checkpoint JSON remains readable through `resume_research_checkpoint`;
 actual file download is a separate host-capability check. A compact checkpoint
 references retained research rather than transferring the full dataset.
+
+## Manual update review in ChatGPT and Claude
+
+Both hosts rendered a retained source quote with its observation time, separate
+previous/proposed values and a distinct discovery addition. Their actual app
+controls saved revised Accept/Keep choices before publication, required every
+finding to be reviewed, published a saved successor and disabled further choices.
+Back navigation preserved the original table/correction; reopening the saved
+successor retained its accepted values and addition. These synthetic checks used
+fresh local engine observations imported through the MotherDuck adapter, with no
+new Flights or live provider calls. They qualify host review/publication rather
+than fresh hosted acquisition or a complete research workload.
