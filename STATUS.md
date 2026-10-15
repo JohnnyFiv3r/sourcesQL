@@ -2,7 +2,7 @@
 
 sourcesQL includes a research SQL
 engine, an MCP App, local Docker packaging and an optional Vercel/MotherDuck
-backend. **0.1.1 is published on PyPI**, including self-contained personal-cloud
+backend. **0.1.2 is published on PyPI**, including self-contained personal-cloud
 setup, the updated app branding and adoption fixes. Source and local Docker
 installation remain available.
 
@@ -37,6 +37,15 @@ measure broad search recall, live semantic accuracy, a complete research workloa
 or comparative product quality.
 
 ## Adoption release checks
+
+Version **0.1.2** changes dark-mode surfaces to neutral charcoal and gray, keeping
+#2CD8B6 accents and the supplied logo. Ten targeted app-resource/Vercel checks
+and six packaging checks pass. The Docker runtime and authenticated Preview
+endpoint serve the new resource and retain older chat resources without new
+research execution. Its distributions passed installed qualification on
+Linux/Python 3.12, 3.13 and 3.14 before publication; public PyPI digests match
+those workflow artifacts. This style patch did not repeat the full engine suite.
+
 
 The published 0.1.0 wheel and source distribution passed clean installed checks
 outside the checkout on macOS/Python 3.13 and Linux/Python **3.12, 3.13 and 3.14**:
