@@ -66,7 +66,7 @@ async function discover(oauth?: { scopes: string[] }) {
 test("OAuth discovery exposes the complete owner scope on all tools while preserving schemas, annotations and widget metadata", async () => {
   const bearer = await discover();
   const oauth = await discover({ scopes: ["sourcesql:access"] });
-  assert.equal(oauth.tools.length, 27);
+  assert.equal(oauth.tools.length, 37);
   assert.deepEqual(
     oauth.tools.map((t) => t.name),
     bearer.tools.map((t) => t.name),

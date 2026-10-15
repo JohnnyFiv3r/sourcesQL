@@ -142,7 +142,6 @@ class FixtureProvider:
             basis="synthetic_fixture",
             published_at=document["published_at"],
             acquired_at=acquired,
-            retrieved_at="2026-10-13T18:00:00Z",
             provider="fixture",
         )
         record.update(fixture_id=document["id"], fixture_only=True)

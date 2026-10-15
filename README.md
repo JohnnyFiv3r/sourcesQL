@@ -22,7 +22,9 @@ Saved research includes the result, its supporting sources and the investigation
 - **Expand.** Choose a row or a field within it and ask a follow-up question. The findings open in a linked child table, with the research tree keeping the path back to the parent. For example, expand one company into a table of its announced facilities.
 - **Amend.** Correct a value and record why. Amendments have a separate revision history, so original observations stay available. Follow-up SQL can use the original result or a pinned amended view.
 - **Refresh.** Check a field, row or table again, then review the proposed changes. Explicitly accept supported updates or keep the current values; earlier observations and amendments remain available.
-- **Portable snapshots.** Export a research tree as a bundle and restore it in another compatible sourcesQL store. Bundles carry original results, sources, amendments, linked investigations and refresh decisions. Reopen saved findings without repeating web discovery.
+- **Check for updates.** Revisit selected findings, look for new entities, or do both as separate research scopes. Review dated evidence for additions, changed claims and contradictions. Publish your accepted choices as a new table; missing search hits do not remove existing findings. The first version works with complete tables up to 100 rows and 200 KB.
+- **Compact checkpoints.** Save the question, selected rows and fields, exact revisions, query details and pending job IDs in a small continuation record. Resume in another compatible client without copying the conversation or restarting research. Missing data and changed revisions are reported explicitly.
+- **Portable snapshots.** Export a research tree as a bundle and restore it in another compatible sourcesQL store. Bundles carry original results, sources, amendments, linked investigations, refresh decisions, checkpoints and manual update review history. Reopen saved findings without repeating web discovery.
 
 See the [research lifecycle](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/app-integration.md#contracts-and-lifecycle) and [snapshot/export contracts](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/app-integration.md#snapshots-presentation-and-export) for supported scopes, review behavior and bundle limits.
 
@@ -194,6 +196,6 @@ npm --prefix apps/research run check
 
 Positive SQL worker tests need permission to launch the OS sandbox. A sandbox refusal is not a passing execution test. See [qualification](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/qualification.md) and [app integration](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/app-integration.md) for the execution, evidence and storage contracts.
 
-The [roadmap](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/roadmap.md) puts compact research checkpoints and manual evidence-backed updates after adoption. These extend saved research; they are planned capabilities.
+Read the [checkpoint and manual update guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/continuation.md) for continuation, evidence and review contracts. The [roadmap](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/roadmap.md) covers the remaining adoption checks, larger engine-backed updates and later opt-in monitoring.
 
 Licensed under [Apache 2.0](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/LICENSE). Attribution and source reuse are recorded in [NOTICE](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/NOTICE) and [provenance](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/provenance/).

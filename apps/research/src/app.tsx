@@ -53,6 +53,12 @@ import { HostedViewReconciliation } from "./view-reconciliation.js";
 import { readNavigation } from "./navigation-read.js";
 import { brandIcon } from "./branding.js";
 import {
+  UpdateReviewPanel,
+  manualUpdateAvailability,
+  manualUpdateArguments,
+} from "./update-review-panel.js";
+import type { ResearchCheckpoint } from "../server/checkpoints.js";
+import {
   formatSourceUrl,
   presentationColumns,
   nextTableSort,
@@ -61,7 +67,7 @@ import {
 
 const MAX_PAGE_SIZE = 25;
 const app = new App(
-  { name: "sourcesQL research", version: "0.1.0" },
+  { name: "sourcesQL research", version: "0.2.0" },
   {},
   { autoResize: false },
 );
@@ -133,6 +139,39 @@ function Workspace() {
   const [importText, setImportText] = useState("");
   const importDialog = useRef<HTMLDialogElement>(null);
   const sourceDialog = useRef<HTMLDialogElement>(null);
+  const updateDialog = useRef<HTMLDialogElement>(null);
+  const checkpointDialog = useRef<HTMLDialogElement>(null);
+  const [updateQuestion, setUpdateQuestion] = useState("");
+  const [updateExisting, setUpdateExisting] = useState(true);
+  const [updateDiscovery, setUpdateDiscovery] = useState(false);
+  const [identityFields, setIdentityFields] = useState<string[]>([]);
+  const continuationContext = useRef<
+    { snapshotId: string; revision: number } | undefined
+  >(undefined);
+  const [updateRecovery, setUpdateRecovery] = useState<{
+    id: string;
+    snapshotId: string;
+  }>();
+  const [checkpointQuestion, setCheckpointQuestion] = useState("");
+  const [checkpointScope, setCheckpointScope] = useState("");
+  const [checkpointWork, setCheckpointWork] = useState("");
+  const [savedCheckpoint, setSavedCheckpoint] = useState<ResearchCheckpoint>();
+  const checkpointAttempt = useRef<
+    | {
+        id: string;
+        arguments: Record<string, unknown>;
+      }
+    | undefined
+  >(undefined);
+  const [checkpointAttemptId, setCheckpointAttemptId] = useState("");
+  const publishAttempt = useRef<
+    | {
+        requestId: string;
+        arguments: Record<string, unknown>;
+      }
+    | undefined
+  >(undefined);
+  const reviewAttempts = useRef(new Map<string, string>());
   const headerTools = useRef<HTMLDivElement>(null);
   const headerTrigger = useRef<HTMLButtonElement | null>(null);
   const tableScroll = useRef<HTMLDivElement>(null);
@@ -657,6 +696,223 @@ function Workspace() {
       );
     }
   }
+  async function checkForUpdates() {
+    const sendToAgent = agentMessenger(app, chatGPTMessaging());
+    if (!view || !sendToAgent)
+      throw new Error(
+        "Open this app in a host with agent messaging to check for updates.",
+      );
+    if (
+      continuationContext.current?.snapshotId !== view.snapshot.id ||
+      continuationContext.current.revision !== view.revision
+    )
+      throw new Error(
+        "The table or its corrections changed while this form was open. Close it and review the current table before checking for updates.",
+      );
+    if (updateRecovery?.snapshotId === view.snapshot.id)
+      throw new Error(
+        `Inspect existing update request_id ${updateRecovery.id} before starting another check.`,
+      );
+    const requestId = crypto.randomUUID();
+    const args = manualUpdateArguments(view, {
+      requestId,
+      question: updateQuestion,
+      existing: updateExisting,
+      discovery: updateDiscovery,
+      identityFields,
+      rowId: selectedId || undefined,
+      field: field || undefined,
+    });
+    setUpdateRecovery({ id: requestId, snapshotId: view.snapshot.id });
+    try {
+      const result = await app.callServerTool({
+        name: "check_research_updates",
+        arguments: args,
+      });
+      if (result.isError)
+        throw new Error(
+          result.content
+            .filter((item) => item.type === "text")
+            .map((item) => item.text)
+            .join("\n"),
+        );
+      const prepared = result.structuredContent as unknown as {
+        prompt: string;
+        view?: ResearchView;
+      };
+      if (typeof prepared?.prompt !== "string" || !prepared.prompt.trim())
+        throw new Error("The server did not return a saved update handoff.");
+      if (prepared.view) accept(prepared.view);
+      const sent = await sendToAgent(prepared.prompt);
+      if (sent.isError) throw new Error("The host declined the update check.");
+      updateDialog.current?.close();
+      setUpdateRecovery(undefined);
+      setNotice(
+        `Update check sent to your agent. Request ID: ${requestId}. Findings will be proposed for review.`,
+      );
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      throw new Error(
+        `${message} Request ID: ${requestId}. Delivery is not confirmed. Ask your agent to inspect this same request before retrying; no alternate message route was used.`,
+      );
+    }
+  }
+  async function reviewManualUpdate(
+    changeId: string,
+    decision: "accept" | "keep",
+  ) {
+    if (!view?.update) return;
+    const attemptKey = `${view.update.requestId}:${changeId}:${decision}`;
+    const mutationId =
+      reviewAttempts.current.get(attemptKey) ?? crypto.randomUUID();
+    reviewAttempts.current.set(attemptKey, mutationId);
+    const result = await app.callServerTool({
+      name: "review_research_update",
+      arguments: {
+        request_id: view.update.requestId,
+        change_id: changeId,
+        decision,
+        expected_revision: view.update.baseRevision,
+        mutation_id: mutationId,
+      },
+    });
+    if (result.isError)
+      throw new Error(
+        result.content
+          .filter((item) => item.type === "text")
+          .map((item) => item.text)
+          .join("\n"),
+      );
+    const payload = result.structuredContent as unknown as {
+      view: ResearchView;
+    };
+    if (!payload?.view)
+      throw new Error(
+        "The review response is missing its saved view. Reopen this proposal before retrying.",
+      );
+    accept(extractView({ ...result, structuredContent: payload.view }));
+    for (const key of reviewAttempts.current.keys()) {
+      if (key.startsWith(`${view.update.requestId}:${changeId}:`))
+        reviewAttempts.current.delete(key);
+    }
+    setNotice(
+      decision === "accept"
+        ? "Change accepted for the next saved table. Publish after reviewing every finding."
+        : "Current finding kept for the next saved table.",
+    );
+  }
+  async function publishManualUpdate() {
+    if (!view?.update) return;
+    if (publishAttempt.current?.requestId !== view.update.requestId)
+      publishAttempt.current = {
+        requestId: view.update.requestId,
+        arguments: {
+          request_id: view.update.requestId,
+          snapshot_id: `update-${crypto.randomUUID()}`,
+          expected_revision: view.update.baseRevision,
+          mutation_id: crypto.randomUUID(),
+        },
+      };
+    const result = await app.callServerTool({
+      name: "publish_research_update",
+      arguments: publishAttempt.current.arguments,
+    });
+    accept(extractView(result));
+    setNotice(
+      "Reviewed update published as a new saved table. Earlier observations and corrections are preserved.",
+    );
+  }
+  async function saveCheckpoint() {
+    if (!view) return;
+    if (!checkpointAttempt.current) {
+      if (
+        continuationContext.current?.snapshotId !== view.snapshot.id ||
+        continuationContext.current.revision !== view.revision
+      )
+        throw new Error(
+          "The table or its corrections changed while this form was open. Close it and review the current table before saving a checkpoint.",
+        );
+      const work = checkpointWork
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (work.length > 20 || work.some((item) => item.length > 1000))
+        throw new Error(
+          "Use at most 20 remaining-work items, each at most 1,000 characters.",
+        );
+      const id = crypto.randomUUID();
+      checkpointAttempt.current = {
+        id,
+        arguments: {
+          checkpoint_id: id,
+          snapshot_id: view.snapshot.id,
+          expected_revision: view.revision,
+          question: checkpointQuestion.trim(),
+          scope: checkpointScope.trim(),
+          ...(selectedId
+            ? { row_ids: [selectedId], ...(field ? { fields: [field] } : {}) }
+            : {}),
+          remaining_work: work,
+        },
+      };
+      setCheckpointAttemptId(id);
+    }
+    const attempt = checkpointAttempt.current;
+    try {
+      const result = await app.callServerTool({
+        name: "save_research_checkpoint",
+        arguments: attempt.arguments,
+      });
+      if (result.isError)
+        throw new Error(
+          result.content
+            .filter((item) => item.type === "text")
+            .map((item) => item.text)
+            .join("\n"),
+        );
+      const checkpoint = (
+        result.structuredContent as unknown as {
+          checkpoint: ResearchCheckpoint;
+        }
+      )?.checkpoint;
+      if (!checkpoint?.id)
+        throw new Error("Checkpoint response was not confirmed.");
+      setSavedCheckpoint(checkpoint);
+      setNotice(
+        `Checkpoint saved: ${checkpoint.id}. It references retained data and starts no research.`,
+      );
+    } catch (cause) {
+      throw new Error(
+        `${cause instanceof Error ? cause.message : String(cause)} Checkpoint ID: ${attempt.id}. Retry here with the same saved ID and arguments; no new checkpoint was submitted.`,
+      );
+    }
+  }
+  async function exportCheckpoint() {
+    if (!savedCheckpoint) return;
+    if (!app.getHostCapabilities()?.downloadFile)
+      throw new Error(
+        `This host does not support downloads. Your checkpoint is saved as ${savedCheckpoint.id}; ask your agent to resume or retrieve that exact ID.`,
+      );
+    const result = await app.downloadFile({
+      contents: [
+        {
+          type: "resource",
+          resource: {
+            uri: `file:///checkpoint-${savedCheckpoint.id}.json`,
+            mimeType: "application/json",
+            text: JSON.stringify(savedCheckpoint, null, 2),
+          },
+        },
+      ],
+    });
+    if (result.isError)
+      throw new Error(
+        "The host declined the checkpoint download. The saved checkpoint is unchanged.",
+      );
+    setNotice(
+      `Checkpoint ${savedCheckpoint.id} sent to your host. Transfer a full research bundle when the destination needs the data too.`,
+    );
+  }
   async function cancelResearch(requestId: string) {
     followRequest.current = null;
     const snapshotId = viewRef.current!.snapshot.id;
@@ -850,7 +1106,9 @@ function Workspace() {
         (viewport.querySelector<HTMLElement>(".research-status")
           ?.offsetHeight ?? 0) -
         (viewport.querySelector<HTMLElement>(".refresh-context")
-          ?.offsetHeight ?? 0);
+          ?.offsetHeight ?? 0) -
+        (viewport.querySelector<HTMLElement>(".update-review")?.offsetHeight ??
+          0);
       const rowHeight = firstRow.offsetHeight;
       const size = Math.max(
         2,
@@ -1003,6 +1261,8 @@ function Workspace() {
         event.key === "Escape" &&
         !importDialog.current?.open &&
         !sourceDialog.current?.open &&
+        !updateDialog.current?.open &&
+        !checkpointDialog.current?.open &&
         !treeOpen
       ) {
         event.preventDefault();
@@ -1155,6 +1415,7 @@ function Workspace() {
   const refreshChange = view.refresh?.changes.find(
     (c) => c.rowId === selectedId && c.field === field,
   );
+  const updateAvailability = manualUpdateAvailability(view, canAskAgent);
   const refreshLabel = selectedId
     ? field
       ? "Refresh selected cell"
@@ -1401,6 +1662,84 @@ function Workspace() {
                 <MoreHorizontal size={20} />
               </summary>
               <div className="menu-items">
+                <span
+                  className="menu-option-hint"
+                  title={updateAvailability.reason}
+                >
+                  <Button
+                    variant="ghost"
+                    disabled={
+                      busy ||
+                      connectionIssue ||
+                      !updateAvailability.available ||
+                      pending.length > 0
+                    }
+                    title={
+                      updateAvailability.reason ??
+                      "Check existing findings, discover new entities, or both"
+                    }
+                    onClick={() => {
+                      if (menu.current) menu.current.open = false;
+                      setError("");
+                      if (
+                        !updateRecovery ||
+                        updateRecovery.snapshotId !== view.snapshot.id
+                      ) {
+                        setUpdateRecovery(undefined);
+                        setUpdateQuestion(
+                          `Check for evidence-backed updates to ${view.displayTitle}.`.slice(
+                            0,
+                            1000,
+                          ),
+                        );
+                        setUpdateExisting(view.snapshot.rows.length > 0);
+                        setUpdateDiscovery(false);
+                        setIdentityFields(
+                          presentationColumns(view.snapshot)
+                            .slice(0, 1)
+                            .map((column) => column.key),
+                        );
+                      }
+                      continuationContext.current = {
+                        snapshotId: view.snapshot.id,
+                        revision: view.revision,
+                      };
+                      updateDialog.current?.showModal();
+                    }}
+                  >
+                    <RefreshCw />
+                    Check for updates
+                  </Button>
+                  {!updateAvailability.available && (
+                    <small>{updateAvailability.reason}</small>
+                  )}
+                </span>
+                <Button
+                  variant="ghost"
+                  disabled={busy || connectionIssue}
+                  onClick={() => {
+                    if (menu.current) menu.current.open = false;
+                    setError("");
+                    setSavedCheckpoint(undefined);
+                    checkpointAttempt.current = undefined;
+                    setCheckpointAttemptId("");
+                    setCheckpointQuestion(view.displayTitle);
+                    setCheckpointScope(
+                      selectedId
+                        ? `${field ? "Selected field" : "Selected entity"} in ${view.displayTitle}`
+                        : `All saved rows and fields in ${view.displayTitle}`,
+                    );
+                    setCheckpointWork("");
+                    continuationContext.current = {
+                      snapshotId: view.snapshot.id,
+                      revision: view.revision,
+                    };
+                    checkpointDialog.current?.showModal();
+                  }}
+                >
+                  <Database />
+                  Save checkpoint
+                </Button>
                 <Button
                   variant="ghost"
                   disabled={busy}
@@ -1513,6 +1852,19 @@ function Workspace() {
                   </Button>
                 )}
               </div>
+            )}
+            {view.update && (
+              <UpdateReviewPanel
+                update={view.update}
+                columns={columns}
+                busy={busy || connectionIssue}
+                onReview={(changeId, decision) =>
+                  void perform(() => reviewManualUpdate(changeId, decision))
+                }
+                onPublish={() => void perform(publishManualUpdate)}
+                onSource={(url) => void visitSource(url)}
+                onOpenPublished={(snapshotId) => navigate(snapshotId)}
+              />
             )}
             {view.refresh && (
               <div className="refresh-context">
@@ -2181,6 +2533,262 @@ function Workspace() {
           </div>
         )}
       </div>
+      <dialog
+        ref={updateDialog}
+        className="continuation-dialog"
+        aria-labelledby="update-dialog-title"
+      >
+        <div className="dialog-heading">
+          <h2 id="update-dialog-title">Check for updates</h2>
+          <Button
+            variant="ghost"
+            aria-label="Close update setup"
+            onClick={() => updateDialog.current?.close()}
+          >
+            <X />
+          </Button>
+        </div>
+        <p className="muted-note">
+          Propose a separate set of evidence-backed changes. Review it before
+          publishing a new saved table.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void perform(checkForUpdates);
+          }}
+        >
+          <label>
+            Research question
+            <Textarea
+              value={updateQuestion}
+              maxLength={1000}
+              rows={3}
+              disabled={busy || Boolean(updateRecovery)}
+              onChange={(event) => setUpdateQuestion(event.target.value)}
+            />
+          </label>
+          <label className="continuation-choice">
+            <input
+              type="checkbox"
+              checked={updateExisting}
+              disabled={
+                busy ||
+                Boolean(updateRecovery) ||
+                view.snapshot.rows.length === 0
+              }
+              onChange={(event) => setUpdateExisting(event.target.checked)}
+            />
+            <span>
+              Revisit existing findings
+              <small>
+                {selectedId
+                  ? field
+                    ? "Only the selected field of the selected entity"
+                    : "All fields of the selected entity"
+                  : "All canonical rows and fields in this table"}
+              </small>
+            </span>
+          </label>
+          <label className="continuation-choice">
+            <input
+              type="checkbox"
+              checked={updateDiscovery}
+              disabled={busy || Boolean(updateRecovery)}
+              onChange={(event) => setUpdateDiscovery(event.target.checked)}
+            />
+            <span>
+              Discover new entities
+              <small>
+                Keep additions separate from changes to existing findings.
+              </small>
+            </span>
+          </label>
+          {updateDiscovery && (
+            <fieldset className="identity-fields">
+              <legend>Columns that identify an entity</legend>
+              <p>
+                Choose enough fields to distinguish similarly named entities.
+              </p>
+              {columns.map((column) => (
+                <label className="continuation-choice" key={column.key}>
+                  <input
+                    type="checkbox"
+                    checked={identityFields.includes(column.key)}
+                    disabled={busy || Boolean(updateRecovery)}
+                    onChange={(event) =>
+                      setIdentityFields((current) =>
+                        event.target.checked
+                          ? [...current, column.key]
+                          : current.filter((key) => key !== column.key),
+                      )
+                    }
+                  />
+                  <span>
+                    {column.label}
+                    <small>{column.key}</small>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+          {updateRecovery && (
+            <p className="checkpoint-receipt" role="status">
+              Request ID: <code>{updateRecovery.id}</code>. Ask your agent to
+              inspect this request before starting another check.
+            </p>
+          )}
+          {error && (
+            <p className="import-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="dialog-buttons">
+            <Button type="button" onClick={() => updateDialog.current?.close()}>
+              Close
+            </Button>
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={
+                busy ||
+                Boolean(updateRecovery) ||
+                !canAskAgent ||
+                !updateQuestion.trim() ||
+                (!updateExisting && !updateDiscovery) ||
+                (updateDiscovery && !identityFields.length)
+              }
+            >
+              Ask agent to check
+              <ArrowRight />
+            </Button>
+          </div>
+        </form>
+      </dialog>
+      <dialog
+        ref={checkpointDialog}
+        className="continuation-dialog"
+        aria-labelledby="checkpoint-dialog-title"
+      >
+        <div className="dialog-heading">
+          <h2 id="checkpoint-dialog-title">Save checkpoint</h2>
+          <Button
+            variant="ghost"
+            aria-label="Close checkpoint setup"
+            onClick={() => checkpointDialog.current?.close()}
+          >
+            <X />
+          </Button>
+        </div>
+        <p className="muted-note">
+          Save a compact continuation record with exact data and correction
+          references. This starts no query or search.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void perform(saveCheckpoint);
+          }}
+        >
+          <label>
+            Research question
+            <Textarea
+              value={checkpointQuestion}
+              maxLength={4000}
+              rows={2}
+              disabled={
+                busy || Boolean(savedCheckpoint) || Boolean(checkpointAttemptId)
+              }
+              onChange={(event) => setCheckpointQuestion(event.target.value)}
+            />
+          </label>
+          <label>
+            Scope
+            <Input
+              value={checkpointScope}
+              maxLength={2000}
+              disabled={
+                busy || Boolean(savedCheckpoint) || Boolean(checkpointAttemptId)
+              }
+              onChange={(event) => setCheckpointScope(event.target.value)}
+            />
+          </label>
+          <label>
+            Remaining work{" "}
+            <span className="optional-label">optional, one item per line</span>
+            <Textarea
+              value={checkpointWork}
+              maxLength={10000}
+              rows={3}
+              disabled={
+                busy || Boolean(savedCheckpoint) || Boolean(checkpointAttemptId)
+              }
+              onChange={(event) => setCheckpointWork(event.target.value)}
+            />
+          </label>
+          <p className="muted-note">
+            {selectedId
+              ? `${field ? "Selected field" : "Selected entity"}: ${selectedId}${field ? ` / ${field}` : ""}`
+              : "All saved rows and fields; table display filters do not narrow this scope."}
+          </p>
+          {checkpointAttemptId && !savedCheckpoint && (
+            <p className="checkpoint-receipt" role="status">
+              Checkpoint ID: <code>{checkpointAttemptId}</code>. A retry
+              preserves this ID and the original arguments.
+            </p>
+          )}
+          {savedCheckpoint && (
+            <p className="checkpoint-receipt" role="status">
+              Saved checkpoint: <code>{savedCheckpoint.id}</code>
+              <span>
+                References only. Use a full research export to transfer the
+                data.
+              </span>
+            </p>
+          )}
+          {error && (
+            <p className="import-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="dialog-buttons">
+            <Button
+              type="button"
+              onClick={() => checkpointDialog.current?.close()}
+            >
+              Close
+            </Button>
+            {savedCheckpoint ? (
+              <Button
+                type="button"
+                disabled={busy || !app.getHostCapabilities()?.downloadFile}
+                title={
+                  app.getHostCapabilities()?.downloadFile
+                    ? "Download the compact checkpoint"
+                    : "This host does not support file downloads; the checkpoint is saved server-side"
+                }
+                onClick={() => void perform(exportCheckpoint)}
+              >
+                <Download />
+                Download checkpoint
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={
+                  busy || !checkpointQuestion.trim() || !checkpointScope.trim()
+                }
+              >
+                {checkpointAttemptId
+                  ? "Retry saved checkpoint"
+                  : "Save checkpoint"}
+                <Check />
+              </Button>
+            )}
+          </div>
+        </form>
+      </dialog>
       <dialog
         ref={sourceDialog}
         className="source-dialog"

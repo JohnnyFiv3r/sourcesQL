@@ -107,7 +107,12 @@ export const v2SnapshotSchema = z
     title: z.string().min(1).max(150),
     origin: z
       .object({
-        engine: z.enum(["sourcesql", "open-webql", "legacy-import", "imported"]),
+        engine: z.enum([
+          "sourcesql",
+          "open-webql",
+          "legacy-import",
+          "imported",
+        ]),
         resultId: id,
         runId: id.nullable(),
       })
@@ -447,6 +452,17 @@ export type ResearchView = {
   snapshots: SnapshotOption[];
   requests: ResearchRequestSummary[];
   acceptedSources?: Record<string, Record<string, z.infer<typeof source>[]>>;
+  update?: {
+    requestId: string;
+    parentSnapshotId: string;
+    parentTitle: string;
+    baseRevision: number;
+    parentRevision: number;
+    stale: boolean;
+    publishedSnapshotId?: string;
+    changes: import("../server/updates.js").UpdateChange[];
+    decisions: Record<string, "accept" | "keep">;
+  };
   refresh?: {
     requestId: string;
     parentTitle: string;

@@ -3,8 +3,10 @@
 These are the next implementation priorities. They are planned work, not current
 installation instructions or additional qualified host claims.
 
-Complete the adoption release first. Compact research checkpoints and manual
-evidence-backed updates are the next product milestones.
+The adoption release is published. Remaining account and host checks are tracked
+in [adoption verification](adoption-verification.md). Compact checkpoints and the
+first bounded manual-update workflow are implemented; broader host qualification
+and engine-backed publication for larger tables remain.
 
 ## 1. PyPI distribution
 
@@ -55,6 +57,11 @@ instructions and report unsupported host capabilities explicitly.
 
 ## 5. Compact research checkpoints
 
+Implemented in the current source: strict version 1 records, 24 KiB limit, durable
+storage, authorized read-only continuation and portable reference mapping. Stale
+revisions block rather than silently rebase. See [the guide](continuation.md).
+
+
 Add a versioned continuation record containing the research question, SQL and
 parameters, scope, selected canonical rows and fields, result and source-version
 references, timestamps, pinned amendment revisions, pending jobs, failure state
@@ -69,6 +76,12 @@ request and job identities. Verify continuation across supported clients,
 interrupted runs, stale revisions and export/import identity mappings.
 
 ## 6. Manual evidence-backed updates
+
+Implemented first version: separately scoped existing findings and discovery,
+fresh canonical source checks, versioned proposals, explicit decisions and an
+immutable accepted successor. Complete tables are limited to 100 rows/200 KB.
+Next: engine-backed successors beyond that bound and actual host qualification.
+
 
 Add an explicit Check for updates workflow that both discovers new entities and
 revisits existing findings. Keep those scopes distinct: the current refresh

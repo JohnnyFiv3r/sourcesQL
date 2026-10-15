@@ -1459,3 +1459,214 @@ label .input {
     animation: none;
   }
 }
+
+/* Continuation controls use the existing neutral surfaces and accent. */
+.continuation-dialog {
+  width: min(540px, calc(100vw - 28px));
+  max-height: calc(100dvh - 28px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  color: var(--foreground);
+  background: var(--background);
+  box-shadow: 0 20px 50px #0002;
+}
+.continuation-dialog::backdrop {
+  background: #0003;
+}
+.continuation-dialog form {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+.continuation-dialog textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+.continuation-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0;
+}
+.continuation-choice input {
+  margin-top: 3px;
+  accent-color: var(--primary);
+}
+.continuation-choice span {
+  flex: 1;
+  min-width: 0;
+}
+.continuation-choice small,
+.optional-label {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.identity-fields {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.identity-fields legend {
+  padding: 0 5px;
+  font-size: 12px;
+}
+.identity-fields > p {
+  color: var(--muted);
+  font-size: 11px;
+}
+.checkpoint-receipt {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.checkpoint-receipt code,
+.checkpoint-receipt span {
+  display: block;
+  margin-top: 5px;
+}
+.menu-option-hint {
+  display: block;
+}
+.menu-option-hint > .button {
+  width: 100%;
+}
+.menu-option-hint small {
+  display: block;
+  max-width: 240px;
+  padding: 0 10px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.update-review {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+.update-review-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.update-review-heading strong {
+  font-size: 13px;
+}
+.update-review-heading p,
+.update-review-note,
+.update-stale {
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.update-stale {
+  border-left: 2px solid var(--primary);
+  padding-left: 8px;
+  color: var(--foreground);
+}
+.update-change-list {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.update-change {
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.update-change summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 10px 0;
+}
+.update-change summary > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.update-kind {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 7px;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.update-decision {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.update-change-body {
+  padding-bottom: 12px;
+}
+.update-observed {
+  color: var(--muted);
+  font-size: 10px;
+}
+.update-evidence {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.update-evidence blockquote {
+  border-left: 2px solid var(--border);
+  padding: 6px 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.update-evidence a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  color: var(--foreground);
+}
+.update-evidence small {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--muted);
+}
+@media (max-width: 560px) {
+  .update-review-heading {
+    flex-wrap: wrap;
+  }
+  .update-change-list {
+    max-height: 200px;
+  }
+  .update-change summary {
+    flex-wrap: wrap;
+  }
+  .update-change summary > span:nth-child(2) {
+    flex-basis: 50%;
+  }
+}
+.update-review-pages {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.update-review-pages .button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+}

@@ -1,3 +1,4 @@
+import { canonicalJson } from "./canonical-json.js";
 import { setTimeout as waitForLock } from "node:timers/promises";
 import { boundedPreview } from "./engine.js";
 import { validateTypedCell } from "../src/typed-values.js";
@@ -46,7 +47,52 @@ import {
   type ResearchRequest,
 } from "./research.js";
 
+import {
+  buildCheckpoint,
+  validateCheckpoint,
+  saveCheckpointSchema,
+  checkpointDependencyForView,
+  type SaveCheckpointInput,
+  type ResearchCheckpoint,
+  type CheckpointDependencyPin,
+} from "./checkpoints.js";
+
+import {
+  createUpdateRequest,
+  deriveUpdateChanges,
+  validateUpdateDecision,
+  buildAcceptedUpdateSnapshot,
+  updateBeginSchema,
+  updateCompletionSchema,
+  updateReviewSchema,
+  updatePublishSchema,
+  type ResearchUpdateRequest,
+  type UpdateBeginInput,
+  type UpdateCompletionInput,
+  type UpdateReviewInput,
+  type UpdatePublishInput,
+  type UpdateChange,
+  type UpdateEvidenceContext,
+} from "./updates.js";
+export type SavedUpdate = ResearchUpdateRequest & {
+  completion?: UpdateCompletionInput;
+  sourceContexts?: Record<string, UpdateEvidenceContext>;
+  changes?: UpdateChange[];
+  decisions?: Record<string, "accept" | "keep">;
+  reviewMutations?: UpdateReviewInput[];
+  publication?: UpdatePublishInput;
+  publishedSnapshotId?: string;
+  error?: string;
+};
+type SavedCheckpoint = {
+  input?: SaveCheckpointInput;
+  checkpoint: ResearchCheckpoint;
+  imported?: boolean;
+};
 export type ResearchState = {
+  updates?: SavedUpdate[];
+  checkpoints?: SavedCheckpoint[];
+  continuationContext?: string;
   requests?: ResearchRequest[];
   snapshots: Snapshot[];
   amendments: Amendment[];
@@ -86,6 +132,22 @@ function effectiveClassification(
   state: State,
   snapshot: Snapshot,
 ): Snapshot["dataClassification"] {
+  for (const update of state.updates ?? []) {
+    const references = [
+      update.completion?.existing_snapshot?.id,
+      update.completion?.discovery_snapshot?.id,
+      update.publishedSnapshotId,
+    ];
+    if (
+      references.includes(snapshot.id) &&
+      [update.snapshotId, ...references].some((reference) =>
+        state.snapshots
+          .find((s) => s.id === reference)
+          ?.dataClassification?.startsWith("private_"),
+      )
+    )
+      return "private_derived";
+  }
   const seen = new Set<string>();
   let current: Snapshot | undefined = snapshot;
   while (current && !seen.has(current.id)) {
@@ -183,6 +245,18 @@ export class ResearchStore {
       for (const amendment of state.amendments)
         if (amendment.snapshot_id === currentId && amendment.sourceSnapshotId)
           pending.push(amendment.sourceSnapshotId);
+      for (const update of state.updates ?? []) {
+        const references = [
+          update.completion?.existing_snapshot?.id,
+          update.completion?.discovery_snapshot?.id,
+          update.publishedSnapshotId,
+        ];
+        if (references.includes(currentId)) {
+          pending.push(update.snapshotId);
+          for (const reference of references)
+            if (reference) pending.push(reference);
+        }
+      }
       for (const request of state.requests ?? [])
         if (
           request.kind === "refresh" &&
@@ -231,7 +305,7 @@ export class ResearchStore {
     try {
       await writeFile(
         owner,
-        JSON.stringify({
+        canonicalJson({
           token,
           pid: process.pid,
           createdAt: new Date().toISOString(),
@@ -319,6 +393,7 @@ export class ResearchStore {
       snapshots: this.tree(state),
       requests: (state.requests ?? []).map((r) => summary(state, r)),
       refresh: this.refreshView(state, snapshotId),
+      update: this.updateView(state, snapshotId),
     };
   }
   private tree(state: State): SnapshotOption[] {
@@ -372,6 +447,36 @@ export class ResearchStore {
       .forEach((s) => visit(s, 0));
     state.snapshots.forEach((s) => visit(s, 0));
     return items;
+  }
+  private updateView(state: State, snapshotId: string): ResearchView["update"] {
+    const update = state.updates?.find(
+      (entry) =>
+        entry.completion &&
+        [
+          entry.completion.existing_snapshot?.id,
+          entry.completion.discovery_snapshot?.id,
+          entry.publishedSnapshotId,
+        ].includes(snapshotId),
+    );
+    if (!update) return;
+    const parent = state.snapshots.find(
+      (snapshot) => snapshot.id === update.snapshotId,
+    );
+    if (!parent) throw new Error("Update baseline is missing");
+    const revision = state.amendments.filter(
+      (a) => a.snapshot_id === parent.id,
+    ).length;
+    return {
+      requestId: update.id,
+      parentSnapshotId: parent.id,
+      parentTitle: displayTitle(state, parent),
+      baseRevision: update.baseRevision,
+      parentRevision: revision,
+      stale: revision !== update.baseRevision,
+      publishedSnapshotId: update.publishedSnapshotId,
+      changes: update.changes ?? [],
+      decisions: update.decisions ?? {},
+    };
   }
   private refreshView(
     state: State,
@@ -452,7 +557,7 @@ export class ResearchStore {
       if (
         request &&
         (request.kind !== kind ||
-          JSON.stringify(request.input) !== JSON.stringify(parsed))
+          canonicalJson(request.input) !== canonicalJson(parsed))
       )
         throw new Error(
           "Request ID already used for a different scope. Use a new UUID.",
@@ -523,7 +628,7 @@ export class ResearchStore {
           "Research request not found. Return the original request_id.",
         );
       if (request.status === "completed") {
-        if (JSON.stringify(request.completion) !== JSON.stringify(result))
+        if (canonicalJson(request.completion) !== canonicalJson(result))
           throw new Error(
             "This request already has different results. Start a new request.",
           );
@@ -556,8 +661,8 @@ export class ResearchStore {
         throw new Error("Assessments apply only to refresh requests.");
       if (request.kind === "refresh") {
         if (
-          JSON.stringify(result.snapshot.columns) !==
-          JSON.stringify(parent.snapshot.columns)
+          canonicalJson(result.snapshot.columns) !==
+          canonicalJson(parent.snapshot.columns)
         )
           throw new Error(
             "Refresh must preserve the parent's column definitions.",
@@ -826,6 +931,14 @@ export class ResearchStore {
         const pending = state.requests?.filter(
           (r) => r.snapshotId === snapshotId && r.status === "pending",
         );
+        const pendingUpdates = state.updates?.filter(
+          (update) =>
+            update.snapshotId === snapshotId && update.status === "pending",
+        );
+        if (pendingUpdates?.length)
+          throw new Error(
+            "Research has pending update requests; finish or cancel them explicitly before removal",
+          );
         if (pending?.length)
           throw new Error(
             `Research has pending requests: ${pending.map((r) => r.id).join(", ")}. Finish them or explicitly cancel them before removal.`,
@@ -893,7 +1006,7 @@ export class ResearchStore {
       if (snapshot.parentSnapshotId)
         requireActive(state, snapshot.parentSnapshotId);
       const previous = state.snapshots.find((s) => s.id === snapshot.id);
-      if (previous && JSON.stringify(previous) !== JSON.stringify(snapshot))
+      if (previous && canonicalJson(previous) !== canonicalJson(snapshot))
         throw new Error(
           "This snapshot ID already exists with different evidence. Import a new ID and set parentSnapshotId; originals are immutable.",
         );
@@ -1006,6 +1119,10 @@ export class ResearchStore {
         }
     }
     const bundleState: State = {
+      updates: state.updates?.filter((entry) => selected.has(entry.snapshotId)),
+      checkpoints: state.checkpoints?.filter((item) =>
+        selected.has(item.checkpoint.selection.snapshotId),
+      ),
       snapshots: state.snapshots.filter((s) => selected.has(s.id)),
       amendments: state.amendments.filter((a) => selected.has(a.snapshot_id)),
       requests: state.requests?.filter((r) => selected.has(r.snapshotId)),
@@ -1065,8 +1182,8 @@ export class ResearchStore {
         throw new Error("Bundle amendment does not belong to its snapshot");
       const row = snapshot.rows.find((r) => r.id === amendment.row_id)!;
       if (
-        JSON.stringify(row.values[amendment.field]) !==
-        JSON.stringify(originalValue)
+        canonicalJson(row.values[amendment.field]) !==
+        canonicalJson(originalValue)
       )
         throw new Error("Bundle amendment original value mismatch");
       const column = snapshot.columns.find((c) => c.key === amendment.field)!;
@@ -1114,6 +1231,128 @@ export class ResearchStore {
       )
         throw new Error("Missing bundle parent");
     }
+    for (const update of bundle.state.updates ?? []) {
+      const parsed = updateBeginSchema.parse(update.input);
+      if (
+        update.schemaVersion !== 1 ||
+        update.id !== parsed.request_id ||
+        update.snapshotId !== parsed.snapshot_id ||
+        update.baseRevision !== parsed.expected_revision ||
+        !["pending", "completed", "failed", "cancelled"].includes(update.status)
+      )
+        throw new Error("Invalid bundle update identity or status");
+      const parent = bundle.state.snapshots.find(
+        (snapshot) => snapshot.id === update.snapshotId,
+      );
+      if (!parent) throw new Error("Update baseline dependency missing");
+      const pinnedState: State = {
+        ...bundle.state,
+        updates: [],
+        archivedSnapshots: [],
+        amendments: bundle.state.amendments.filter(
+          (amendment) =>
+            amendment.snapshot_id !== update.snapshotId ||
+            amendment.revision <= update.baseRevision,
+        ),
+      };
+      const pinnedView = this.view(pinnedState, update.snapshotId);
+      const rebuilt = createUpdateRequest(pinnedView, parsed, update.createdAt);
+      if (
+        canonicalJson(rebuilt.baselineSnapshot) !==
+          canonicalJson(update.baselineSnapshot) ||
+        canonicalJson(rebuilt.baseline) !== canonicalJson(update.baseline) ||
+        canonicalJson(rebuilt.corrections) !== canonicalJson(update.corrections)
+      )
+        throw new Error("Bundle update baseline or amendment pin mismatch");
+      if (update.status !== "completed") {
+        if (
+          update.completion ||
+          update.changes ||
+          update.decisions ||
+          update.publication ||
+          update.publishedSnapshotId
+        )
+          throw new Error(
+            "Unfinished bundle update contains completed proposals",
+          );
+        continue;
+      }
+      if (!update.completion || !update.sourceContexts)
+        throw new Error(
+          "Completed bundle update is missing evidence dependencies",
+        );
+      for (const snapshot of [
+        update.completion.existing_snapshot,
+        update.completion.discovery_snapshot,
+      ]) {
+        if (!snapshot) continue;
+        const saved = bundle.state.snapshots.find(
+          (candidate) => candidate.id === snapshot.id,
+        );
+        if (
+          !saved ||
+          saved.parentSnapshotId !== update.snapshotId ||
+          canonicalJson(saved) !== canonicalJson(snapshot)
+        )
+          throw new Error(
+            "Bundle update proposal dependency missing or altered",
+          );
+      }
+      const changes = deriveUpdateChanges(
+        update,
+        update.completion,
+        update.sourceContexts,
+      );
+      if (canonicalJson(changes) !== canonicalJson(update.changes))
+        throw new Error("Bundle update change manifest mismatch");
+      const decisions: Record<string, "accept" | "keep"> = {};
+      const mutations = new Map<string, string>();
+      for (const mutation of update.reviewMutations ?? []) {
+        const review = updateReviewSchema.parse(mutation);
+        if (
+          review.request_id !== update.id ||
+          review.expected_revision !== update.baseRevision
+        )
+          throw new Error("Bundle update review pin mismatch");
+        validateUpdateDecision(changes, review);
+        const prior = mutations.get(review.mutation_id);
+        if (prior && prior !== canonicalJson(review))
+          throw new Error("Bundle update mutation collision");
+        mutations.set(review.mutation_id, canonicalJson(review));
+        decisions[review.change_id] = review.decision;
+      }
+      if (canonicalJson(decisions) !== canonicalJson(update.decisions ?? {}))
+        throw new Error("Bundle update decisions differ from review history");
+      if (update.publication || update.publishedSnapshotId) {
+        if (!update.publication || !update.publishedSnapshotId)
+          throw new Error("Bundle update publication dependency missing");
+        const published = bundle.state.snapshots.find(
+          (snapshot) => snapshot.id === update.publishedSnapshotId,
+        );
+        if (!published || update.publication.snapshot_id !== published.id)
+          throw new Error("Bundle update successor missing");
+        const expected = buildAcceptedUpdateSnapshot(
+          update,
+          update.completion,
+          changes,
+          decisions,
+          pinnedView,
+          { ...update.publication, title: published.title },
+          published.capturedAt,
+        );
+        if (canonicalJson(expected) !== canonicalJson(published))
+          throw new Error("Bundle accepted update successor mismatch");
+      }
+    }
+    for (const saved of bundle.state.checkpoints ?? []) {
+      validateCheckpoint(saved.checkpoint);
+      if (
+        !bundle.state.snapshots.some(
+          (snapshot) => snapshot.id === saved.checkpoint.selection.snapshotId,
+        )
+      )
+        throw new Error("Checkpoint selected snapshot missing from bundle");
+    }
     for (const request of bundle.state.requests ?? []) {
       const input = researchInputSchema.parse(request.input);
       if (
@@ -1144,7 +1383,7 @@ export class ResearchStore {
       const state = await this.read();
       for (const snapshot of bundle.state.snapshots) {
         const existing = state.snapshots.find((s) => s.id === snapshot.id);
-        if (existing && JSON.stringify(existing) !== JSON.stringify(snapshot))
+        if (existing && canonicalJson(existing) !== canonicalJson(snapshot))
           throw new Error("Bundle snapshot collision");
         if (!existing) state.snapshots.push(snapshot);
       }
@@ -1152,13 +1391,34 @@ export class ResearchStore {
         const existing = state.amendments.find(
           (a) => a.mutation_id === amendment.mutation_id,
         );
-        if (existing && JSON.stringify(existing) !== JSON.stringify(amendment))
+        if (existing && canonicalJson(existing) !== canonicalJson(amendment))
           throw new Error("Bundle amendment collision");
         if (!existing) state.amendments.push(amendment);
       }
+      for (const update of bundle.state.updates ?? []) {
+        const existing = state.updates?.find((entry) => entry.id === update.id);
+        if (existing && canonicalJson(existing) !== canonicalJson(update))
+          throw new Error("Bundle update identity collision");
+        if (!existing) (state.updates ??= []).push(update);
+      }
+      for (const saved of bundle.state.checkpoints ?? []) {
+        const existing = state.checkpoints?.find(
+          (item) => item.checkpoint.id === saved.checkpoint.id,
+        );
+        if (
+          existing &&
+          canonicalJson(existing.checkpoint) !== canonicalJson(saved.checkpoint)
+        )
+          throw new Error("Bundle checkpoint collision");
+        if (!existing)
+          (state.checkpoints ??= []).push({
+            checkpoint: validateCheckpoint(saved.checkpoint),
+            imported: true,
+          });
+      }
       for (const request of bundle.state.requests ?? []) {
         const existing = state.requests?.find((r) => r.id === request.id);
-        if (existing && JSON.stringify(existing) !== JSON.stringify(request))
+        if (existing && canonicalJson(existing) !== canonicalJson(request))
           throw new Error("Bundle request collision");
         if (!existing) (state.requests ??= []).push(request);
       }
@@ -1180,6 +1440,294 @@ export class ResearchStore {
     });
   }
 
+  async beginUpdate(input: UpdateBeginInput) {
+    const parsed = updateBeginSchema.parse(input);
+    return this.serial(async () => {
+      const state = await this.read(false);
+      const existing = state.updates?.find(
+        (entry) => entry.id === parsed.request_id,
+      );
+      if (existing) {
+        if (canonicalJson(existing.input) !== canonicalJson(parsed))
+          throw new Error(
+            "Update request ID already used for a different scope",
+          );
+        return existing;
+      }
+      await this.resolveSnapshots(
+        state,
+        this.relatedSnapshots(state, parsed.snapshot_id),
+      );
+      const request = createUpdateRequest(
+        this.view(state, parsed.snapshot_id),
+        parsed,
+      );
+      (state.updates ??= []).push(request);
+      await this.write(state);
+      return request;
+    });
+  }
+  async readUpdate(requestId: string) {
+    await this.queue;
+    const state = await this.read(false);
+    const update = state.updates?.find((entry) => entry.id === requestId);
+    if (!update) throw new Error("Update request not found");
+    return update;
+  }
+  async completeUpdate(
+    input: UpdateCompletionInput,
+    sourceContexts: Record<string, UpdateEvidenceContext>,
+  ) {
+    const parsed = updateCompletionSchema.parse(input);
+    for (const snapshot of [
+      parsed.existing_snapshot,
+      parsed.discovery_snapshot,
+    ]) {
+      if (snapshot?.dataRef) {
+        if (!this.resolveSnapshot)
+          throw new Error("Engine unavailable for update authorization");
+        const full = await this.resolveSnapshot(snapshot);
+        Object.assign(snapshot, full);
+      }
+    }
+    return this.serial(async () => {
+      const state = await this.read(false);
+      const update = state.updates?.find(
+        (entry) => entry.id === parsed.request_id,
+      );
+      if (!update) throw new Error("Update request not found");
+      for (const snapshot of [
+        parsed.existing_snapshot,
+        parsed.discovery_snapshot,
+      ])
+        if (snapshot) snapshot.parentSnapshotId = update.snapshotId;
+      if (update.status === "completed") {
+        if (canonicalJson(update.completion) !== canonicalJson(parsed))
+          throw new Error("Update already has different results");
+        return update;
+      }
+      if (update.status !== "pending")
+        throw new Error("Update request is closed; late results are refused");
+      const changes = deriveUpdateChanges(update, parsed, sourceContexts);
+      for (const snapshot of [
+        parsed.existing_snapshot,
+        parsed.discovery_snapshot,
+      ]) {
+        if (!snapshot) continue;
+        if (state.snapshots.some((existing) => existing.id === snapshot.id))
+          throw new Error("Use new immutable proposal snapshot IDs");
+        snapshot.parentSnapshotId = update.snapshotId;
+        state.snapshots.push(snapshot);
+      }
+      update.completion = parsed;
+      update.sourceContexts = sourceContexts;
+      update.changes = changes;
+      update.status = "completed";
+      await this.write(state);
+      return update;
+    });
+  }
+  async reviewResearchUpdate(input: UpdateReviewInput) {
+    const review = updateReviewSchema.parse(input);
+    return this.serial(async () => {
+      const state = await this.read(false);
+      const update = state.updates?.find(
+        (entry) => entry.id === review.request_id,
+      );
+      if (!update?.completion || update.status !== "completed")
+        throw new Error("Completed update not found");
+      const previous = update.reviewMutations?.find(
+        (mutation) => mutation.mutation_id === review.mutation_id,
+      );
+      if (previous) {
+        if (canonicalJson(previous) !== canonicalJson(review))
+          throw new Error(
+            "Update review mutation ID already used for different arguments",
+          );
+        return update;
+      }
+      if (update.publishedSnapshotId)
+        throw new Error("This reviewed update is already published");
+      const revision = state.amendments.filter(
+        (a) => a.snapshot_id === update.snapshotId,
+      ).length;
+      if (
+        review.expected_revision !== revision ||
+        revision !== update.baseRevision
+      )
+        throw new Error(
+          "Update baseline changed; start a new check against its current revision",
+        );
+      validateUpdateDecision(update.changes ?? [], review);
+      (update.decisions ??= {})[review.change_id] = review.decision;
+      (update.reviewMutations ??= []).push(review);
+      await this.write(state);
+      return update;
+    });
+  }
+  async publishResearchUpdate(input: UpdatePublishInput) {
+    const publish = updatePublishSchema.parse(input);
+    return this.serial(async () => {
+      const state = await this.read(false);
+      const update = state.updates?.find(
+        (entry) => entry.id === publish.request_id,
+      );
+      if (!update?.completion || update.status !== "completed")
+        throw new Error("Completed update not found");
+      if (update.publication) {
+        if (canonicalJson(update.publication) !== canonicalJson(publish))
+          throw new Error("Update already published with different arguments");
+        await this.resolveSnapshots(
+          state,
+          this.relatedSnapshots(state, update.publishedSnapshotId!),
+        );
+        return this.view(state, update.publishedSnapshotId!);
+      }
+      if (
+        state.snapshots.some((snapshot) => snapshot.id === publish.snapshot_id)
+      )
+        throw new Error("Successor snapshot ID already exists");
+      await this.resolveSnapshots(
+        state,
+        this.relatedSnapshots(state, update.snapshotId),
+      );
+      const snapshot = buildAcceptedUpdateSnapshot(
+        update,
+        update.completion,
+        update.changes ?? [],
+        update.decisions ?? {},
+        this.view(state, update.snapshotId),
+        publish,
+      );
+      state.snapshots.push(snapshot);
+      update.publication = publish;
+      update.publishedSnapshotId = snapshot.id;
+      await this.write(state);
+      return this.view(state, snapshot.id);
+    });
+  }
+  async finishUpdate(
+    requestId: string,
+    status: "failed" | "cancelled",
+    error: string,
+  ) {
+    return this.serial(async () => {
+      const state = await this.read(false);
+      const update = state.updates?.find((entry) => entry.id === requestId);
+      if (!update) throw new Error("Update request not found");
+      if (update.status === status) return update;
+      if (update.status !== "pending")
+        throw new Error("Update request is already finished");
+      update.status = status;
+      update.error = error;
+      await this.write(state);
+      return update;
+    });
+  }
+  /** Only the chosen dependency closure is materialized; unrelated tables stay unopened. */
+  async dependencyViews(snapshotId: string): Promise<ResearchView[]> {
+    await this.queue;
+    const state = await this.read(false);
+    const selected = this.relatedSnapshots(state, snapshotId);
+    await this.resolveSnapshots(state, selected);
+    return [...selected].map((snapshot) => this.view(state, snapshot));
+  }
+  async saveCheckpoint(
+    input: SaveCheckpointInput,
+    dependencies: CheckpointDependencyPin[],
+    queryMetadata?: Parameters<typeof buildCheckpoint>[1]["queryMetadata"],
+  ) {
+    const parsed = saveCheckpointSchema.parse(input);
+    return this.serial(async () => {
+      const state = await this.read(false);
+      const existing = state.checkpoints?.find(
+        (item) => item.checkpoint.id === parsed.checkpoint_id,
+      );
+      if (existing) {
+        if (canonicalJson(existing.input) !== canonicalJson(parsed))
+          throw new Error("Checkpoint ID already used for different arguments");
+        return validateCheckpoint(existing.checkpoint);
+      }
+      const selected = this.relatedSnapshots(state, parsed.snapshot_id);
+      await this.resolveSnapshots(state, selected);
+      if (
+        dependencies.length !== selected.size ||
+        dependencies.some((pin) => !selected.has(pin.snapshotId))
+      )
+        throw new Error(
+          "Checkpoint dependency closure changed; reload before saving",
+        );
+      for (const pin of dependencies) {
+        const current = checkpointDependencyForView(
+          this.view(state, pin.snapshotId),
+          pin.sourceVersions,
+        );
+        if (
+          current.amendmentRevision !== pin.amendmentRevision ||
+          current.capturedAt !== pin.capturedAt ||
+          canonicalJson(current.result) !== canonicalJson(pin.result)
+        )
+          throw new Error(
+            "Checkpoint dependency revision changed; reload before saving",
+          );
+      }
+      state.continuationContext ??= randomUUID();
+      const checkpoint = buildCheckpoint(parsed, {
+        view: this.view(state, parsed.snapshot_id),
+        dependencies,
+        executionContext: state.continuationContext,
+        queryMetadata,
+      });
+      (state.checkpoints ??= []).push({ input: parsed, checkpoint });
+      await this.write(state);
+      return checkpoint;
+    });
+  }
+  async checkpointExecutionContext() {
+    await this.queue;
+    return (await this.read(false)).continuationContext;
+  }
+  async readCheckpoint(checkpointId: string) {
+    await this.queue;
+    const state = await this.read(false);
+    const saved = state.checkpoints?.find(
+      (item) => item.checkpoint.id === checkpointId,
+    );
+    if (!saved) throw new Error("Research checkpoint not found");
+    return {
+      checkpoint: validateCheckpoint(saved.checkpoint),
+      imported: saved.imported ?? false,
+    };
+  }
+  async importCheckpoint(input: unknown) {
+    const checkpoint = validateCheckpoint(input);
+    return this.serial(async () => {
+      const state = await this.read(false);
+      const existing = state.checkpoints?.find(
+        (item) => item.checkpoint.id === checkpoint.id,
+      );
+      if (existing) {
+        if (canonicalJson(existing.checkpoint) !== canonicalJson(checkpoint))
+          throw new Error("Checkpoint identity collision");
+        return existing.checkpoint;
+      }
+      (state.checkpoints ??= []).push({ checkpoint, imported: true });
+      await this.write(state);
+      return checkpoint;
+    });
+  }
+  async requestHandle(requestId: string) {
+    await this.queue;
+    const state = await this.read(false);
+    const request = state.requests?.find((r) => r.id === requestId);
+    return (
+      request && {
+        id: request.id,
+        snapshotId: request.snapshotId,
+        status: request.status,
+      }
+    );
+  }
   async viewsForResult(resultId: string) {
     await this.queue;
     const state = await this.read();

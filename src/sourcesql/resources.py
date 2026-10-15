@@ -51,6 +51,7 @@ TEMPLATE_PATTERNS = (
     "apps/research/ui-history/research-b5ab74c900f06fdb.html",
     "apps/research/ui-history/research-a0b4eab71ba980c1.html",
     "apps/research/ui-history/research-a8517535856c8aa3.html",
+    "apps/research/ui-history/research-2e96c79d74441904.html",
 )
 MANIFEST = "sourcesql-template-manifest.json"
 ARCHIVE = "_resources/personal-cloud.zip"

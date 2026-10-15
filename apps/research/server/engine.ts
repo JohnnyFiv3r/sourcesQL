@@ -9,6 +9,8 @@ import {
 } from "../src/schema.js";
 
 export type EngineResult = {
+  query?: string;
+  parameters?: Record<string, string | number | boolean | null>;
   result_id: string;
   run_id: string;
   columns: {

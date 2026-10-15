@@ -9,6 +9,10 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 // Never discover archive inputs by scanning a directory of operator artifacts.
 const historicalBundles = [
   {
+    filename: "research-2e96c79d74441904.html",
+    sha256: "2e96c79d744419047ab91e5e62f5eee055249466666db306b41802914dbf8b6a",
+  },
+  {
     filename: "research-a0b4eab71ba980c1.html",
     sha256: "a0b4eab71ba980c15066db41a24a7599be40e0ce4c3d07a0a0c1d866790804ae",
   },

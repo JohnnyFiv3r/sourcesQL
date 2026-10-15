@@ -6,6 +6,60 @@ backend. **0.1.2 is published on PyPI**, including self-contained personal-cloud
 setup, the updated app branding and adoption fixes. Source and local Docker
 installation remain available.
 
+## Continuation and manual updates: 0.2.0 candidate
+
+The current source and personal Preview endpoint include compact checkpoints and
+manual evidence-backed updates. **PyPI remains at 0.1.2**; the 0.2.0 wheel and source
+distribution are prepared and qualified locally.
+
+- Checkpoints retain canonical selections, query provenance, exact amendment and
+  source pins, pending identities and remaining work within 24 KiB. Inspection is
+  read-only; missing, foreign and stale dependencies block continuation.
+- Manual checks separate existing findings from discovery. Canonical fresh source
+  versions support proposals; missing hits never delete findings. Accept/Keep
+  choices can change before publication, with every decision retained. Publication
+  creates an immutable successor preserving the original observations/amendments.
+- The initial update path accepts complete tables up to 100 rows/200 KB. Explicit
+  materialization preserves accepted row IDs for further SQL and can consume a
+  provider-free hosted Flight. Checkpoint inspection and publication do not start one.
+- Durable retries compare JSON values independent of key ordering. A real hosted
+  retry exposed the earlier ordering bug; seven sorted-backend regressions fail
+  on the prior implementation and pass with the correction, including lost
+  post-commit acknowledgments without an additional write.
+
+The final app passes **289 tests on macOS and Linux**. Linux passes **477 Python
+and Flight tests**, with four macOS-only skips; the root macOS Python suite passes
+**360**, with 44 Linux-only skips. The wheel and source distribution each pass
+installed qualification outside the checkout on Python **3.12, 3.13 and 3.14**.
+Package audits exclude private documents, credentials and operator state.
+
+An actual Python/SQL-worker fixture run passes new observations, source evidence,
+manual review, successor publication, repeatable materialization and subsequent
+SQL. The restricted Docker runtime passes compiled MCP checks with no networking,
+a read-only filesystem and a nonroot user. Local browser checks pass checkpoint
+saving, changing review choices, inspecting additions, publication, original-value
+preservation and research-tree reopening. These checks measure fixture behavior.
+
+The authenticated Preview endpoint passes checkpoint recovery with the **original
+saved ID**, fresh-connection continuation, durable manual-request reopening and
+explicit cancellation. Original fixture observations and amendments stay unchanged.
+This uses stored data only, with **zero new Flights or provider calls**. The current
+resource is `ui://sourcesql/research-9b396ddfaead18f3.html`; eight previous immutable
+resources remain available to older chat components.
+
+Actual new ChatGPT/Claude update-workflow rendering remains a separate check.
+The private ChatGPT **1.0.3 ZIP and PNG are prepared**, with both icon fields pointing
+to the supplied image; no reinstall or successful ChatGPT icon display is claimed.
+After reconnecting, refresh the host's tool definitions before using the new controls.
+
+Remaining adoption gates are recorded in [adoption verification](docs/adoption-verification.md):
+new-account Hobby onboarding, Vercel Brave/Serper dispatch, and unqualified client
+lifecycle paths. Both provider test namespaces have reached their existing daily
+120-second/$0.01 reservations. Protected test Previews need an explicitly approved
+private access path; limits and deployment protection have not been loosened.
+
+See [the continuation guide](docs/continuation.md) for supported scopes and recovery.
+
 ## Working paths
 
 - Research SQL with typed immutable results, retained sources and execution receipts.
