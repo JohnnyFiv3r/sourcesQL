@@ -13,8 +13,6 @@ Use it when the answer needs rows: a vendor comparison, a project pipeline, an o
 <p>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
   <a href="docs/python-linux-qualification.md"><img alt="Python: 3.12–3.14" src="https://img.shields.io/badge/Python-3.12%E2%80%933.14-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
-  <a href="docs/docker.md"><img alt="Local: Docker" src="https://img.shields.io/badge/Local-Docker-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
-  <a href="docs/vercel.md"><img alt="Hosting: Personal cloud" src="https://img.shields.io/badge/Hosting-Personal%20cloud-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
 </p>
 
 ## How research works
