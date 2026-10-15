@@ -622,6 +622,10 @@ test("oversized tool responses acknowledge potentially completed mutations and k
 
 const historicalBundles = [
   {
+    filename: "research-9b396ddfaead18f3.html",
+    sha256: "9b396ddfaead18f337375ba5fb6d714b68c8ce3e475c641190e7a159188b0bb4",
+  },
+  {
     filename: "research-2e96c79d74441904.html",
     sha256: "2e96c79d744419047ab91e5e62f5eee055249466666db306b41802914dbf8b6a",
   },

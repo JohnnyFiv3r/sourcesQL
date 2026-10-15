@@ -1,9 +1,8 @@
 # Project status
 
-sourcesQL includes a research SQL
-engine, an MCP App, local Docker packaging and an optional Vercel/MotherDuck
-backend. **0.1.2 is published on PyPI**, including self-contained personal-cloud
-setup, the updated app branding and adoption fixes. Source and local Docker
+sourcesQL includes a research SQL engine, an MCP App, local Docker packaging
+and an optional Vercel/MotherDuck backend. **0.1.2 is published on PyPI**,
+including self-contained personal-cloud setup, the updated app branding and adoption fixes. Source and local Docker
 installation remain available.
 
 ## Continuation and manual updates: 0.2.0 candidate
@@ -27,7 +26,7 @@ distribution are prepared and qualified locally.
   on the prior implementation and pass with the correction, including lost
   post-commit acknowledgments without an additional write.
 
-The final app passes **289 tests on macOS and Linux**. Linux passes **477 Python
+The checkpoint/update implementation passed **289 tests on macOS and Linux**. Linux passes **477 Python
 and Flight tests**, with four macOS-only skips; the root macOS Python suite passes
 **360**, with 44 Linux-only skips. The wheel and source distribution each pass
 installed qualification outside the checkout on Python **3.12, 3.13 and 3.14**.
@@ -44,19 +43,36 @@ The authenticated Preview endpoint passes checkpoint recovery with the **origina
 saved ID**, fresh-connection continuation, durable manual-request reopening and
 explicit cancellation. Original fixture observations and amendments stay unchanged.
 This uses stored data only, with **zero new Flights or provider calls**. The current
-resource is `ui://sourcesql/research-9b396ddfaead18f3.html`; eight previous immutable
+resource is `ui://sourcesql/research-3ad849c41d019ecb.html`; nine previous immutable
 resources remain available to older chat components.
 
-Actual new ChatGPT/Claude update-workflow rendering remains a separate check.
-The private ChatGPT **1.0.3 ZIP and PNG are prepared**, with both icon fields pointing
-to the supplied image; no reinstall or successful ChatGPT icon display is claimed.
-After reconnecting, refresh the host's tool definitions before using the new controls.
+The current ChatGPT app passes saved-table rendering, selected-field checkpoint
+saving and a manual-update app-message round trip followed by explicit
+cancellation. A separate MCP session resumes that checkpoint as `ready`. A fresh
+Claude conversation also resumes the ChatGPT checkpoint with the exact canonical
+selection and revision; an older conversation retained an earlier tool list.
+Claude also renders the current controls and saves an update request into its
+composer. After Send, its agent reads and cancels that exact request.
+Original snapshot values, amendments, accepted sources and revision remain
+unchanged. These checks start no Flights or provider calls. Evidence review,
+revising Accept/Keep choices and successor publication inside actual hosts remain
+separate checks. The checkpoint download control was unavailable in the measured
+ChatGPT session. These actual-host checks used the preceding immutable UI.
+The subsequent notification patch explains prepared composer messages rather
+than claiming an agent has started. Its build, targeted messaging/review/resource
+checks, deployment packaging checks and eight Python packaging tests pass. The
+Preview serves the exact new build and preserves the preceding UI byte-for-byte;
+this wording patch did not repeat the full engine qualification.
+Connect the hosted MCP App directly through its authenticated HTTPS endpoint;
+a separate packaged plugin is not required. Refresh the host's tool definitions
+after updating the server before using the new controls.
 
 Remaining adoption gates are recorded in [adoption verification](docs/adoption-verification.md):
 new-account Hobby onboarding, Vercel Brave/Serper dispatch, and unqualified client
-lifecycle paths. Both provider test namespaces have reached their existing daily
-120-second/$0.01 reservations. Protected test Previews need an explicitly approved
-private access path; limits and deployment protection have not been loosened.
+lifecycle paths. Earlier provider dispatch attempts reached the configured daily
+reservations; their pending checks must wait for capacity under the same limits.
+Protected test Previews require an approved private access path. A temporary
+test-access grant does not qualify a provider or change execution allowances.
 
 See [the continuation guide](docs/continuation.md) for supported scopes and recovery.
 
@@ -70,32 +86,36 @@ See [the continuation guide](docs/continuation.md) for supported scopes and reco
   and lost-response recovery. One active job per owner namespace; queued jobs resume explicitly.
 - An owner-authenticated ChatGPT app with OAuth and enforced CSP. Saved-table
   rendering, corrections across reload, tree/Back navigation, a small live Auto
-  expansion and fixture-based refresh review have been exercised. The current
-  private plugin package is 1.0.2; saved rendering was rechecked after tool refresh.
+  expansion and fixture-based refresh review have been exercised. Saved rendering
+  was rechecked after tool refresh. The direct authenticated MCP connection is
+  the intended installation path.
 - Claude rendered saved hosted research with an encrypted owner bearer header;
   child/Back navigation and synthetic corrections persisted across reload.
 - Cursor rendered and paged a nine-row local Docker fixture. In that tested
   setup, host-agent messaging was unavailable and refresh remained disabled.
 
-## Checks at initial publication
+## Historical checks at initial publication
 
-The macOS/Python 3.12 suite passes **406 tests**, with **44 Linux-only skips**.
-The app builds and passes **172 tests** on macOS and native ARM64 Linux Docker.
-Docker passes **446 Python tests**, with **four macOS-only skips**, plus actual
+The macOS/Python 3.12 suite passed **406 tests**, with **44 Linux-only skips**.
+The app built and passed **172 tests** on macOS and native ARM64 Linux Docker.
+Docker passed **446 Python tests**, with **four macOS-only skips**, plus actual
 HTTP/MCP, corrections, export, restart persistence and stdio checks. The README's
-fixture SQL example runs against the real engine without provider calls. These
+fixture SQL example ran against the real engine without provider calls. These
 checks made no live search or model calls. See the Docker and runtime guides.
 
 These results establish the tested execution and control paths. They do not
 measure broad search recall, live semantic accuracy, a complete research workload
 or comparative product quality.
 
-## Adoption release checks
+## Published adoption release evidence
 
-Version **0.1.2** changes dark-mode surfaces to neutral charcoal and gray, keeping
+These are recorded checks for the 0.1.x releases. Current candidate checks are
+listed above; an older passing result does not qualify a changed workflow.
+
+Version **0.1.2** changed dark-mode surfaces to neutral charcoal and gray, keeping
 #2CD8B6 accents and the supplied logo. Ten targeted app-resource/Vercel checks
-and six packaging checks pass. The Docker runtime and authenticated Preview
-endpoint serve the new resource and retain older chat resources without new
+and six packaging checks passed. The Docker runtime and authenticated Preview
+endpoint served the new resource and retained older chat resources without new
 research execution. Its distributions passed installed qualification on
 Linux/Python 3.12, 3.13 and 3.14 before publication; public PyPI digests match
 those workflow artifacts. This style patch did not repeat the full engine suite.
@@ -109,15 +129,15 @@ completed before publishing through the `pypi` trusted-publisher environment.
 
 The **0.1.1** distributions also passed installed qualification on Linux/Python
 **3.12, 3.13 and 3.14** before publication. The public PyPI digests match the
-locally audited artifacts exactly. The app passes **197 tests** on Node 24 on
-macOS and Linux Docker; **85 packaging and Flight tests** pass. The final Docker
+locally audited artifacts exactly. The app passed **197 tests** on Node 24 on
+macOS and Linux Docker; **85 packaging and Flight tests** passed. The final Docker
 runtime served current and retained UI resources from fresh storage with a
 read-only filesystem, no network and a non-root user.
 
-This patch preserves the durable queued job handle when an automatic start is
-blocked by the daily allowance. It also includes required setup templates and
-verified historical app resources in Docker, and documents persistent MotherDuck
-token rotation. The app uses **#2CD8B6** accents and the supplied rounded footer
+Version **0.1.1** preserved the durable queued job handle when an automatic start is
+blocked by the daily allowance. It also included required setup templates and
+verified historical app resources in Docker, and documented persistent MotherDuck
+token rotation. The app used **#2CD8B6** accents and the supplied rounded footer
 logo. Its new resource passed authenticated Preview reads and actual ChatGPT
 rendering with saved synthetic data, without a new query or Flight.
 
@@ -139,11 +159,10 @@ existing operator account/project, fixture execution and fresh-connection
 saved-result reopening without another Flight. This does not establish a
 brand-new account or Vercel Hobby onboarding path.
 
-The private ChatGPT plugin package was uploaded as **1.0.2** with the supplied
-logo. After a transient component-opening failure, Refresh tools and reopening
-the same saved synthetic result restored actual ChatGPT rendering without a SQL
-rerun. Claude passed hosted rendering, research-tree child/Back navigation and a
-500-to-501 synthetic correction that survived reload before restoration to 500.
+In the adoption host checks, Refresh tools and reopening a saved synthetic result
+restored ChatGPT rendering after a transient component-opening failure, without
+a SQL rerun. Claude passed hosted rendering, research-tree child/Back navigation
+and a 500-to-501 synthetic correction that survived reload before restoration to 500.
 Cursor passed local Docker rendering and paging; the tested host did not expose
 agent messaging, so refresh was disabled. These are bounded host checks, not full
 Claude/Cursor lifecycle qualification.
@@ -152,10 +171,11 @@ Claude/Cursor lifecycle qualification.
 
 The earlier qualified hosted Exa run used `exa-search.v1`: Auto search excerpts,
 **two queries and ten candidate pages per job**, with no additional fetches or
-model calls. A reviewed `exa-research.v2` Flight is now provisioned, but a new live
-Vercel Exa check has not run: the configured **600-second daily Flight reserve**
-was reached. That is an application reservation, not MotherDuck's account-wide
-free allowance. Do not treat provisioning as live provider qualification.
+model calls. A reviewed `exa-research.v2` Flight is provisioned, but a new live
+Vercel Exa check remains pending after an earlier attempt reached its configured
+daily Flight reservation. That reservation is an application guard, not
+MotherDuck's account-wide free allowance. Provisioning alone is not live provider
+qualification.
 
 Broad discovery instructions ask for at least six diverse queries. An agent must
 report when the configured profile cannot accommodate that coverage; it must not
@@ -174,9 +194,11 @@ hard stops or a guarantee of free hosting.
 
 ## Setup and references
 
-The [roadmap](docs/roadmap.md) completes adoption qualification before compact
-research checkpoints and manual evidence-backed updates. Those two product
-capabilities are planned work; current snapshot and refresh contracts still apply.
+The [roadmap](docs/roadmap.md) separates the remaining adoption and host checks
+from implemented checkpoints and bounded manual updates. The next product work
+is larger engine-backed update publication; monitoring remains a later option.
+See [continuation and manual updates](docs/continuation.md) for the current
+contracts alongside existing snapshot and refresh behavior.
 
 Start with the [README](README.md), [Docker guide](docs/docker.md),
 [provider configuration](docs/providers.md) or [personal hosting guide](docs/vercel.md).

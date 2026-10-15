@@ -1,100 +1,94 @@
 # Adoption and product roadmap
 
-These are the next implementation priorities. They are planned work, not current
-installation instructions or additional qualified host claims.
+The published package is **0.1.2**. The current source and personal Preview include
+the **0.2.0 candidate**: compact checkpoints and bounded manual evidence-backed
+updates. Its wheel and source distribution are prepared and qualified locally;
+they are not yet published on PyPI.
 
-The adoption release is published. Remaining account and host checks are tracked
-in [adoption verification](adoption-verification.md). Compact checkpoints and the
-first bounded manual-update workflow are implemented; broader host qualification
-and engine-backed publication for larger tables remain.
+Implementation, release and actual host qualification are separate milestones.
+See [current status](../STATUS.md) for recorded evidence and
+[adoption verification](adoption-verification.md) for the remaining checks.
 
-## 1. PyPI distribution
+## Implemented foundation
 
-Publish the Python engine and CLI with a reproducible wheel and source
-distribution. Check package-name availability and configure trusted publishing.
-Test the artifacts in a clean environment outside the checkout, including a
-fixture query, saved-result reopen and the intended setup entrypoint. Make the
-relationship between the Python package and the Node MCP App clear in the install
-instructions.
+- **Python distribution:** reproducible wheel and source distribution, trusted
+  publishing, fixture execution and installed-artifact checks on Python 3.12–3.14.
+- **Guided personal cloud:** reviewed, resumable setup for an adopter's own Vercel
+  and MotherDuck accounts, private secrets, one owner and finite execution limits.
+  Existing-account provisioning and stored reopening have been exercised.
+- **Search adapters:** Exa, Brave and Serper work locally; hosted gateway,
+  Flight-policy and secret-binding paths are implemented. Bounded Brave and Serper
+  searches passed in real Flights through a local control gateway.
+- **MCP clients:** saved-table checks have passed in ChatGPT and Claude, and local
+  Docker rendering and paging have passed in Cursor. Client lifecycle coverage
+  remains scoped to the observations in the [client guide](clients.md).
+- **Compact checkpoints:** versioned records up to 24 KiB retain the research
+  question, scope, selections, query provenance, exact revision/source pins and
+  pending identities. Authorized inspection is read-only; stale, missing and
+  inaccessible dependencies block continuation.
+- **Manual updates:** distinct existing-finding and discovery scopes produce a
+  versioned change set with canonical source evidence. Accept/Keep choices remain
+  adjustable until publication, with their history retained. Publication creates
+  an immutable successor and preserves earlier observations and amendments.
+  Complete tables are limited to 100 rows and 200 KB in this first version.
 
-## 2. Guided personal-cloud setup
+The hosted default is the authenticated HTTPS MCP App connection. A separate
+packaged plugin is not needed. Local Docker remains an alternative adoption path.
 
-Provide a resumable setup flow for the adopter's own Vercel, MotherDuck and OAuth
-accounts. Discover prerequisites, prepare the app and reviewed Flight, configure
-secrets and owner identity, then verify fixture execution and reopening through
-the hosted MCP endpoint. Keep keys out of source control and generated public
-configuration.
+## 1. Finish adoption verification
 
-Show the proposed resources and limits before provisioning. Prefer eligible
-personal Hobby setup, retain local Docker as an alternative, and report actual
-service requirements without promising free hosting. Repeated setup must recover
-existing resources rather than creating duplicate deployments or Flights.
+Run the documented setup with an eligible adopter's fresh personal accounts,
+including Vercel Hobby. Existing-account Pro checks and controlled API responses
+do not establish that path. Keep account creation, consent, OAuth registration
+and any exact-domain protection exception visible to the adopter.
 
-## 3. Hosted Brave and Serper adapters
+Complete the bounded Brave and Serper checks through Vercel HTTP. Record the
+provider policy, results, provenance, usage reservations and lost-response
+recovery. Wait for existing capacity rather than resetting the ledger or creating
+another namespace to bypass its limits. A temporary test-access grant must be
+revoked after the check.
 
-Make Brave and Serper available alongside Exa in personal-cloud setup, with
-execution through the Vercel gateway and MotherDuck Flights. Include provider
-selection, server-side credential setup and provider-specific execution limits
-in the guided onboarding flow. Keep the same adapters available locally and in
-Docker.
+Continue to distinguish included service allowances, application reservations
+and actual provider billing. No setup path promises free hosting.
 
-Qualify each hosted adapter with fixtures and a small approved live run. Verify
-search results, provenance, usage reporting and recovery before documenting it
-as a supported hosted option.
+## 2. Qualify continuation and updates in actual MCP hosts
 
-## 4. Claude and Cursor MCP Apps
+ChatGPT checkpoint saving and fresh-Claude continuation have passed, as have
+current table rendering and update-request read/cancellation in both hosts.
+Claude prepares a composer draft that requires Send before its agent continues.
 
-Qualify Claude first, then Cursor, using the same server and app. Cursor's
-[official MCP documentation](https://cursor.com/docs/mcp) explicitly lists MCP
-Apps support, checked October 15, 2026. Host support does not establish that
-sourcesQL has passed its integration checks there.
+Use saved data and controlled fixtures first. In ChatGPT and Claude, verify
+checkpoint saving and reopening, stale-revision blockers, host-message delivery,
+evidence inspection, revised Accept/Keep choices, publication and reopening the
+accepted successor. Confirm the original table and amendments remain unchanged.
+A successful tool response or local browser test does not establish host rendering.
 
-For each tested host/version, verify authentication, final-table rendering,
-source links, tree/Back navigation, durable corrections across reopen, tracked
-expansion, refresh review and app messaging. Begin with saved data and fixtures;
-use a small approved live run only where needed. Publish host-specific setup
-instructions and report unsupported host capabilities explicitly.
+Complete the remaining tracked expansion and refresh-review checks in Claude.
+For Cursor, qualify hosted authentication and the supported lifecycle separately
+from local Docker rendering. Keep actions that require unavailable app messaging
+disabled and describe that limitation explicitly. Use a small approved provider
+run only when fixture or saved-data checks cannot establish the behavior.
 
-## 5. Compact research checkpoints
+## 3. Release the qualified continuation version
 
-Implemented in the current source: strict version 1 records, 24 KiB limit, durable
-storage, authorized read-only continuation and portable reference mapping. Stale
-revisions block rather than silently rebase. See [the guide](continuation.md).
+Keep 0.2.0 candidate source, installed artifacts, Docker and deployed resources in
+agreement. Publish only the artifacts covered by the release checks and identify
+any remaining host or adopter gates in the release notes. Refresh client tool
+definitions after a server update; reopen saved results rather than repeating
+research to repair a display failure.
 
+## 4. Support larger manual updates
 
-Add a versioned continuation record containing the research question, SQL and
-parameters, scope, selected canonical rows and fields, result and source-version
-references, timestamps, pinned amendment revisions, pending jobs, failure state
-and remaining work. Keep this small by referencing retained data. Full research
-bundles remain the way to transfer the underlying data between installations.
+Extend publication beyond complete inline tables of 100 rows and 200 KB using
+engine-backed successors. Preserve canonical row IDs, source versions, observation
+times, exact baseline revisions, review history and dependency authorization.
+Keep discovery separate from reassessment of existing findings. Missing search
+hits must never imply deletion.
 
-An authorized agent must be able to resume from the checkpoint, resolve its
-references and continue with the recorded corrections. Reauthorize every
-dependency; report missing or inaccessible references rather than silently
-replacing them with a new search. Recover uncertain work through its existing
-request and job identities. Verify continuation across supported clients,
-interrupted runs, stale revisions and export/import identity mappings.
-
-## 6. Manual evidence-backed updates
-
-Implemented first version: separately scoped existing findings and discovery,
-fresh canonical source checks, versioned proposals, explicit decisions and an
-immutable accepted successor. Complete tables are limited to 100 rows/200 KB.
-Next: engine-backed successors beyond that bound and actual host qualification.
-
-
-Add an explicit Check for updates workflow that both discovers new entities and
-revisits existing findings. Keep those scopes distinct: the current refresh
-contract updates existing rows and does not admit new rows implicitly. Produce
-a versioned change set covering additions, changed claims, contradictory
-evidence and findings not observed during the check. Missing search results do
-not establish that an entity or fact was deleted.
-
-Retain the source versions and observation times behind each proposal. Apply SQL
-filtering before costly semantic work where supported; revisit only affected
-findings when dependencies establish that scope. Preserve earlier observations
-and amendments, and require explicit review before updating accepted values.
-Validate against controlled source changes before a small budgeted live check.
+Retain explicit materialization for further SQL where the accepted result needs
+it, with repeatable job recovery and visible hosted execution cost. Apply SQL
+filtering before costly semantic work where the admitted plan supports it. See
+[the continuation guide](continuation.md) for the current bounded contracts.
 
 ## Later: optional monitoring and expert feedback
 

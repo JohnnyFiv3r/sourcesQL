@@ -128,7 +128,7 @@ administrative fallback for direct clients and the standalone browser interface.
 
 Public discovery is served at `/.well-known/oauth-protected-resource` and its
 `/mcp` suffix. Unauthorized MCP requests advertise that metadata in a Bearer
-challenge. All 27 tools carry the OAuth scope in the pinned SDK's supported
+challenge. All MCP tools carry the OAuth scope in the pinned SDK's supported
 `_meta.securitySchemes` compatibility field. No custom authorization server,
 password store or token minting is implemented here.
 
@@ -229,10 +229,8 @@ tool metadata or rendering resources. Reopen saved research to load a newly
 registered UI; existing messages can retain their immutable version. Ordinary
 saved-result checks should not submit new Flights or provider calls.
 
-For an existing private ChatGPT plugin, **More actions → Upload new version**
-accepts an updated package without recreating the MCP registration or OAuth
-connection. Keep the existing `.app.json` identity when changing presentation.
-The [documented icon fields](https://developers.openai.com/plugins/deploy/submission#icons-and-screenshots)
-are `interface.logo` and `interface.composerIcon` in the Codex compatibility
-manifest, with paths relative to the plugin root. Verify the visible icon after
-upload; package acceptance alone is not proof the listing has updated.
+The personal-cloud adoption path connects directly to the HTTPS MCP endpoint.
+No plugin ZIP is needed for its tools or interactive research app. Maintain the
+existing connection and stable URL when deploying updates; a separately packaged
+wrapper is a separate plugin entry and is not part of this setup. Verify host
+branding separately from table rendering and connection health.

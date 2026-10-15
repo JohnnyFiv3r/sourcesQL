@@ -748,7 +748,7 @@ function Workspace() {
       updateDialog.current?.close();
       setUpdateRecovery(undefined);
       setNotice(
-        `Update check sent to your agent. Request ID: ${requestId}. Findings will be proposed for review.`,
+        `Update check saved. Request ID: ${requestId}. If your chat shows a prepared message, press Send to continue. Review findings before publishing.`,
       );
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
