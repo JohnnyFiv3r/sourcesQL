@@ -1,6 +1,6 @@
 # Project status
 
-sourcesQL is a developer alpha (`0.1.0a1`). The source includes a research SQL
+sourcesQL includes a research SQL
 engine, an MCP App, local Docker packaging and an optional Vercel/MotherDuck
 backend. Installation is from this repository; no package release is required
 by the quickstart.

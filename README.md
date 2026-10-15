@@ -10,7 +10,12 @@ sourcesQL is an open-source research engine and MCP App. A connected assistant t
 
 Use it when the answer needs rows: a vendor comparison, a project pipeline, an organization inventory or a collection of claims with supporting sources. The result stays available for further SQL instead of becoming another table trapped in a conversation.
 
-**Developer alpha · Apache 2.0 · Python 3.12–3.14 · Local Docker or personal cloud hosting**
+<p>
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
+  <a href="docs/python-linux-qualification.md"><img alt="Python: 3.12–3.14" src="https://img.shields.io/badge/Python-3.12%E2%80%933.14-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
+  <a href="docs/docker.md"><img alt="Local: Docker" src="https://img.shields.io/badge/Local-Docker-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
+  <a href="docs/vercel.md"><img alt="Hosting: Personal cloud" src="https://img.shields.io/badge/Hosting-Personal%20cloud-9AE4C2?style=flat-square&amp;labelColor=0E221D"></a>
+</p>
 
 ## How research works
 
@@ -164,7 +169,7 @@ The currently qualified hosted profile, **`exa-search.v1`**, uses Exa Auto and r
 
 ## Status and development
 
-The alpha includes the engine, local Docker app, durable MotherDuck jobs and storage, and hosted ChatGPT OAuth/app rendering. Fixture tests, live provider quality and host integration are different checks; the [current status](STATUS.md) records their scope and remaining gaps. Broad live research quality, hosted semantic models and Claude rendering are not qualified by the small Exa integration.
+The project includes the engine, local Docker app, durable MotherDuck jobs and storage, and hosted ChatGPT OAuth/app rendering. Fixture tests, live provider quality and host integration are different checks; the [current status](STATUS.md) records their scope and remaining gaps. Broad live research quality, hosted semantic models and Claude rendering are not qualified by the small Exa integration.
 
 Run local checks from the repository root:
 

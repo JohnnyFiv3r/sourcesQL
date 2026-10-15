@@ -1,6 +1,6 @@
 # Qualification boundaries
 
-The project is a developer alpha with local Docker, bounded live Exa search and
+The project includes local Docker, bounded live Exa search and
 an exercised hosted ChatGPT app. See [current status](../STATUS.md) for the scope
 of those checks. Each check establishes only its tested behavior; a local pass
 does not establish live research quality or another host's behavior.
