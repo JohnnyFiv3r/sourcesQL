@@ -2,9 +2,9 @@
 
 sourcesQL includes a research SQL
 engine, an MCP App, local Docker packaging and an optional Vercel/MotherDuck
-backend. **0.1.0 is published on PyPI**, including self-contained personal-cloud
-setup. The 0.1.1 adoption patch is undergoing final qualification and is not yet
-published. Source and local Docker installation remain available.
+backend. **0.1.1 is published on PyPI**, including self-contained personal-cloud
+setup, the updated app branding and adoption fixes. Source and local Docker
+installation remain available.
 
 ## Working paths
 
@@ -43,6 +43,20 @@ outside the checkout on macOS/Python 3.13 and Linux/Python **3.12, 3.13 and 3.14
 fixture execution, saved-result reopening, bundle restore, packaged setup
 templates and repeatable personal-cloud planning. Linux installed qualification
 completed before publishing through the `pypi` trusted-publisher environment.
+
+The **0.1.1** distributions also passed installed qualification on Linux/Python
+**3.12, 3.13 and 3.14** before publication. The public PyPI digests match the
+locally audited artifacts exactly. The app passes **197 tests** on Node 24 on
+macOS and Linux Docker; **85 packaging and Flight tests** pass. The final Docker
+runtime served current and retained UI resources from fresh storage with a
+read-only filesystem, no network and a non-root user.
+
+This patch preserves the durable queued job handle when an automatic start is
+blocked by the daily allowance. It also includes required setup templates and
+verified historical app resources in Docker, and documents persistent MotherDuck
+token rotation. The app uses **#2CD8B6** accents and the supplied rounded footer
+logo. Its new resource passed authenticated Preview reads and actual ChatGPT
+rendering with saved synthetic data, without a new query or Flight.
 
 The adoption source checks passed **435 Python tests** with **44 Linux-only skips**,
 **192 app tests** on Node 24 and **35 setup tests**. Setup tests cover account and
