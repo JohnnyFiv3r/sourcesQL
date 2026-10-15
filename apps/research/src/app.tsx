@@ -51,7 +51,6 @@ import "./styles.css";
 import { ResearchTreePanel } from "./research-tree-panel.js";
 import { HostedViewReconciliation } from "./view-reconciliation.js";
 import { readNavigation } from "./navigation-read.js";
-import { brandIcon } from "./branding.js";
 import {
   UpdateReviewPanel,
   manualUpdateAvailability,
@@ -1085,7 +1084,6 @@ function Workspace() {
       const firstRow = viewport.querySelector<HTMLElement>("tbody tr");
       if (!heading || !firstRow) return;
       const footer = viewport.querySelector<HTMLElement>(".table-footer");
-      const branding = viewport.querySelector<HTMLElement>(".app-footer");
       const workspace = viewport.closest<HTMLElement>(".workspace")!;
       const chromeHeight = Array.from(
         workspace.querySelectorAll<HTMLElement>(
@@ -1095,6 +1093,8 @@ function Workspace() {
         (height, element) => height + (element as HTMLElement).offsetHeight,
         0,
       );
+      // Reserve the same dock clearance before and after a selection.
+      const padding = getComputedStyle(viewport);
       // Layout measurements must ignore the fallback entrance transform.
       const available =
         (inlineHeightLimit === null
@@ -1102,7 +1102,8 @@ function Workspace() {
           : inlineHeightLimit - chromeHeight) -
         heading.offsetHeight -
         (footer?.offsetHeight ?? 0) -
-        (branding?.offsetHeight ?? 0) -
+        parseFloat(padding.paddingTop) -
+        parseFloat(padding.paddingBottom) -
         (viewport.querySelector<HTMLElement>(".research-status")
           ?.offsetHeight ?? 0) -
         (viewport.querySelector<HTMLElement>(".refresh-context")
@@ -1132,7 +1133,7 @@ function Workspace() {
     const workspace = viewport.closest<HTMLElement>(".workspace")!;
     const measure = () => {
       // Measure content, not the flex-filled viewport or a transformed screen
-      // rectangle. The footer should be the last pixels of an inline component.
+      // rectangle. Persistent dock clearance keeps selection from resizing it.
       const content = [
         ...Array.from(
           workspace.querySelectorAll<HTMLElement>(
@@ -1791,7 +1792,7 @@ function Workspace() {
           <span>Opening {pendingNavigation.title}…</span>
         </div>
       )}
-      <div className={`workspace-content ${row ? "has-selection" : ""}`}>
+      <div className="workspace-content">
         <section
           className="records-surface"
           aria-label="Research results"
@@ -2168,9 +2169,6 @@ function Workspace() {
                 </nav>
               )}
             </div>
-            <footer className="app-footer">
-              <img className="footer-logo" src={brandIcon} alt="sourcesQL" />
-            </footer>
           </div>
         </section>
         {row && (

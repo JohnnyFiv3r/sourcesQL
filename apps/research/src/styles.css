@@ -25,6 +25,7 @@
   --link: #17654b;
   --accent: #e8fbf7;
   --row-height: 52px;
+  --selection-dock-space: 72px;
   color: var(--foreground);
   background: var(--background);
 }
@@ -172,27 +173,6 @@ body,
   align-items: center;
   gap: 14px;
   min-height: 48px;
-}
-.footer-logo {
-  display: block;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  object-fit: contain;
-}
-.app-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex: none;
-  min-height: 40px;
-  padding: 6px 16px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  background: var(--background);
-  position: sticky;
-  left: 0;
-  width: 100%;
 }
 h1 {
   font-size: 17px;
@@ -566,6 +546,9 @@ h1 {
   padding: 5px;
 }
 .table-scroll {
+  /* Keep space for selection actions without changing the content-sized frame. */
+  padding-bottom: var(--selection-dock-space);
+  scroll-padding-bottom: var(--selection-dock-space);
   overflow: auto;
   flex: 1;
   min-height: 0;
@@ -883,10 +866,6 @@ html[data-table-transition="out"] {
   min-height: 0;
   overflow: hidden;
 }
-.has-selection .table-scroll {
-  padding-bottom: 88px;
-  scroll-padding-bottom: 88px;
-}
 .selection-dock {
   position: absolute;
   bottom: 12px;
@@ -1119,9 +1098,6 @@ label .input {
   .report-heading {
     gap: 9px;
     min-height: 44px;
-  }
-  .app-footer {
-    padding-inline: 12px;
   }
   h1,
   .result-title {

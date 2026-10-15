@@ -43,7 +43,7 @@ The authenticated Preview endpoint passes checkpoint recovery with the **origina
 saved ID**, fresh-connection continuation, durable manual-request reopening and
 explicit cancellation. Original fixture observations and amendments stay unchanged.
 This uses stored data only, with **zero new Flights or provider calls**. The current
-resource is `ui://sourcesql/research-3ad849c41d019ecb.html`; nine previous immutable
+resource is `ui://sourcesql/research-a19abdd86f97fd03.html`; ten previous immutable
 resources remain available to older chat components.
 
 The current ChatGPT app passes saved-table rendering, selected-field checkpoint
@@ -63,6 +63,14 @@ than claiming an agent has started. Its build, targeted messaging/review/resourc
 checks, deployment packaging checks and eight Python packaging tests pass. The
 Preview serves the exact new build and preserves the preceding UI byte-for-byte;
 this wording patch did not repeat the full engine qualification.
+The current app removes the separate branding footer and reserves consistent
+clearance for selection actions. Controlled browser checks reproduced the old
+88-pixel selection jump; the revised frame keeps the same height before selection,
+with the toolbar visible and after dismissal at desktop and mobile widths. Final
+page navigation remains usable. The app build, ten existing deployment/resource
+checks and eight packaging checks pass; authenticated Preview reads match the
+exact new UI and retain the preceding version. No research execution was needed.
+
 Connect the hosted MCP App directly through its authenticated HTTPS endpoint;
 a separate packaged plugin is not required. Refresh the host's tool definitions
 after updating the server before using the new controls.
