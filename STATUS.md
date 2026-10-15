@@ -48,8 +48,9 @@ hard stops or a guarantee of free hosting.
 ## Setup and references
 
 The [next adoption priorities](docs/roadmap.md) are PyPI distribution, guided
-personal-cloud setup and MCP Apps qualification in Claude and Cursor. These are
-planned work; current installation and host-qualification limits still apply.
+personal-cloud setup, hosted Brave and Serper adapters, and MCP Apps qualification
+in Claude and Cursor. These are planned work; current installation and
+host-qualification limits still apply.
 
 Start with the [README](README.md), [Docker guide](docs/docker.md),
 [provider configuration](docs/providers.md) or [personal hosting guide](docs/vercel.md).
