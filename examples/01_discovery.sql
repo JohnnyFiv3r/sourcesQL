@@ -1,4 +1,4 @@
--- Proposed Open WebQL v0.1. Uses deliberately fictional fixtures in fixture mode.
+-- Proposed sourcesQL v0.1. Uses deliberately fictional fixtures in fixture mode.
 SELECT
   url,
   SEM_EXTRACT(content, 'project name explicitly stated') AS project,

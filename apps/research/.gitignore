@@ -4,3 +4,5 @@ dist/
 .tunnel/
 *.log
 .ui-builds/
+.vercel
+.env*

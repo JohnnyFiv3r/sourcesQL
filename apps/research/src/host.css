@@ -3,8 +3,8 @@
 }
 body {
   margin: 0;
-  background: #f3f4f7;
-  color: #333;
+  background: #f2f7f4;
+  color: #0e221d;
   font-family:
     Inter,
     -apple-system,
@@ -33,7 +33,7 @@ iframe {
   background: white;
 }
 .embedded-preview#host {
-  background: #f3f4f7;
+  background: #f2f7f4;
 }
 .embedded-preview iframe {
   flex: none;
@@ -100,7 +100,7 @@ dialog textarea {
 }
 .dialog-actions button {
   border: 0;
-  background: #345ce3;
+  background: #17654b;
   color: white;
   font: inherit;
   font-weight: 550;
@@ -110,7 +110,7 @@ dialog textarea {
 }
 button:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid #345ce3;
+  outline: 2px solid #17654b;
   outline-offset: 3px;
 }
 @media (max-width: 720px) {

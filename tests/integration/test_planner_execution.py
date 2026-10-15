@@ -12,9 +12,9 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-from open_webql.contracts import Column, Table, WebQLError
-from open_webql.execution.planner import execute_plan
-from open_webql.sql.admission import SOURCE_COLUMNS, admit, validate_type
+from sourcesql.contracts import Column, Table, SourcesQLError
+from sourcesql.execution.planner import execute_plan
+from sourcesql.sql.admission import SOURCE_COLUMNS, admit, validate_type
 
 
 def quote(value):
@@ -229,6 +229,27 @@ def test_exact_filter_precedes_semantics_but_outer_limit_is_not_pushed_down():
     assert len([c for c in fixture.calls if c[0] == "SEM_EXTRACT"]) == 1
 
 
+def test_ordinary_sql_filters_reduce_both_semantic_filter_and_extraction_calls():
+    base = """SELECT title,SEM_EXTRACT(content,'project name explicitly stated') AS project
+    FROM WEB_SEARCH('campuses') WHERE SEM_MATCH(content,'specific campus')"""
+    baseline, baseline_provider = execute(base)
+    filtered, filtered_provider = execute(base + " AND title='Aurora'")
+    empty, empty_provider = execute(base + " AND title='No such campus'")
+    assert len(baseline.rows) == 2
+    assert filtered.rows == [{"title": "Aurora", "project": "Aurora"}]
+    assert empty.rows == []
+    # SQL predicate appears after SEM_MATCH in the text, but runs first.
+    assert [call[0] for call in baseline_provider.calls].count("SEM_MATCH") == 3
+    assert [call[0] for call in baseline_provider.calls].count("SEM_EXTRACT") == 2
+    assert [call[0] for call in filtered_provider.calls] == [
+        "WEB_SEARCH",
+        "SEM_MATCH",
+        "SEM_EXTRACT",
+    ]
+    assert [call[0] for call in empty_provider.calls] == ["WEB_SEARCH"]
+    assert filtered_provider.calls[-1][2]["_source_version_id"] == "v1"
+
+
 def test_empty_and_null_extraction_keep_schema_and_unknown_match_is_not_false():
     sources = Table(list(SOURCE_COLUMNS), [])
     table, fixture = execute(
@@ -311,7 +332,7 @@ def test_argument_rows_are_joined_by_identity_even_if_worker_reorders_them():
 
 def test_invalid_score_and_match_results_are_refused():
     for function, value in (("SEM_SCORE", float("nan")), ("SEM_MATCH", "false")):
-        with pytest.raises(WebQLError) as error:
+        with pytest.raises(SourcesQLError) as error:
             execute(
                 f"SELECT {function}(content,'x') AS value FROM input.a",
                 {"a": Table([Column("content")], [{"content": "x"}])},
@@ -331,7 +352,7 @@ def test_invalid_score_and_match_results_are_refused():
 )
 def test_relational_errors_have_zero_provider_dispatch(query):
     fixture = Fixture()
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         execute(query, {"b": Table([Column("id", "BIGINT")], [])}, fixture)
     assert error.value.code == "invalid_query"
     assert fixture.calls == []

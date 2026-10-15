@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sourcesql-motherduck-probe",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-10-14",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "MOTHERDUCK_HOST": "pg.us-east-1-aws.motherduck.com",
+    "ALLOW_FLIGHT_SUBMISSION": "false"
+  },
+  "observability": { "enabled": false }
+}

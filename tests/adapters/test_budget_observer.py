@@ -2,7 +2,7 @@
 
 import pytest
 
-from open_webql.contracts import Budget, WebQLError
+from sourcesql.contracts import Budget, SourcesQLError
 
 
 def test_observer_records_successful_reservation_before_effect_outside_lock():
@@ -28,7 +28,7 @@ def test_exhausted_allowance_notifies_no_observer_and_performs_no_effect():
         budget.reserve("model_requests", limit="max_model_requests")
         events.append("fake_effect")
 
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         dispatch()
     assert error.value.code == "budget_exhausted"
     assert events == [] and budget.counts == {}

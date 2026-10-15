@@ -107,7 +107,7 @@ export const v2SnapshotSchema = z
     title: z.string().min(1).max(150),
     origin: z
       .object({
-        engine: z.enum(["open-webql", "legacy-import", "imported"]),
+        engine: z.enum(["sourcesql", "open-webql", "legacy-import", "imported"]),
         resultId: id,
         runId: id.nullable(),
       })
@@ -189,10 +189,10 @@ export const v2SnapshotSchema = z
     )
       fail("Day precision requires imported_declared_time");
     if (
-      s.origin.engine === "open-webql" &&
+      (s.origin.engine === "sourcesql" || s.origin.engine === "open-webql") &&
       (s.capturePrecision !== "instant" || !s.origin.runId)
     )
-      fail("Open WebQL origin requires an instant and run ID");
+      fail("sourcesQL origin requires an instant and run ID");
     if (s.dataRef && s.dataRef.resultId !== s.origin.resultId)
       fail("dataRef must match origin");
     if (!s.dataRef && (s.rowCount !== s.rows.length || s.previewOffset !== 0))
@@ -227,7 +227,7 @@ export type Snapshot = {
   sourceResultSetId?: string;
   schemaVersion?: 2;
   origin?: {
-    engine: "open-webql" | "legacy-import" | "imported";
+    engine: "sourcesql" | "open-webql" | "legacy-import" | "imported";
     resultId: string;
     runId: string | null;
   };

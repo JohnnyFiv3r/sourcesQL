@@ -22,8 +22,8 @@
     ]
   },
   "implementation": [
-    "src/open_webql/sql/admission.py",
-    "src/open_webql/execution/planner.py",
+    "src/sourcesql/sql/admission.py",
+    "src/sourcesql/execution/planner.py",
     "tests/unit/test_sql_admission.py",
     "tests/integration/test_planner_execution.py"
   ],

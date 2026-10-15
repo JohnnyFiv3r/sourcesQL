@@ -404,13 +404,16 @@ test("MCP stdio handshake, UI resource, correction, import and follow-up round t
         "research_page",
         "export_research",
         "import_research_bundle",
-        "webql_capabilities",
-        "webql_explain",
-        "webql_query",
-        "webql_run_status",
-        "webql_read_result",
-        "webql_inspect_evidence",
-        "webql_cancel",
+        "sourcesql_capabilities",
+        "sourcesql_explain",
+        "sourcesql_query",
+        "sourcesql_run_status",
+        "sourcesql_read_result",
+        "sourcesql_inspect_evidence",
+        "sourcesql_cancel",
+        "sourcesql_job_status",
+        "sourcesql_cancel_job",
+        "sourcesql_start_job",
       ].sort(),
     );
     const openTool = tools.find((t) => t.name === "open_research")!;
@@ -418,7 +421,7 @@ test("MCP stdio handshake, UI resource, correction, import and follow-up round t
       .resourceUri;
     assert.match(
       resourceUri,
-      /^ui:\/\/open-webql\/research-[a-f0-9]{16}\.html$/,
+      /^ui:\/\/sourcesql\/research-[a-f0-9]{16}\.html$/,
     );
     const { contents } = await client.readResource({
       uri: resourceUri,
@@ -426,7 +429,7 @@ test("MCP stdio handshake, UI resource, correction, import and follow-up round t
     assert.equal(contents[0].mimeType, "text/html;profile=mcp-app");
     assert.ok(
       "text" in contents[0] &&
-        contents[0].text.includes("Open WebQL research workspace"),
+        contents[0].text.includes("sourcesQL research workspace"),
     );
     const opened = await client.callTool({
       name: "open_research",

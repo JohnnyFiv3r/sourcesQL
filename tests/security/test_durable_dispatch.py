@@ -5,9 +5,9 @@ import uuid
 import httpx
 import pytest
 
-from open_webql.contracts import WebQLError
-from open_webql.engine import Engine
-from open_webql.providers.fixture import FixtureProvider
+from sourcesql.contracts import SourcesQLError
+from sourcesql.engine import Engine
+from sourcesql.providers.fixture import FixtureProvider
 from test_engine_boundaries import reference_worker
 
 
@@ -21,7 +21,7 @@ def test_another_coordinator_cancellation_prevents_atomic_publication(tmp_path, 
         return commit(table, metadata)
 
     monkeypatch.setattr(engine.store, "commit", cancel_before_commit)
-    with pytest.raises(WebQLError, match="Run cancelled"):
+    with pytest.raises(SourcesQLError, match="Run cancelled"):
         engine.query(query="SELECT 7 AS value")
     with engine.store.db() as db:
         assert db.execute("SELECT count(*) FROM results").fetchone()[0] == 0
@@ -39,7 +39,7 @@ def test_revocation_during_execution_prevents_child_visibility(tmp_path, monkeyp
         return commit(table, metadata)
 
     monkeypatch.setattr(engine.store, "commit", revoke_before_commit)
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.query(
             query="SELECT value FROM input.p", inputs={"p": {"result_id": parent["result_id"]}}
         )
@@ -100,7 +100,7 @@ def test_missing_scorer_refuses_before_search_transport(tmp_path):
             }
         },
     )
-    with pytest.raises(WebQLError, match="No embedding scorer"):
+    with pytest.raises(SourcesQLError, match="No embedding scorer"):
         engine.query(
             query="SELECT SEM_SCORE(content, 'relevance to campuses') AS score FROM WEB_SEARCH('campuses')",
             profile="live-test",

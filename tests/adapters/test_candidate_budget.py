@@ -3,8 +3,8 @@
 import httpx
 import pytest
 
-from open_webql.contracts import Budget, WebQLError
-from open_webql.providers import ProviderRegistry
+from sourcesql.contracts import Budget, SourcesQLError
+from sourcesql.providers import ProviderRegistry
 
 
 def registry(handler):
@@ -57,7 +57,7 @@ def test_lowered_candidate_cap_bounds_batch_and_counts_hits_before_dedup():
 def test_zero_candidate_cap_refuses_before_fake_http_effect_or_reservation():
     provider = registry(lambda _: pytest.fail("Unexpected HTTP dispatch"))
     allowance = budget(0)
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         provider.search(["query"], {}, allowance)
     assert error.value.code == "budget_exhausted"
     assert allowance.counts == {} and provider.events == []
@@ -85,7 +85,7 @@ def test_two_search_calls_share_remaining_candidate_allowance():
     allowance = budget(3)
     assert len(provider.search(["first"], {"per_query_limit": 2}, allowance)) == 2
     assert len(provider.search(["second"], {"per_query_limit": 2}, allowance)) == 1
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         provider.search(["third"], {"per_query_limit": 2}, allowance)
     assert error.value.code == "budget_exhausted"
     assert requests == [2, 1] and allowance.counts["candidates"] == 3
@@ -97,7 +97,7 @@ def test_zero_concurrency_refuses_external_work_but_allows_saved_only_preflight(
     provider = ProviderRegistry()
     allowance = Budget({"max_concurrency": 0})
     provider.preflight([], allowance)
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         provider.preflight([operator], allowance)
     assert error.value.code == "budget_exhausted"
     assert allowance.counts == {} and provider.events == []

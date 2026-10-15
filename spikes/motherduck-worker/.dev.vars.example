@@ -1,0 +1,8 @@
+# Copy to .dev.vars locally. Never paste credentials into chat or commit them.
+MOTHERDUCK_DB="your_probe_database"
+MOTHERDUCK_TOKEN=""
+GATEWAY_TOKEN=""
+FLIGHT_ID=""
+DEPENDENCY_FLIGHT_ID=""
+ALLOW_FLIGHT_PROVISIONING="false"
+ALLOW_FLIGHT_SUBMISSION="false"

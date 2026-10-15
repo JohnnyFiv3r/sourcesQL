@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from open_webql.contracts import WebQLError
-from open_webql.engine import Engine
+from sourcesql.contracts import SourcesQLError
+from sourcesql.engine import Engine
 
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
@@ -189,7 +189,7 @@ def test_engine_aggregate_and_json_cte_types_survive_materialization(tmp_path):
 
 def test_engine_invalid_grouping_has_no_provider_work_actual_worker(tmp_path):
     engine = Engine(tmp_path / "engine")
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         engine.query(query="SELECT title FROM WEB_SEARCH('fixture campuses') GROUP BY url")
     assert error.value.code == "invalid_query"
     with engine.store.db() as db:
@@ -208,7 +208,7 @@ def test_engine_null_semantic_evidence_has_unprocessed_partial_receipt(tmp_path)
     engine = Engine(tmp_path / "engine")
     data = imported(engine, [("content", "VARCHAR")], [{"content": None}])
     query = "SELECT SEM_MATCH(content,'specific campus') AS matched FROM input.a"
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         engine.query(query=query, inputs={"a": binding(data)})
     assert error.value.code == "invalid_output"
     partial = engine.query(
@@ -248,7 +248,7 @@ def test_oversized_intermediate_fails_instead_of_publishing_clipped_count(tmp_pa
     engine = Engine(tmp_path / "engine")
     data = imported(engine, [("id", "BIGINT")], [{"id": str(i)} for i in range(40)])
     query = "WITH expanded AS (SELECT a.id AS a_id,b.id AS b_id FROM input.a a CROSS JOIN input.b b) SELECT count(*) AS n FROM expanded"
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         engine.query(query=query, inputs={"a": binding(data), "b": binding(data)})
     assert error.value.code == "budget_exhausted"
     assert error.value.stage == "worker"

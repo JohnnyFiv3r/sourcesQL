@@ -23,7 +23,7 @@ function amendment(value: string | null) {
   };
 }
 test("independent store writers reread revisions under an atomic filesystem lock", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "webql-store-writers-"));
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-store-writers-"));
   try {
     const inputs = [amendment(null), amendment("2026-10-08 15:00:00")];
     const outcomes = await Promise.allSettled(
@@ -110,7 +110,7 @@ function writer(directory: string, value: string) {
   return { child, ready, result };
 }
 test("two child processes produce one accepted correction and one conflict without a lost amendment", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "webql-process-writers-"));
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-process-writers-"));
   const writers = [writer(directory, "null"), writer(directory, "date")];
   try {
     await Promise.all(writers.map((item) => item.ready));
@@ -138,7 +138,7 @@ test("two child processes produce one accepted correction and one conflict witho
   }
 });
 test("a crash writer lock stays owned and returns explicit busy without stale takeover", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "webql-crash-lock-"));
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-crash-lock-"));
   const owner = join(directory, ".writer-lock", "owner-test-token.json");
   const record = JSON.stringify({
     token: "test-token",
@@ -174,7 +174,7 @@ test(
   "bridge timeout stops its owned process group including a sleeping child",
   { skip: process.platform === "win32" },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "webql-bridge-group-"));
+    const directory = await mkdtemp(join(tmpdir(), "sourcesql-bridge-group-"));
     const script = join(directory, "bridge.mjs"),
       pidFile = join(directory, "owned-child.pid");
     let childPid: number | undefined;

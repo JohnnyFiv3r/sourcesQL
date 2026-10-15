@@ -3,15 +3,24 @@ requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "open-webql"
+name = "sourcesql"
 version = "0.1.0a1"
 description = "Provider-independent SQL research with durable evidence"
-requires-python = ">=3.13,<3.15"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
 dependencies = ["sqlglot==30.19.0", "duckdb==1.5.0", "pyarrow==23.0.1", "pydantic==2.13.3", "httpx==0.28.1", "pydantic-ai-slim[openai]==2.27.0"]
 
+[project.optional-dependencies]
+motherduck = ["psycopg[binary]==3.3.3"]
+
+[project.urls]
+Repository = "https://github.com/JohnnyFiv3r/sourcesQL"
+Documentation = "https://github.com/JohnnyFiv3r/sourcesQL/blob/main/README.md"
+Issues = "https://github.com/JohnnyFiv3r/sourcesQL/issues"
+
 [project.scripts]
-webql = "open_webql.cli:main"
+sourcesql = "sourcesql.cli:main"
 
 [dependency-groups]
 dev = ["pytest==9.0.2", "ruff==0.15.6", "mypy==1.19.1"]
@@ -21,11 +30,11 @@ testpaths = ["tests"]
 markers = ["live: explicitly configured provider qualification", "host: actual host integration"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py312"
 line-length = 100
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/open_webql"]
+packages = ["src/sourcesql"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/", "tests/", "docs/", "examples/", "fixtures/", "pyproject.toml", "uv.lock", "README.md", "LICENSE", "NOTICE", "AGENTS.md", "provenance/reuse-manifest.json"]

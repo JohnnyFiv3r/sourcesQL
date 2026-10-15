@@ -1,18 +1,18 @@
 {
   "mcpServers": {
-    "open-webql-research": {
+    "sourcesql-research": {
       "command": "node",
       "args": [
         "--import",
-        "/absolute/path/open-webql/apps/research/node_modules/tsx/dist/loader.mjs",
-        "/absolute/path/open-webql/apps/research/server/main.ts",
+        "/absolute/path/sourcesql/apps/research/node_modules/tsx/dist/loader.mjs",
+        "/absolute/path/sourcesql/apps/research/server/main.ts",
         "--stdio"
       ],
       "env": {
-        "RESEARCH_DATA_DIR": "/absolute/path/open-webql/local/research",
-        "WEBQL_DATA_DIR": "/absolute/path/open-webql/local/engine",
-        "WEBQL_PRINCIPAL": "local-owner",
-        "WEBQL_ALLOW_PRIVATE": "0"
+        "RESEARCH_DATA_DIR": "/absolute/path/sourcesql/local/research",
+        "SOURCESQL_DATA_DIR": "/absolute/path/sourcesql/local/engine",
+        "SOURCESQL_PRINCIPAL": "local-owner",
+        "SOURCESQL_ALLOW_PRIVATE": "0"
       }
     }
   }

@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from open_webql.contracts import WebQLError
-import open_webql.execution.worker as worker_module
+from sourcesql.contracts import SourcesQLError
+import sourcesql.execution.worker as worker_module
 
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS qualification only")
@@ -104,8 +104,8 @@ def test_worker_launch_environment_omits_injected_provider_credentials(probe_wor
         "EXA_API_KEY",
         "SERPER_API_KEY",
         "OPENAI_API_KEY",
-        "WEBQL_PROFILES_FILE",
-        "WEBQL_PRINCIPAL",
+        "SOURCESQL_PROFILES_FILE",
+        "SOURCESQL_PRINCIPAL",
     ]
     for name in names:
         monkeypatch.setenv(name, "SAFE-SYNTHETIC-CREDENTIAL-PROBE")
@@ -116,7 +116,7 @@ def test_worker_launch_environment_omits_injected_provider_credentials(probe_wor
 
 def test_timeout_kills_reaps_worker_closes_pipes_and_removes_scratch(probe_worker):
     worker = probe_worker()
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         with worker:
             assert worker.run_sql("ready", {}, timeout=5).rows == [{"result": "ready"}]
             process = worker.process

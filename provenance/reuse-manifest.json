@@ -1,5 +1,5 @@
 {
-  "format": "open-webql.reuse.v1",
+  "format": "sourcesql.reuse.v1",
   "engine_license": "Apache-2.0",
   "components": [
     {
@@ -14,7 +14,7 @@
       "component": "Research MCP App",
       "kind": "isolated adaptation of owner's existing Results Demo",
       "record": "provenance/app-reuse.json",
-      "changes": "Open WebQL bridge, scoped result references, lossless typed transport, pagination, effective amendments, graph exports, explicit refresh identity, synthetic fixtures and independent branding"
+      "changes": "sourcesQL bridge, scoped result references, lossless typed transport, pagination, effective amendments, graph exports, explicit refresh identity, synthetic fixtures and independent branding"
     },
     {
       "component": "Providers and fictional research corpus",

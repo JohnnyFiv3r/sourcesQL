@@ -6,8 +6,8 @@ import logging
 
 import pytest
 
-from open_webql.contracts import Column, WebQLError
-from open_webql.sql.admission import admit, validate_type
+from sourcesql.contracts import Column, SourcesQLError
+from sourcesql.sql.admission import admit, validate_type
 
 
 SCHEMAS = {
@@ -53,7 +53,7 @@ SCHEMAS = {
     ],
 )
 def test_closed_queries_are_refused(query):
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         admit(query, input_schemas=SCHEMAS)
 
 
@@ -77,14 +77,14 @@ def test_closed_queries_are_refused(query):
     ],
 )
 def test_unsupported_custom_shapes_refuse_before_planning(query):
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         admit(query, input_schemas=SCHEMAS)
 
 
 def test_parser_fallback_does_not_log_private_query(caplog):
     caplog.set_level(logging.DEBUG)
     private = "private-marker-89c2"
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         admit(f"CREATE RESEARCH {private} AS SELECT 1")
     assert private not in caplog.text
 
@@ -111,7 +111,7 @@ def test_bound_values_are_never_interpolated_or_explained():
     ],
 )
 def test_parameters_are_closed_json_scalar_bindings(parameters):
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         admit("SELECT $n AS value", parameters)
 
 
@@ -160,7 +160,7 @@ def test_declared_types_are_ast_validated(logical_type):
     ],
 )
 def test_type_sql_cannot_escape_the_declared_type(logical_type):
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         validate_type(logical_type)
 
 
@@ -178,7 +178,7 @@ def test_unknown_or_ambiguous_columns_are_refused_statically():
         "SELECT missing FROM WEB_SEARCH('x')",
         "SELECT id FROM input.a a JOIN input.b b ON a.id=b.id",
     ):
-        with pytest.raises(WebQLError):
+        with pytest.raises(SourcesQLError):
             admit(query, input_schemas=SCHEMAS)
 
 
@@ -196,5 +196,5 @@ def test_publication_options_validate_real_dates_and_explicit_policy():
         "per_query_limit := 21",
         "per_query_limit := 1e3",
     ):
-        with pytest.raises(WebQLError):
+        with pytest.raises(SourcesQLError):
             admit(f"SELECT url FROM WEB_SEARCH('campuses',{options})")

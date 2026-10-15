@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "",
+  "rewrites": [{"source":"/(.*)","destination":"/api/probe?__probe_path=/$1"}],
+  "functions": {"api/probe.mjs":{"maxDuration":30}}
+}

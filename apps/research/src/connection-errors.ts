@@ -1,5 +1,5 @@
 export const CONNECTION_RECOVERY =
-  "Results Demo couldn’t reach a required tool. Refresh tools in ChatGPT’s Results Demo settings, then reopen this table. Saved requests are preserved.";
+  "sourcesQL couldn’t reach a required tool. Refresh the sourcesQL connection’s tools in your client, then reopen this table. Saved requests are preserved.";
 
 export function missingHostTool(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);

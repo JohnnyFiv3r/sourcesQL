@@ -49,10 +49,19 @@ import {
 } from "./research-links.js";
 import "./styles.css";
 import { ResearchTreePanel } from "./research-tree-panel.js";
+import { HostedViewReconciliation } from "./view-reconciliation.js";
+import { readNavigation } from "./navigation-read.js";
+import { brandIcon } from "./branding.js";
+import {
+  formatSourceUrl,
+  presentationColumns,
+  nextTableSort,
+  sourceLinksForValue,
+} from "./presentation.js";
 
 const MAX_PAGE_SIZE = 25;
 const app = new App(
-  { name: "Open WebQL research", version: "0.1.0" },
+  { name: "sourcesQL research", version: "0.1.0" },
   {},
   { autoResize: false },
 );
@@ -77,6 +86,15 @@ function needsReview(row: Row): boolean {
     row.verificationNote + " " + Object.values(row.values).join(" "),
   );
 }
+function isSourceUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 function Workspace() {
   const [view, setView] = useState<ResearchView>();
@@ -88,6 +106,10 @@ function Workspace() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<{
+    version: number;
+    title: string;
+  }>();
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const titleEditActive = useRef(false);
@@ -122,6 +144,8 @@ function Workspace() {
   const fileInput = useRef<HTMLInputElement>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
+  const reconciliation = useRef<HostedViewReconciliation | null>(null);
+  const cellEditActive = useRef(false);
 
   const navigation = useRef({
     search,
@@ -152,6 +176,7 @@ function Workspace() {
   const [connectionIssue, setConnectionIssue] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [dismissedRequestStatus, setDismissedRequestStatus] = useState("");
+  cellEditActive.current = tab === "correct" || reviewOpen;
 
   function reportError(cause: unknown) {
     if (missingHostTool(cause)) {
@@ -166,23 +191,36 @@ function Workspace() {
   function accept(next: ResearchView, preserveWindow = true) {
     const previous = viewRef.current;
     if (
+      previous?.snapshot.id === next.snapshot.id &&
+      next.revision < previous.revision
+    )
+      return;
+    reconciliation.current?.invalidate();
+    if (
       preserveWindow &&
       previous?.snapshot.id === next.snapshot.id &&
       (previous.preview?.offset ?? 0) > 0 &&
       next.preview?.offset !== previous.preview?.offset
     ) {
       const offset = previous.preview!.offset;
+      const version = navigationVersion.current;
+      const readVersion = reconciliation.current?.version;
       void app
         .callServerTool({
           name: "research_page",
           arguments: { snapshot_id: next.snapshot.id, offset },
         })
         .then((result) => {
+          const page = extractView(result);
           if (
-            viewRef.current?.snapshot.id === next.snapshot.id &&
-            viewRef.current.preview?.offset === offset
+            viewRef.current === previous &&
+            navigationVersion.current === version &&
+            reconciliation.current?.version === readVersion &&
+            page.snapshot.id === next.snapshot.id &&
+            page.revision >= next.revision &&
+            page.preview?.offset === offset
           )
-            accept(extractView(result), false);
+            accept(page, false);
         })
         .catch(reportError);
       return;
@@ -223,7 +261,7 @@ function Workspace() {
       titleEditActive.current = false;
       setEditingTitle(false);
       setSelectedId(saved?.selectedId ?? "");
-      setField(saved?.field ?? next.snapshot.columns[0].key);
+      setField(saved?.field ?? presentationColumns(next.snapshot)[0].key);
       setPage(saved?.page ?? 0);
       setHeaderPanel(null);
       setTreeOpen(false);
@@ -270,10 +308,27 @@ function Workspace() {
       setCanAskAgent(Boolean(agentMessenger(app, chatGPTMessaging())));
     window.addEventListener("openai:set_globals", updateAgentMessaging);
     window.addEventListener("focus", updateAgentMessaging);
+    const reconciler = new HostedViewReconciliation({
+      current: () => viewRef.current,
+      navigationVersion: () => navigationVersion.current,
+      editing: () => titleEditActive.current || cellEditActive.current,
+      read: async (snapshotId, offset) =>
+        extractView(
+          await app.callServerTool({
+            name: offset > 0 ? "research_page" : "research_status",
+            arguments: {
+              snapshot_id: snapshotId,
+              ...(offset > 0 ? { offset } : {}),
+            },
+          }),
+        ),
+      accept: (next) => accept(next, false),
+      onError: reportError,
+    });
+    reconciliation.current = reconciler;
     app.ontoolresult = (result) => {
       try {
-        accept(extractView(result));
-        setError("");
+        if (reconciler.hostResult(extractView(result))) setError("");
       } catch (e) {
         reportError(e);
       }
@@ -296,17 +351,24 @@ function Workspace() {
         updateLayoutContext(context);
         if (context?.theme) applyDocumentTheme(context.theme);
         updateAgentMessaging();
+        reconciler.hostConnected(
+          !!app.getHostCapabilities()?.serverTools &&
+            context?.researchPreview !== true,
+        );
       })
       .catch((e) =>
         setError(`Unable to connect to the MCP Apps host: ${String(e)}`),
       );
     return () => {
+      reconciler.dispose();
       window.removeEventListener("openai:set_globals", updateAgentMessaging);
       window.removeEventListener("focus", updateAgentMessaging);
     };
   }, []);
 
   async function perform(work: () => Promise<void>) {
+    reconciliation.current?.invalidate();
+    setPendingNavigation(undefined);
     setBusy(true);
     setError("");
     setNotice("");
@@ -324,124 +386,127 @@ function Workspace() {
   function navigate(snapshotId: string) {
     setError("");
     setNotice("");
+    setTreeOpen(false);
     // Reading another table must not disable or dim the current workspace.
     void open(snapshotId).catch(reportError);
   }
   async function open(snapshotId?: string) {
     followRequest.current = null;
     const version = ++navigationVersion.current;
-    let next = extractView(
-      await app.callServerTool({
-        name: "open_research",
-        arguments: snapshotId ? { snapshot_id: snapshotId } : {},
-      }),
-    );
+    const readVersion = reconciliation.current?.version;
     const previous = viewRef.current;
-    const savedOffset =
-      savedNavigation.current.get(next.snapshot.id)?.windowOffset ??
-      (previous?.snapshot.id === next.snapshot.id
-        ? previous.preview?.offset
-        : 0) ??
-      0;
-    const origin = next.requests.find(
-      (r) =>
-        r.resultSnapshotId === previous?.snapshot.id &&
-        r.snapshotId === next.snapshot.id,
-    );
-    if (
-      savedOffset > 0 ||
-      (!savedNavigation.current.has(next.snapshot.id) && origin?.rowId)
-    )
-      next = extractView(
-        await app.callServerTool({
-          name: "research_page",
-          arguments: {
-            snapshot_id: next.snapshot.id,
-            ...(savedOffset > 0
-              ? { offset: savedOffset }
-              : { row_id: origin!.rowId! }),
-          },
-        }),
+    const isCurrent = () =>
+      version === navigationVersion.current &&
+      reconciliation.current?.version === readVersion;
+    setPendingNavigation({
+      version,
+      title:
+        previous?.snapshots.find((snapshot) => snapshot.id === snapshotId)
+          ?.title ?? "saved research",
+    });
+    try {
+      const next = await readNavigation({
+        snapshotId,
+        current: previous,
+        savedWindow: snapshotId
+          ? savedNavigation.current.get(snapshotId)
+          : undefined,
+        read: async (arguments_) =>
+          extractView(
+            await app.callServerTool({
+              name: "open_research",
+              arguments: arguments_,
+            }),
+          ),
+      });
+      if (!isCurrent()) return;
+      if (
+        !previous ||
+        previous.snapshot.id === next.snapshot.id ||
+        document.visibilityState === "hidden" ||
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ) {
+        tableTransition.current?.skipTransition();
+        tableEntrance.current?.cancel();
+        accept(next, false);
+        return;
+      }
+
+      // Returning to any ancestor reverses the zoom; other table switches enter.
+      const parents = new Map(
+        [...previous.snapshots, ...next.snapshots].map((snapshot) => [
+          snapshot.id,
+          snapshot.parentSnapshotId,
+        ]),
       );
-    if (version !== navigationVersion.current) return;
-    if (
-      !previous ||
-      previous.snapshot.id === next.snapshot.id ||
-      document.visibilityState === "hidden" ||
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
+      const isDescendant = (child: string, ancestor: string) => {
+        const visited = new Set<string>();
+        let parent = parents.get(child);
+        while (parent && !visited.has(parent)) {
+          if (parent === ancestor) return true;
+          visited.add(parent);
+          parent = parents.get(parent);
+        }
+        return false;
+      };
+      const direction = isDescendant(previous.snapshot.id, next.snapshot.id)
+        ? "out"
+        : "in";
       tableTransition.current?.skipTransition();
       tableEntrance.current?.cancel();
-      accept(next);
-      return;
-    }
-
-    // Returning to any ancestor reverses the zoom; other table switches enter.
-    const parents = new Map(
-      [...previous.snapshots, ...next.snapshots].map((snapshot) => [
-        snapshot.id,
-        snapshot.parentSnapshotId,
-      ]),
-    );
-    const isDescendant = (child: string, ancestor: string) => {
-      const visited = new Set<string>();
-      let parent = parents.get(child);
-      while (parent && !visited.has(parent)) {
-        if (parent === ancestor) return true;
-        visited.add(parent);
-        parent = parents.get(parent);
+      if (!document.startViewTransition) {
+        flushSync(() => accept(next, false));
+        const surface =
+          tableScroll.current?.closest<HTMLElement>(".records-surface");
+        tableEntrance.current =
+          surface?.animate(
+            [
+              {
+                transform: `scale(${direction === "in" ? 0.82 : 1.18})`,
+                opacity: 0.4,
+              },
+              { transform: "scale(1)", opacity: 1 },
+            ],
+            { duration: 180, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+          ) ?? null;
+        titleTrigger.current?.focus({ preventScroll: true });
+        return;
       }
-      return false;
-    };
-    const direction = isDescendant(previous.snapshot.id, next.snapshot.id)
-      ? "out"
-      : "in";
-    tableTransition.current?.skipTransition();
-    tableEntrance.current?.cancel();
-    if (!document.startViewTransition) {
-      flushSync(() => accept(next));
-      const surface =
-        tableScroll.current?.closest<HTMLElement>(".records-surface");
-      tableEntrance.current =
-        surface?.animate(
-          [
-            {
-              transform: `scale(${direction === "in" ? 0.82 : 1.18})`,
-              opacity: 0.4,
-            },
-            { transform: "scale(1)", opacity: 1 },
-          ],
-          { duration: 420, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
-        ) ?? null;
-      titleTrigger.current?.focus({ preventScroll: true });
-      return;
-    }
-    document.documentElement.dataset.tableTransition = direction;
-    const transition = document.startViewTransition(() => {
-      if (version !== navigationVersion.current) return;
-      // Layout effects restore scroll before the browser captures the new table.
-      flushSync(() => accept(next));
-    });
-    tableTransition.current = transition;
-    void transition.ready.catch(() => {});
-    try {
-      await transition.updateCallbackDone;
-      // An interrupted animation must not turn successful navigation into an error.
-      await transition.finished.catch(() => {});
+      document.documentElement.dataset.tableTransition = direction;
+      const transition = document.startViewTransition(() => {
+        if (!isCurrent()) return;
+        // Layout effects restore scroll before the browser captures the new table.
+        flushSync(() => accept(next, false));
+      });
+      tableTransition.current = transition;
+      void transition.ready.catch(() => {});
+      try {
+        await transition.updateCallbackDone;
+        // An interrupted animation must not turn successful navigation into an error.
+        await transition.finished.catch(() => {});
+      } finally {
+        if (tableTransition.current === transition) {
+          tableTransition.current = null;
+          delete document.documentElement.dataset.tableTransition;
+          requestAnimationFrame(() =>
+            titleTrigger.current?.focus({ preventScroll: true }),
+          );
+        }
+      }
+    } catch (cause) {
+      // An obsolete read must not report an error on a newer table or edit.
+      if (isCurrent()) throw cause;
     } finally {
-      if (tableTransition.current === transition) {
-        tableTransition.current = null;
-        delete document.documentElement.dataset.tableTransition;
-        requestAnimationFrame(() =>
-          titleTrigger.current?.focus({ preventScroll: true }),
-        );
-      }
+      setPendingNavigation((pending) =>
+        pending?.version === version ? undefined : pending,
+      );
     }
   }
   async function changeWindow(offset: number) {
     const current = viewRef.current;
     if (!current) return;
     const version = ++navigationVersion.current;
+    const readVersion = reconciliation.current?.version;
     const next = extractView(
       await app.callServerTool({
         name: "research_page",
@@ -450,6 +515,7 @@ function Workspace() {
     );
     if (
       version !== navigationVersion.current ||
+      reconciliation.current?.version !== readVersion ||
       viewRef.current?.snapshot.id !== current.snapshot.id
     )
       return;
@@ -460,6 +526,7 @@ function Workspace() {
   async function checkResearch() {
     const snapshotId = viewRef.current?.snapshot.id;
     const version = navigationVersion.current;
+    const readVersion = reconciliation.current?.version;
     if (!snapshotId) return;
     const next = extractView(
       await app.callServerTool({
@@ -469,7 +536,8 @@ function Workspace() {
     );
     if (
       viewRef.current?.snapshot.id !== snapshotId ||
-      navigationVersion.current !== version
+      navigationVersion.current !== version ||
+      reconciliation.current?.version !== readVersion
     )
       return;
     const follow = followRequest.current;
@@ -863,6 +931,7 @@ function Workspace() {
     notice,
     pendingIds,
     pollError,
+    pendingNavigation,
   ]);
   const row = pageRows.find((r) => r.id === selectedId);
   const wholeRow = Boolean(row && !field);
@@ -874,10 +943,12 @@ function Workspace() {
     ? researchForSelection(linkedResearch, row.id, field)
     : [];
   const researchActionLabel = `View ${researchScopeLabel(selectionResearch, field).toLowerCase()}`;
-  const sources =
-    row && view ? sourcesForViewSelection(view, row, field || undefined) : [];
   const currentValue =
     view && row && field ? effectiveValue(view, row, field) : null;
+  const sources = sourceLinksForValue(
+    row && view ? sourcesForViewSelection(view, row, field || undefined) : [],
+    currentValue,
+  );
   function changePage(next: number) {
     setSelectedId("");
     setTab("actions");
@@ -1032,16 +1103,38 @@ function Workspace() {
         )}
       </main>
     );
-  const columns = view.snapshot.columns.slice(0, 12);
-  const columnWeights = columns.map((column) => {
-    const lengths = view.snapshot.rows.map(
-      (row) => displayValue(row.values[column.key]).length,
+  const columns = presentationColumns(view.snapshot);
+  const primaryHasValues = view.snapshot.rows.some((row) => {
+    const value = effectiveValue(view, row, columns[0].key);
+    return value != null && !(typeof value === "string" && value.trim() === "");
+  });
+  const columnWeights = columns.map((column, index) => {
+    const values = view.snapshot.rows.map((row) =>
+      effectiveValue(view, row, column.key),
+    );
+    const sourceColumn =
+      /^(?:url|source_url|website|link)$/i.test(column.key) ||
+      (values.some(isSourceUrl) &&
+        values.every(
+          (value) => value == null || value === "" || isSourceUrl(value),
+        ));
+    // Long source paths should not squeeze the entity and its useful fields.
+    if (
+      values.every(
+        (value) =>
+          value == null || (typeof value === "string" && value.trim() === ""),
+      )
+    )
+      return Math.max(8, Math.min(12, column.label.length));
+    if (sourceColumn) return primaryHasValues ? 16 : 32;
+    const lengths = values.map((value) =>
+      value == null ? 0 : displayValue(value).length,
     );
     const average =
       lengths.reduce((sum, length) => sum + length, 0) /
       Math.max(1, lengths.length);
     return Math.max(
-      12,
+      index === 0 ? 24 : 12,
       Math.min(36, Math.max(column.label.length, average * 0.7)),
     );
   });
@@ -1312,6 +1405,7 @@ function Workspace() {
                   variant="ghost"
                   disabled={busy}
                   onClick={() => {
+                    reconciliation.current?.invalidate();
                     if (menu.current) menu.current.open = false;
                     setHeaderPanel(null);
                     setTitleDraft(view.displayTitle ?? view.snapshot.title);
@@ -1352,8 +1446,18 @@ function Workspace() {
         {/* Mount the view toggle here only when a visualization is available. */}
       </header>
       {feedback}
+      {pendingNavigation && !error && (
+        <div className="feedback" role="status" aria-live="polite">
+          <LoaderCircle className="research-spinner" size={14} />
+          <span>Opening {pendingNavigation.title}…</span>
+        </div>
+      )}
       <div className={`workspace-content ${row ? "has-selection" : ""}`}>
-        <section className="records-surface" aria-label="Research results">
+        <section
+          className="records-surface"
+          aria-label="Research results"
+          aria-busy={Boolean(pendingNavigation)}
+        >
           <div
             ref={tableScroll}
             className="table-scroll"
@@ -1427,7 +1531,7 @@ function Workspace() {
               </div>
             )}
             <table
-              style={{ minWidth: Math.max(360, columns.length * 120 + 36) }}
+              style={{ minWidth: Math.max(340, columns.length * 112 + 36) }}
             >
               <colgroup>
                 <col className="number-column" />
@@ -1435,7 +1539,7 @@ function Workspace() {
                   <col
                     key={c.key}
                     style={{
-                      width: `calc((100% - 36px) * ${columnWeights[i] / totalWeight})`,
+                      width: `${(columnWeights[i] / totalWeight) * 100}%`,
                     }}
                   />
                 ))}
@@ -1459,16 +1563,19 @@ function Workspace() {
                     >
                       <button
                         className="sort-button"
+                        title={
+                          sort?.field === c.key && !sort.ascending
+                            ? "Restore query order"
+                            : sort?.field === c.key
+                              ? "Sort descending"
+                              : "Sort ascending"
+                        }
                         onClick={() => {
                           setPage(0);
-                          setSort({
-                            field: c.key,
-                            ascending:
-                              sort?.field === c.key ? !sort.ascending : true,
-                          });
+                          setSort((current) => nextTableSort(current, c.key));
                         }}
                       >
-                        {c.label}
+                        <span>{c.label}</span>
                         <ArrowUpDown size={12} />
                       </button>
                     </th>
@@ -1518,9 +1625,15 @@ function Workspace() {
                           (change) =>
                             change.rowId === r.id && change.field === c.key,
                         );
-                        const value = displayValue(
-                          effectiveValue(view, r, c.key),
-                        );
+                        const rawValue = effectiveValue(view, r, c.key);
+                        const missing =
+                          rawValue == null ||
+                          (typeof rawValue === "string" &&
+                            rawValue.trim() === "");
+                        const value = missing
+                          ? "Not available"
+                          : displayValue(rawValue);
+                        const sourceUrl = isSourceUrl(rawValue);
                         const cellResearch = researchForSelection(
                           linkedResearch,
                           r.id,
@@ -1580,7 +1693,18 @@ function Workspace() {
                                 target?.focus();
                               }}
                             >
-                              <span className="cell-value">{value}</span>
+                              <span
+                                className={`cell-value${missing ? " missing-value" : sourceUrl ? " source-url-value" : ""}`}
+                                aria-hidden={
+                                  missing || sourceUrl ? true : undefined
+                                }
+                              >
+                                {missing
+                                  ? "—"
+                                  : sourceUrl
+                                    ? formatSourceUrl(rawValue)
+                                    : value}
+                              </span>
                               {change && change.status !== "unchanged" && (
                                 <span
                                   className="change-dot"
@@ -1694,7 +1818,8 @@ function Workspace() {
             </div>
             <footer className="app-footer">
               <span className="wordmark">
-                Open <span>WebQL</span>
+                <img src={brandIcon} alt="" />
+                <span>sourcesQL</span>
               </span>
             </footer>
           </div>
@@ -1779,7 +1904,7 @@ function Workspace() {
                 <div className="action-panel-heading">
                   <h2 id="action-title">
                     {tab === "correct"
-                      ? `Correct ${fieldLabel?.toLowerCase()}`
+                      ? `Correct ${fieldLabel}`
                       : tab === "research"
                         ? "Research for this selection"
                         : "What would you like to know?"}
@@ -1810,9 +1935,8 @@ function Workspace() {
                           <strong>{snapshot.title}</strong>
                           <small>
                             {request.field
-                              ? view.snapshot.columns.find(
-                                  (c) => c.key === request.field,
-                                )?.label
+                              ? columns.find((c) => c.key === request.field)
+                                  ?.label
                               : "Entire row"}{" "}
                             · {request.question}
                           </small>
@@ -2006,9 +2130,13 @@ function Workspace() {
                 onClick={(e) => {
                   actionTrigger.current = e.currentTarget;
                   if (view.refresh) {
+                    reconciliation.current?.invalidate();
                     setReviewOpen(!reviewOpen);
                     setTab("actions");
-                  } else setTab(tab === "correct" ? "actions" : "correct");
+                  } else {
+                    reconciliation.current?.invalidate();
+                    setTab(tab === "correct" ? "actions" : "correct");
+                  }
                 }}
               >
                 {view.refresh ? <Check /> : <PencilLine />}

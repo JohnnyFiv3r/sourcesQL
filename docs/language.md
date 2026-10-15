@@ -1,6 +1,6 @@
 # Implemented SQL and research operators
 
-Open WebQL accepts one DuckDB-style SELECT or nonrecursive WITH query. It resolves
+sourcesQL accepts one DuckDB-style SELECT or nonrecursive WITH query. It resolves
 only explicitly bound `input.<alias>` results, CTEs, derived relations and the web
 sources below. Closed AST validation rejects commands, physical tables, catalogs,
 file readers, extensions, arbitrary functions and multiple statements. Parameters

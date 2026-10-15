@@ -6,9 +6,9 @@ import uuid
 
 import pytest
 
-from open_webql.contracts import Column, Table, WebQLError, canonical, digest
-from open_webql.engine import Engine
-from open_webql.storage.store import Store
+from sourcesql.contracts import Column, Table, SourcesQLError, canonical, digest
+from sourcesql.engine import Engine
+from sourcesql.storage.store import Store
 from test_engine_boundaries import reference_worker
 
 
@@ -25,7 +25,7 @@ def test_imported_public_label_cannot_declassify_private_parent_closure(tmp_path
     bundle["content_sha256"] = digest({k: v for k, v in bundle.items() if k != "content_sha256"})
     restored = Engine(tmp_path / "restored", worker=reference_worker).import_bundle(bundle)
     restricted = Engine(tmp_path / "restored", worker=reference_worker, allow_private=False)
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         restricted.read_result(restored["result_id"])
     assert error.value.code == "unauthorized"
 
@@ -50,7 +50,7 @@ def test_bundle_quote_must_match_retained_source_text(tmp_path):
     record["metadata"]["evidence"][0]["support"][0]["quote"] = "FORGED-QUOTE"
     bundle["content_sha256"] = digest({k: v for k, v in bundle.items() if k != "content_sha256"})
     restored = Engine(tmp_path / "restored", worker=reference_worker)
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         restored.import_bundle(bundle)
     assert error.value.code == "evidence_invalid"
 
@@ -68,7 +68,7 @@ def test_retained_source_metadata_consumes_result_quota_even_for_tiny_table(tmp_
     }
     assert len(canonical(table.to_dict())) < store.quota
     assert len(canonical(metadata)) > store.quota
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         store.commit(table, metadata)
     assert error.value.code == "budget_exhausted"
     with store.db() as db:

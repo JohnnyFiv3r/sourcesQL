@@ -3,16 +3,16 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 export const LEGACY_RESOURCE_URI = "ui://research-legacy/research.html";
-export const RESOURCE_TEMPLATE = "ui://open-webql/research-{version}.html";
+export const RESOURCE_TEMPLATE = "ui://sourcesql/research-{version}.html";
 
 export function uiResourceUri(html: string): string {
   const version = createHash("sha256").update(html).digest("hex").slice(0, 16);
-  return `ui://open-webql/research-${version}.html`;
+  return `ui://sourcesql/research-${version}.html`;
 }
 
 function archivePath(htmlPath: string, uri: string): string {
   const match =
-    /^ui:\/\/(?:open-webql|research-legacy)\/research-([a-f0-9]{16})\.html$/.exec(uri);
+    /^ui:\/\/(?:sourcesql|open-webql|research-legacy)\/research-([a-f0-9]{16})\.html$/.exec(uri);
   if (!match) throw new Error("Invalid UI resource version");
   return resolve(
     dirname(htmlPath),
@@ -38,7 +38,8 @@ export async function readArchivedUiBundle(
   const html = await readFile(archivePath(htmlPath, uri), "utf8");
   if (
     uiResourceUri(html) !== uri &&
-    uiResourceUri(html).replace("open-webql", "research-legacy") !== uri
+    uiResourceUri(html).replace("sourcesql", "research-legacy") !== uri &&
+    uiResourceUri(html).replace("sourcesql", "open-webql") !== uri
   )
     throw new Error("UI resource version does not match its content");
   return html;

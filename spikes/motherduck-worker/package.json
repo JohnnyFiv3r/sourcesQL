@@ -1,0 +1,21 @@
+{
+  "name": "sourcesql-motherduck-gateway-probe",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build": "node scripts/prepare-definitions.mjs && wrangler deploy --dry-run --outdir dist",
+    "dev": "wrangler dev",
+    "setup-sql": "node scripts/setup.mjs",
+    "verify-live": "node scripts/verify.mjs"
+  },
+  "dependencies": {
+    "pg": "8.18.0"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.0"
+  }
+}

@@ -41,7 +41,7 @@ test("new UI builds change discovery's cache key and keep older resources readab
   ]);
   try {
     const { tools } = await client.listTools();
-    for (const name of ["open_research", "import_research"]) {
+    for (const name of ["open_research"]) {
       assert.equal(
         (
           tools.find((t) => t.name === name)!._meta?.ui as {
@@ -54,6 +54,8 @@ test("new UI builds change discovery's cache key and keep older resources readab
     for (const [uri, html] of [
       [newUri, newHtml],
       [oldUri, oldHtml],
+      [oldUri.replace("sourcesql", "open-webql"), oldHtml],
+      [oldUri.replace("sourcesql", "research-legacy"), oldHtml],
       [LEGACY_RESOURCE_URI, newHtml],
     ]) {
       const { contents } = await client.readResource({ uri });

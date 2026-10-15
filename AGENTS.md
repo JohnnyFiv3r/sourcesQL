@@ -1,4 +1,4 @@
-# Open WebQL implementation
+# sourcesQL implementation
 
 The owner authorized local implementation on 2026-10-13, including subagents. Build a working independent engine and integrate an isolated copy of the existing Results Demo. Preserve the original app and memoriesQL checkouts.
 

@@ -1,12 +1,17 @@
 # Qualification boundaries
 
-Current status is a local developer build. Passing local tests, an MCP save and a rendered local preview do not establish live provider quality, a hosted ChatGPT/Claude loop, deployment or release.
+The project is a developer alpha with local Docker, bounded live Exa search and
+an exercised hosted ChatGPT app. See [current status](../STATUS.md) for the scope
+of those checks. Each check establishes only its tested behavior; a local pass
+does not establish live research quality or another host's behavior.
 
 | Evidence | What it establishes | What still needs separate proof |
 | --- | --- | --- |
 | AST/compiler and planner tests | Admitted SQL shapes, typed staging and refusal paths | The whole DuckDB language or live source coverage |
 | Synthetic fixtures and mocked providers | Operator contracts, budgets, failure states and controlled evidence paths | General semantic accuracy, provider behavior or real billing |
 | Actual macOS worker tests | Restricted relational execution, typed output and tested filesystem/network boundaries | Other operating systems or untested worker/runtime combinations |
+| Native Linux Docker worker tests | Installed Python 3.12 engine and adversarial Landlock/seccomp checks on the recorded ARM64 kernel | Other kernels/architectures, actual Flights, live providers or a packaged MCP app |
+| Actual MotherDuck Flight suite | Installed Python 3.12 engine and all 44 Linux checks on the recorded native x86-64 runtime; stored report reopened through Postgres | Durable application storage/job service, Hobby, live research and MCP rendering |
 | Engine/store/JSON-lines bridge and app tests | Immutable results, authorized references, corrections, request/review lifecycle and full-data restoration | A model host executing the user-driven loop or rendering a widget |
 | Local browser preview | The observed controls, layout and navigation in that browser | ChatGPT/Claude permissions, messaging, polling and embedded rendering |
 | Live qualification | Named provider/model behavior, accounting, source quality and disclosure policy under an approved budget | Broad corpus recall or untested providers/models |
@@ -30,6 +35,19 @@ For transport/store checks that do not execute SQL, the measured research-bundle
 The explicit refresh identity test binds authorized saved data, projects exact canonical row IDs through `row_id_column`, and verifies that the identity column is removed from the published display schema. The app checks exact tracked scope and preserves the parent until review. Its identity-only fixture has no new external evidence and is marked unverified; it does not establish freshness or truth.
 
 The coordinator also verified actual macOS worker/isolation execution and a built wheel installed in a fresh environment outside the checkout. That installed fixture demo returned two rows, four source versions and six evidence records; the upstream memory package was not importable there. The local browser preview saved a planned-capacity correction from 500 to 480 and retained its Edited marker after reload. These are installed-engine and local-browser observations, not live or hosted-model qualification.
+
+The subsequent Python 3.12 qualification uses unchanged package versions and a
+source-matched installed engine. macOS Python 3.12.12 passes 191 tests, Ruff and
+mypy; 44 Linux-only cases are explicitly skipped. Native ARM64 Docker Python
+3.12.14 passes 231 tests, including all 44 Linux isolation cases; four macOS
+cases are skipped. Both receipts bind the same source snapshot. See the
+[Docker measurements and reproduction steps](docker.md) for kernel, image,
+process restrictions, persistence and scope. Actual MotherDuck x86-64/Python
+3.12.14 separately passes 231 tests and all 44 Linux checks, with an installed
+fixture demo, export and stored report reopen. See the [measured Python/Linux
+report](python-linux-qualification.md), including the two retained failures
+and corrected installer/Unix fixture. API availability alone was not counted
+as enforcement evidence.
 
 ## Remaining qualification
 

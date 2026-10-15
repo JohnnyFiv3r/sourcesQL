@@ -9,8 +9,8 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.usage import RequestUsage
 
-from open_webql.contracts import Budget, WebQLError
-from open_webql.providers import (
+from sourcesql.contracts import Budget, SourcesQLError
+from sourcesql.providers import (
     BraveProvider,
     ExaProvider,
     FixtureProvider,
@@ -20,7 +20,7 @@ from open_webql.providers import (
     SafeFetcher,
     SerperProvider,
 )
-from open_webql.providers.common import json_object, text_hash
+from sourcesql.providers.common import json_object, text_hash
 
 
 def public_dns(host, port, **kwargs):
@@ -115,7 +115,7 @@ def test_fixture_norm_and_score_are_labeled_fixture_only():
 def test_fixture_dates_require_explicit_undated_policy():
     provider = FixtureProvider()
     budget = Budget()
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         provider.search(["campuses"], {"published_after": "2026-01-01"}, budget)
     assert budget.counts == {}
     rows = provider.search(
@@ -159,7 +159,7 @@ def test_brave_request_and_excerpt_semantics():
 def test_exa_current_nested_contents_and_dates():
     def response(request):
         body = json.loads(request.content)
-        assert body["contents"] == {"text": {"maxCharacters": 16000}}
+        assert body["contents"] == {"highlights": True}
         assert body["startPublishedDate"] == "2026-01-01T00:00:00Z"
         assert "outputSchema" not in body and "livecrawl" not in body
         return httpx.Response(
@@ -170,7 +170,7 @@ def test_exa_current_nested_contents_and_dates():
                     {
                         "url": "https://public.example/a",
                         "title": "Campus",
-                        "text": "Retained page text",
+                        "highlights": ["Retained page excerpt"],
                         "publishedDate": "2026-05-01T00:00:00Z",
                     }
                 ],
@@ -180,7 +180,7 @@ def test_exa_current_nested_contents_and_dates():
 
     provider = ExaProvider("mock-key", mock_client(response))
     row = provider.search(["campus"], {"published_after": "2026-01-01"}, Budget())[0]
-    assert row["content_basis"] == "provider_text" and row["coverage"]["complete"] is False
+    assert row["content_basis"] == "excerpt" and row["coverage"]["complete"] is False
     usage = provider.events[0]["usage"]
     assert usage["cost_microusd"] is None and usage["estimated_cost_microusd"] == 7000
 
@@ -220,7 +220,7 @@ def test_serper_organic_only_and_relative_date_unknown():
 def test_unsupported_dates_refused_before_dispatch(provider_class):
     provider = provider_class("mock-key", mock_client(lambda _: pytest.fail("unexpected dispatch")))
     budget = Budget()
-    with pytest.raises(WebQLError, match="post-filter"):
+    with pytest.raises(SourcesQLError, match="post-filter"):
         provider.search(["campus"], {"published_after": "2026-01-01"}, budget)
     assert budget.counts == {}
 
@@ -231,10 +231,10 @@ def test_failed_search_is_not_successful_empty_and_cannot_retry_beyond_budget():
         "mock-key", mock_client(lambda r: calls.append(r) or httpx.Response(503))
     )
     budget = Budget({"max_search_requests": 1})
-    with pytest.raises(WebQLError) as first:
+    with pytest.raises(SourcesQLError) as first:
         provider.search(["campus"], {}, budget)
     assert first.value.code == "provider_unavailable"
-    with pytest.raises(WebQLError) as second:
+    with pytest.raises(SourcesQLError) as second:
         provider.search(["campus"], {}, budget)
     assert second.value.code == "budget_exhausted" and len(calls) == 1
 
@@ -248,7 +248,7 @@ def test_transport_timeout_retains_unknown_remote_outcome_without_retry():
 
     provider = BraveProvider("mock-key", mock_client(timeout))
     budget = Budget()
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         provider.search(["campus"], {}, budget)
     assert getattr(error.value, "remote_outcome_unknown") is True
     assert provider.events[0]["status"] == "remote_outcome_unknown"
@@ -258,7 +258,7 @@ def test_transport_timeout_retains_unknown_remote_outcome_without_retry():
 
 @pytest.mark.parametrize("raw", [b'{"x":1,"x":2}', b'{"x":NaN}', b"[]", b"\xff"])
 def test_invalid_provider_json_is_rejected(raw):
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         json_object(raw)
 
 
@@ -378,7 +378,7 @@ def test_unsupported_or_invented_support_fails_instead_of_returning_value():
     result = provider.semantic("SEM_EXTRACT", "500 MW", "capacity", {}, {}, Budget())
     assert result.value is None and result.status == "evidence_invalid"
     budget = Budget()
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         provider.semantic("SEM_EXTRACT", "500 MW", "capacity", {}, {"type": "UUID"}, budget)
     assert budget.counts == {}
 
@@ -420,7 +420,7 @@ def test_model_validation_retry_consumes_same_shared_allowance():
     assert result.value is False and budget.counts["model_requests"] == 2
     assert len(calls) == 2
     budget = Budget({"max_model_requests": 0})
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         provider.semantic("SEM_MATCH", "text", "is campus", {}, {}, budget)
     assert error.value.code == "budget_exhausted" and len(calls) == 2
 
@@ -474,7 +474,7 @@ def test_live_guard_refuses_before_any_dispatch_without_grant():
         }
     )
     budget = Budget()
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         provider.search(["campus"], {}, budget)
     assert error.value.code == "unauthorized" and budget.counts == {}
 
@@ -490,11 +490,11 @@ def test_strict_metering_and_unconfigured_scorer_refused_before_dispatch():
     }
     provider = ProviderRegistry(config)
     budget = Budget({"max_cost_microusd": 1000})
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         provider.search(["campus"], {}, budget)
     assert error.value.code == "unsupported_capability" and budget.counts == {}
     provider = ProviderRegistry({**config, "metering_policy": "estimated"})
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         provider.semantic("SEM_SCORE", "text", "criterion", {}, {}, budget)
     assert budget.counts == {}
 

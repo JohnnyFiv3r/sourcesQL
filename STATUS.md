@@ -1,15 +1,54 @@
-# Build status
+# Project status
 
-Local developer alpha `0.1.0a1`. The engine, isolated research app and distributable engine artifacts are implemented. Fixture mode is the default; live profiles remain disabled in the example configuration. No publication or paid provider calls have occurred.
+sourcesQL is a developer alpha (`0.1.0a1`). The source includes a research SQL
+engine, an MCP App, local Docker packaging and an optional Vercel/MotherDuck
+backend. Installation is from this repository; no package release is required
+by the quickstart.
 
-The local build covers admitted SQL staging, seven external operator contracts, explicit provider profiles, typed immutable results, exact supporting spans, cumulative request allowances, durable dispatch intent, idempotent retries, cancellation, private dependency closure, scoped transport identity, full-data paging, corrections, linked investigations and refresh review. Composed SQL keeps conservative input-set lineage rather than invented final-cell citations.
+## Working paths
 
-Offline Python qualification passes 190 tests, including actual macOS worker execution and file/network/credential/timeout checks. Ruff and mypy pass. The research app builds and its 59 tests cover full engine round trips, cross-process edit conflicts, crash-lock refusal, owned subprocess cleanup and receipt coverage. An isolated installed wheel runs the fictional demo outside the source checkout; memoriesQL is not importable there. A separate app checkout installs/builds with its locked public npm dependencies; its full audit reports zero vulnerabilities. The browser shows an engine-backed table and retains a visibly marked correction after reload.
+- Research SQL with typed immutable results, retained sources and execution receipts.
+- Fixture mode with no search or model credentials; opt-in live provider profiles.
+- Local HTTP and stdio MCP transports, an interactive research table, separate
+  corrections, linked investigations, explicit refresh review and bundle export/restore.
+- Durable MotherDuck results and jobs, bounded on-demand Python Flights, cancellation
+  and lost-response recovery. One active job per owner namespace; queued jobs resume explicitly.
+- An owner-authenticated ChatGPT app with OAuth and enforced CSP. Saved-table
+  rendering, corrections across reload, tree/Back navigation, a small live Auto
+  expansion and fixture-based refresh review have been exercised.
 
-The original app's 42 pinned files and the memoriesQL checkout remain unchanged. REA was bypassed because the existing audit, documented operator behavior and app source supplied the needed product definition.
+## Checks at initial publication
 
-This is not the full qualified v0.1 target or evidence of parity with another research product. The owner acceptance ledger has 124 scenarios; many broader lifecycle/accounting cases remain unqualified. Live search/model quality, cost comparison and actual ChatGPT/Claude rendering have not run. Credentials and confirmed credit/spending permission are required for live qualification.
+The macOS/Python 3.12 suite passes **406 tests**, with **44 Linux-only skips**.
+The app builds and passes **172 tests** on macOS and native ARM64 Linux Docker.
+Docker passes **446 Python tests**, with **four macOS-only skips**, plus actual
+HTTP/MCP, corrections, export, restart persistence and stdio checks. The README's
+fixture SQL example runs against the real engine without provider calls. These
+checks made no live search or model calls. See the Docker and runtime guides.
 
-SQL execution currently requires macOS `sandbox-exec`; other operating systems refuse execution. The worker has explicit stage/output/deadline limits. The 100 MiB result quota covers logical retained table and result metadata, not a hard filesystem quota for SQLite overhead, receipts or cache. The app bridge has a synchronous 30-second deadline, without a pending-work service. Strict total cash/token profiles refuse; supported live profiles explicitly label estimated metering.
+These results establish the tested execution and control paths. They do not
+measure broad search recall, live semantic accuracy, a complete research workload
+or comparative product quality.
 
-See [qualification](docs/qualification.md), [provider setup](docs/providers.md) and [comparison method](docs/comparison.md). Runtime data and detailed owner evidence stay outside public source artifacts.
+## Current limits
+
+The qualified hosted Exa profile uses Auto search excerpts and permits **two
+queries and ten candidate pages per job**, with no additional fetches or model
+calls. Broad discovery instructions ask for at least six diverse queries. An
+agent must report when the configured profile cannot accommodate that coverage;
+it must not silently shrink the task or bypass execution limits. Larger fanout
+and hosted semantic processing need separately configured and qualified profiles.
+
+Hosted setup is manual and supports one configured owner. This is not a shared
+multi-tenant service. Claude rendering, fresh-adopter hosted onboarding, broad
+live research quality and comparative benchmarks remain open qualification work.
+Application allowances are finite reservations, not account-wide provider billing
+hard stops or a guarantee of free hosting.
+
+## Setup and references
+
+Start with the [README](README.md), [Docker guide](docs/docker.md),
+[provider configuration](docs/providers.md) or [personal hosting guide](docs/vercel.md).
+The [SQL reference](docs/language.md), [qualification notes](docs/qualification.md)
+and [runtime qualification](docs/python-linux-qualification.md) describe execution
+contracts and the scope of the recorded checks.

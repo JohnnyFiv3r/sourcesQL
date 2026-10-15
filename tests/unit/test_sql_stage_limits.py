@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from open_webql.contracts import WebQLError
-from open_webql.execution.worker_process import StageLimitExceeded, evaluate
+from sourcesql.contracts import SourcesQLError
+from sourcesql.execution.worker_process import StageLimitExceeded, evaluate
 
 
 def request(rows, maximum):
@@ -25,7 +25,7 @@ def test_exact_stage_ceiling_is_complete_but_one_more_row_is_budget_failure():
     complete = evaluate(request(1001, 1001))
     assert len(complete["rows"]) == 1001
     assert complete["rows"][-1] == {"id": 1000}
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         evaluate(request(1002, 1001))
     assert isinstance(error.value, StageLimitExceeded)
     assert error.value.code == "budget_exhausted"

@@ -9,9 +9,9 @@ import uuid
 
 import pytest
 
-from open_webql.contracts import Column, Table, WebQLError, digest
-from open_webql.engine import Engine
-from open_webql.execution.worker_process import evaluate
+from sourcesql.contracts import Column, Table, SourcesQLError, digest
+from sourcesql.engine import Engine
+from sourcesql.execution.worker_process import evaluate
 
 
 def reference_worker(sql, tables, parameters=None, timeout=30):
@@ -49,7 +49,7 @@ def imported(engine, classification="synthetic_fixture"):
 
 
 def make_bundle(records, root):
-    body = {"format": "open-webql.engine-bundle.v1", "root_result_id": root, "results": records}
+    body = {"format": "sourcesql.engine-bundle.v1", "root_result_id": root, "results": records}
     return {**body, "content_sha256": digest(body)}
 
 
@@ -71,13 +71,50 @@ def test_private_disclosure_refusal_precedes_worker_and_provider_dispatch(tmp_pa
     calls = []
     engine = Engine(tmp_path / "store", worker=lambda *a, **k: calls.append(a))
     result = imported(engine, "private_local")
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         engine.query(
             query="SELECT WEB_SEARCH(secret) AS found FROM input.private_source",
             inputs={"private_source": {"result_id": result["result_id"]}},
         )
     assert error.value.code == "disclosure_required"
     assert calls == []
+
+
+def test_each_new_worker_session_is_checked_before_provider_dispatch(tmp_path, monkeypatch):
+    import sourcesql.engine as engine_module
+    import sourcesql.providers
+
+    sessions, probes, dispatches = [], [], []
+
+    class ProbeSession:
+        def __enter__(self):
+            sessions.append(self)
+            return self
+
+        def run_sql(self, sql, tables, parameters=None, timeout=30):
+            if "worker_probe" in sql:
+                probes.append(self)
+                if len(sessions) == 2:
+                    raise SourcesQLError(
+                        "unsupported_capability", "Synthetic protected launch failure", "worker"
+                    )
+            return reference_worker(sql, tables, parameters, timeout)
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(engine_module, "WorkerSession", ProbeSession)
+    monkeypatch.setattr(
+        sourcesql.providers.ProviderRegistry, "search", lambda *args: dispatches.append(args)
+    )
+    engine = Engine(tmp_path / "store")
+    assert engine.query(query="SELECT 7 AS value")["rows"] == [{"value": 7}]
+    assert engine.worker_checked
+    with pytest.raises(SourcesQLError) as error:
+        engine.query(query="SELECT url FROM WEB_SEARCH('synthetic request')", profile="fixture")
+    assert error.value.code == "unsupported_capability"
+    assert len(sessions) == len(probes) == 2
+    assert dispatches == []
 
 
 @pytest.mark.parametrize(
@@ -95,7 +132,7 @@ def test_import_rejects_values_that_violate_declared_type_before_visibility(
     tmp_path, logical_type, value, nullable
 ):
     engine = make_engine(tmp_path)
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.import_table(
             [{"key": "value", "logical_type": logical_type, "nullable": nullable}],
             [{"value": value}],
@@ -106,7 +143,7 @@ def test_import_rejects_values_that_violate_declared_type_before_visibility(
 
 def test_invalid_row_identity_cannot_leave_completed_import_run(tmp_path):
     engine = make_engine(tmp_path)
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.import_table(
             [{"key": "value"}],
             [{"value": "fixture"}],
@@ -119,7 +156,7 @@ def test_invalid_row_identity_cannot_leave_completed_import_run(tmp_path):
 def test_quota_failed_import_has_no_completed_receipt_or_published_result(tmp_path):
     engine = make_engine(tmp_path)
     engine.store.quota = 0
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         imported(engine)
     assert error.value.code == "budget_exhausted"
     with engine.store.db() as db:
@@ -132,7 +169,7 @@ def test_private_receipt_cannot_be_read_by_private_disabled_launcher(tmp_path):
     owner = make_engine(tmp_path)
     result = imported(owner, "private_local")
     restricted = make_engine(tmp_path, allow_private=False)
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         restricted.run_status(result["run_id"])
     assert error.value.code == "unauthorized"
 
@@ -151,7 +188,7 @@ def test_private_bytes_not_read_before_private_disabled_refusal(tmp_path, monkey
         return original(path)
 
     monkeypatch.setattr(Path, "read_bytes", read)
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         restricted.read_result(result["result_id"])
     assert error.value.code == "unauthorized"
 
@@ -166,7 +203,7 @@ def test_idempotent_query_survives_restart_without_worker_dispatch(tmp_path):
     second = restarted.query(**request)
     assert second["result_id"] == first["result_id"]
     assert second["rows"] == [{"value": 7}]
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         restarted.query(**{**request, "query": "SELECT 8 AS value"})
     assert error.value.code == "idempotency_conflict"
 
@@ -181,9 +218,9 @@ def test_revoked_ancestor_blocks_saved_reads_and_idempotent_reuse(tmp_path):
     }
     child = engine.query(**request)
     engine.store.revoke(parent["result_id"])
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.read_result(child["result_id"])
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.query(**request)
 
 
@@ -192,12 +229,12 @@ def test_tampered_bundle_and_cyclic_graph_are_refused_without_visibility(tmp_pat
     one = bundle_record("foreign-one")
     bundle = make_bundle({"foreign-one": one}, "foreign-one")
     bundle["results"]["foreign-one"]["table"]["rows"][0]["value"] = "tamper"
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.import_bundle(bundle)
     assert counts(engine) == (0, 0)
     one = bundle_record("foreign-one", parents=[{"result_id": "foreign-two"}])
     two = bundle_record("foreign-two", parents=[{"result_id": "foreign-one"}])
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.import_bundle(make_bundle({"foreign-one": one, "foreign-two": two}, "foreign-one"))
     assert counts(engine) == (0, 0)
 
@@ -212,7 +249,7 @@ def test_bundle_schema_failure_has_no_visible_ancestors(tmp_path):
             {"result_id": "foreign-parent", "content_sha256": parent["metadata"]["content_sha256"]}
         ],
     )
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.import_bundle(
             make_bundle({"foreign-parent": parent, "foreign-root": invalid_root}, "foreign-root")
         )
@@ -225,7 +262,7 @@ def test_bundle_parent_content_pin_must_match_exact_ancestor(tmp_path):
     child = bundle_record(
         "foreign-child", parents=[{"result_id": "foreign-parent", "content_sha256": "0" * 64}]
     )
-    with pytest.raises(WebQLError) as error:
+    with pytest.raises(SourcesQLError) as error:
         engine.import_bundle(
             make_bundle({"foreign-parent": parent, "foreign-child": child}, "foreign-child")
         )
@@ -236,7 +273,7 @@ def test_bundle_parent_content_pin_must_match_exact_ancestor(tmp_path):
 def test_bundle_root_identity_must_match_record_identity(tmp_path):
     engine = make_engine(tmp_path)
     record = bundle_record("different-identity")
-    with pytest.raises(WebQLError):
+    with pytest.raises(SourcesQLError):
         engine.import_bundle(make_bundle({"foreign-root": record}, "foreign-root"))
     assert counts(engine) == (0, 0)
 
@@ -300,7 +337,7 @@ def test_post_commit_control_failure_cannot_leave_failed_run_with_visible_result
     monkeypatch.setattr(engine.store, "update_run", crash_once)
     try:
         engine.query(query="SELECT 7 AS value")
-    except WebQLError:
+    except SourcesQLError:
         pass
     with engine.store.db() as db:
         receipts = [json.loads(r[0]) for r in db.execute("SELECT receipt FROM runs")]
@@ -325,7 +362,7 @@ def test_cancelled_query_cannot_publish_and_terminal_transition_gets_new_revisio
     def run():
         try:
             engine.query(query="SELECT 7 AS value")
-        except WebQLError as error:
+        except SourcesQLError as error:
             errors.append(error)
 
     thread = threading.Thread(target=run)
@@ -365,18 +402,18 @@ def test_late_provider_timeout_cannot_erase_cancellation_or_unknown_settlement(
             entered.set()
             assert release.wait(3)
             event["status"] = "remote_outcome_unknown"
-            raise WebQLError("provider_unavailable", "Synthetic provider timeout", "acquisition")
+            raise SourcesQLError("provider_unavailable", "Synthetic provider timeout", "acquisition")
 
-    import open_webql.providers
+    import sourcesql.providers
 
-    monkeypatch.setattr(open_webql.providers, "ProviderRegistry", MockRegistry)
+    monkeypatch.setattr(sourcesql.providers, "ProviderRegistry", MockRegistry)
     engine = make_engine(tmp_path)
     errors = []
 
     def run():
         try:
             engine.query(query="SELECT url FROM WEB_SEARCH('synthetic request')")
-        except WebQLError as error:
+        except SourcesQLError as error:
             errors.append(error)
 
     thread = threading.Thread(target=run)

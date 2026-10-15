@@ -1,5 +1,5 @@
 {
-  "name": "open-webql-research-app",
+  "name": "sourcesql-research-app",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,8 @@
     "start": "node --import tsx server/main.ts",
     "stdio": "node --import tsx server/main.ts --stdio",
     "test": "node --import tsx --test tests/*.test.ts",
-    "check": "npm run build && npm test"
+    "check": "npm run build && npm test",
+    "build:vercel": "npm run build && node --import tsx scripts/build-vercel.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.2.0",
@@ -17,7 +18,9 @@
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "express": "^5.1.0",
+    "jose": "6.2.12",
     "lucide-react": "^0.577.0",
+    "pg": "8.18.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.2.0"
@@ -25,11 +28,15 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.19.0",
+    "@types/pg": "8.23.1",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "prettier": "^3.9.10",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^6.4.0"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

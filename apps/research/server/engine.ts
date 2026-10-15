@@ -59,9 +59,9 @@ export class PythonEngine implements ResearchEngine {
       const id = randomUUID();
       const child = spawn(
         this.processOptions.command ??
-          this.environment.WEBQL_PYTHON ??
+          this.environment.SOURCESQL_PYTHON ??
           join(this.projectRoot, ".venv/bin/python"),
-        this.processOptions.args ?? ["-m", "open_webql.bridge"],
+        this.processOptions.args ?? ["-m", "sourcesql.bridge"],
         {
           cwd: this.projectRoot,
           env: this.environment,
@@ -113,7 +113,7 @@ export class PythonEngine implements ResearchEngine {
       child.on("error", () =>
         finish(
           new Error(
-            "Local WebQL engine unavailable; configure WEBQL_PYTHON and the project environment.",
+            "Local sourcesQL engine unavailable; configure SOURCESQL_PYTHON and the project environment.",
           ),
         ),
       );
@@ -198,7 +198,7 @@ export function resultSnapshot(
     id: reference.snapshot_id,
     title: reference.title,
     origin: {
-      engine: "open-webql",
+      engine: "sourcesql",
       resultId: result.result_id,
       runId: result.run_id,
     },
