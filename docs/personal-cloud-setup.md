@@ -9,7 +9,9 @@ as the configured sole owner.
 This is an account setup tool, not a hosted service signup. Account creation,
 OAuth registration, login consent and any Vercel protection exception remain
 visible account decisions. Setup does not add a payment method, change a plan,
-configure a schedule, promote to Production or execute live searches.
+configure a schedule, promote the research app to Production or execute live searches.
+A new Vercel project needs a static Production placeholder before the app can
+use Preview; this requires an explicit option in the reviewed plan.
 
 `enable_execution` controls all gateway submissions. With the default fixture
 provider, only fixtures run. With a deliberately selected live provider, enabling
@@ -85,6 +87,7 @@ Create a token-free JSON configuration outside source control, for example
   "database": "sourcesql_personal",
   "principal": "my-stable-owner-id",
   "create_database": true,
+  "allow_static_bootstrap": true,
   "enable_execution": false,
   "daily_flight_seconds": 600,
   "oauth": {
@@ -108,6 +111,20 @@ ID and omit `team_id`. Setup checks the authenticated destination and every
 recovered project's owning account. An existing project is used only if this configuration explicitly adds
 `"adopt_existing_project": true`; that authorizes changes to its Preview
 configuration and alias. Prefer a dedicated project.
+
+Vercel makes a new project's [first deployment Production](https://vercel.com/docs/deployments/environments),
+even when Preview is requested. `allow_static_bootstrap: true` permits setup to
+fill that slot with one static HTML file, with no functions, database access or
+research data. Setup waits for it to be Ready before provisioning backend
+resources, encrypting Preview credentials or uploading the app. The plan binds
+the placeholder's exact bytes. An interrupted submission recovers the same
+attempt; an uncertain match or failed build stops for inspection.
+
+The option defaults to false. Without it, a project that has no Production
+deployment stops before backend setup or app upload. An existing project with a
+Production deployment does not need another placeholder. The research app still
+uses Preview, and the configured alias is assigned only after its Preview target
+and setup metadata are verified. The placeholder adds no paid feature or Flight.
 
 The alias must be an explicit `*.vercel.app` hostname. The OAuth API audience must
 be `https://<alias>/mcp`. Keep the principal stable: changing it creates a different
@@ -202,7 +219,8 @@ sourcesql setup personal-cloud apply \
 ```
 
 Setup checks the intended account, creates or recovers the named Vercel project,
-installs locked local Node dependencies, provisions one unscheduled F4 Flight with
+completes an explicitly approved static bootstrap when needed, installs locked
+local Node dependencies, and provisions one unscheduled F4 Flight with
 a 120-second runtime limit, and encrypts only Preview environment variables. It
 uploads reviewed public files and assigns the exact alias when the deployment is
 Ready. Provider credentials stay in MotherDuck Flight secrets. The database

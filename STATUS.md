@@ -7,17 +7,27 @@ for adoption and qualification boundaries.
 
 ## Fresh hosting patch: 0.2.1 candidate
 
-A live fresh-setup attempt exposed two Vercel API assumptions. Project creation
-rejects a top-level `nodeVersion`; the patch omits it there while retaining Node
+A live fresh-setup attempt exposed Vercel API and deployment assumptions. Project
+creation rejects a top-level `nodeVersion`; the patch omits it there while retaining Node
 24 in deployment settings. A legacy user record can report Hobby but route
 unscoped writes to a default Pro team. The existing destination guard stopped
 before credentials or MotherDuck resources were written. The patch now refuses
 that personal scope before project creation and asks for an explicit workspace.
 
-Both regressions fail on the earlier implementation and pass with the patch;
-**21 personal-cloud tests** and **18 affected Python setup/packaging tests** pass.
-The app and deployment bundle build successfully. Actual Hobby provisioning and
-fixture execution remain pending a usable workspace; this candidate is not yet
+Vercel also classifies the first deployment as Production. The app upload now
+requires an existing Production slot or explicit approval for a static,
+credential-free placeholder. It completes before any backend credentials or app
+files are uploaded. The research app remains in Preview.
+
+The project-field, destination and first-deployment regressions fail on the earlier
+implementation and pass with the patch. **26 personal-cloud tests** and **18
+affected Python setup/packaging tests** pass. Both candidate distributions pass
+fresh installed-package checks outside the checkout on Python 3.13/Node 24, and
+package audits find no private material.
+
+Hobby resources were provisioned in the approved workspace, but the initial
+Production classification stopped setup before research execution. Corrected
+Preview recovery and fixture execution remain pending; this candidate is not yet
 published. The released 0.2.0 artifacts remain unchanged.
 
 ## Continuation and manual updates: 0.2.0

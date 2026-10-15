@@ -16,6 +16,7 @@ import {
   createPlan,
   assertPlan,
   deploymentFiles,
+  bootstrapFiles,
   applyPlan,
   environmentSettings,
   setupArguments,
@@ -76,7 +77,11 @@ const env = {
   VERCEL_TOKEN: "vercel-test-secret",
   MOTHERDUCK_TOKEN: "motherduck-test-secret",
 };
-function fakeAPI(plan, captures, { lost = false } = {}) {
+function fakeAPI(
+  plan,
+  captures,
+  { lost = false, seeded = true, productionState = "READY" } = {},
+) {
   let created = false,
     deploymentMeta;
   return async (path, body) => {
@@ -88,16 +93,24 @@ function fakeAPI(plan, captures, { lost = false } = {}) {
             id: "prj_fixture",
             name: plan.config.project,
             accountId: plan.config.account_id,
+            targets: seeded
+              ? { production: { id: "dpl_seed", readyState: productionState } }
+              : {},
           }
         : undefined;
     if (path === "/v11/projects") {
       if (Object.hasOwn(body, "nodeVersion"))
-        throw Error("vercel_request_failed_400_additional_property_nodeVersion");
+        throw Error(
+          "vercel_request_failed_400_additional_property_nodeVersion",
+        );
       created = true;
       return {
         id: "prj_fixture",
         name: plan.config.project,
         accountId: plan.config.account_id,
+        targets: seeded
+          ? { production: { id: "dpl_seed", readyState: productionState } }
+          : {},
       };
     }
     if (path.includes("/env?")) return { created: [], failed: [] };
@@ -124,11 +137,61 @@ function fakeAPI(plan, captures, { lost = false } = {}) {
   };
 }
 
+function bootstrapAPI(
+  plan,
+  captures,
+  {
+    lost = false,
+    readyState = "READY",
+    mutate = (deployment) => deployment,
+    matches = (meta) => [
+      { uid: "dpl_wrong_plan", meta: { ...meta, sourcesqlBootstrap: "other" } },
+      {
+        uid: "dpl_wrong_attempt",
+        meta: { ...meta, sourcesqlAttempt: "other" },
+      },
+      { uid: "dpl_bootstrap", meta },
+    ],
+  } = {},
+) {
+  const delegate = fakeAPI(plan, captures, { seeded: false });
+  let metadata;
+  return {
+    ready: () => {
+      readyState = "READY";
+    },
+    api: async (route, body, options) => {
+      if (route === "/v13/deployments" && body.meta?.sourcesqlBootstrap) {
+        captures.push({ path: route, body });
+        metadata = body.meta;
+        if (lost) throw Error("lost bootstrap response");
+        return { id: "dpl_bootstrap" };
+      }
+      if (route === "/v13/deployments/dpl_bootstrap") {
+        captures.push({ path: route, body });
+        return mutate({
+          id: "dpl_bootstrap",
+          projectId: "prj_fixture",
+          ownerId: plan.config.account_id,
+          target: "production",
+          readyState,
+          meta: metadata,
+        });
+      }
+      if (route.startsWith("/v6/deployments")) {
+        captures.push({ path: route, body });
+        return { deployments: matches(metadata) };
+      }
+      return delegate(route, body, options);
+    },
+  };
+}
 test("strict configuration rejects secrets, invalid owners, different destinations and partial OAuth", () => {
   for (const value of [
     { ...config(), EXA_API_KEY: "hidden" },
     { ...config(), team_id: "team_elsewhere" },
     { ...config(), alias: "localhost" },
+    { ...config(), allow_static_bootstrap: "yes" },
     {
       ...config(),
       oauth: { ...config().oauth, jwks_uri: "https://untrusted.example/key" },
@@ -136,6 +199,11 @@ test("strict configuration rejects secrets, invalid owners, different destinatio
   ])
     assert.throws(() => validateConfig(value));
   assert.equal(validateConfig(config()).provider.name, "fixture");
+  assert.equal(
+    validateConfig({ ...config(), allow_static_bootstrap: true })
+      .allow_static_bootstrap,
+    true,
+  );
 });
 test("a reviewed plan binds every public file, exact setup source, account, owner, provider and limits", () => {
   const path = workspace(),
@@ -154,6 +222,28 @@ test("a reviewed plan binds every public file, exact setup source, account, owne
   assert.equal(first.limits.scheduled_jobs, 0);
   assert.equal(first.limits.active_jobs, 1);
   assert.equal(first.limits.execution_enabled, false);
+  assert.deepEqual(first.static_bootstrap_files_sha256, {
+    "index.html": hash(Buffer.from(bootstrapFiles()[0].data, "base64")),
+  });
+  const optedIn = createPlan(
+    { ...config(), allow_static_bootstrap: true },
+    root,
+    path,
+  );
+  assert.throws(
+    () => assertPlan(first, optedIn, first.plan_sha256),
+    /plan_changed/,
+  );
+  assert.ok(
+    optedIn.operations.some((operation) =>
+      /static Production placeholder/.test(operation),
+    ),
+  );
+  assert.ok(
+    !first.operations.some((operation) =>
+      /static Production placeholder/.test(operation),
+    ),
+  );
 });
 test("upload allowlist excludes all credentials, private files and provisioning state", () => {
   const files = deploymentFiles(root);
@@ -215,7 +305,6 @@ test("server credentials only enter encrypted Preview requests; persisted state 
   const deployment = captures.find(
     (entry) => entry.path === "/v13/deployments",
   ).body;
-  assert.ok(!Object.hasOwn(deployment, "target"));
   assert.equal(deployment.projectSettings.nodeVersion, "24.x");
   const creations = captures.filter(
     (entry) => entry.path === "/v13/deployments",
@@ -234,6 +323,276 @@ test("server credentials only enter encrypted Preview requests; persisted state 
     captures.filter((entry) => entry.path === "/v13/deployments").length,
     creations,
   );
+});
+test("a missing or unready Production seed refuses before app provisioning", async () => {
+  for (const productionState of [undefined, "ERROR", "CANCELED", "BUILDING"]) {
+    const path = workspace(),
+      plan = createPlan(config(), root, path),
+      captures = [],
+      setupCalls = [];
+    const unexpectedSetup = (name) => () => {
+      setupCalls.push(name);
+      throw Error("unexpected setup call");
+    };
+    await assert.rejects(
+      applyPlan(plan, root, path, env, {}, () => {}, {
+        api: fakeAPI(plan, captures, {
+          seeded: productionState !== undefined,
+          productionState,
+        }),
+        run: unexpectedSetup("run"),
+        connect: unexpectedSetup("connect"),
+        setupModule: {
+          parseArguments: unexpectedSetup("parseArguments"),
+          outputSettings: unexpectedSetup("outputSettings"),
+        },
+      }),
+      /^Error: vercel_first_deployment_requires_static_bootstrap$/,
+    );
+    assert.deepEqual(setupCalls, []);
+    assert.ok(!captures.some((entry) => entry.path.includes("/env?")));
+    assert.ok(!captures.some((entry) => entry.path === "/v13/deployments"));
+  }
+});
+test("an opted-in static bootstrap recovers a lost response and reaches Ready before app provisioning", async () => {
+  const path = workspace(),
+    plan = createPlan(
+      { ...config(), allow_static_bootstrap: true },
+      root,
+      path,
+    ),
+    captures = [],
+    state = {},
+    snapshots = [],
+    setupCalls = [];
+  flightReceipt(path, plan);
+  const platform = bootstrapAPI(plan, captures, {
+    lost: true,
+    readyState: "BUILDING",
+  });
+  const injected = {
+    api: platform.api,
+    run: (command) => setupCalls.push(command),
+    connect: () => {
+      setupCalls.push("connect");
+      throw Error("unexpected connection");
+    },
+    setupModule: {
+      parseArguments: (...args) => {
+        setupCalls.push("parseArguments");
+        return setupModule.parseArguments(...args);
+      },
+      outputSettings: (...args) => {
+        setupCalls.push("outputSettings");
+        return setupModule.outputSettings(...args);
+      },
+    },
+  };
+  const apply = () =>
+    applyPlan(
+      plan,
+      root,
+      path,
+      env,
+      state,
+      () => snapshots.push(structuredClone(state)),
+      injected,
+    );
+  await assert.rejects(apply(), /lost bootstrap response/);
+  assert.equal(state.bootstrap_attempted, true);
+  assert.equal(state.bootstrap_deployment_id, undefined);
+  assert.ok(
+    snapshots.some(
+      (saved) => saved.bootstrap_attempted && saved.bootstrap_attempt_id,
+    ),
+  );
+  const bootstrap = captures.find(
+    (entry) => entry.body?.meta?.sourcesqlBootstrap,
+  ).body;
+  assert.equal(bootstrap.target, "production");
+  assert.equal(bootstrap.meta.sourcesqlBootstrap, plan.plan_sha256);
+  assert.equal(bootstrap.meta.sourcesqlAttempt, state.bootstrap_attempt_id);
+  assert.deepEqual(bootstrap.files, bootstrapFiles());
+  assert.deepEqual(
+    bootstrap.files.map((file) => file.file),
+    ["index.html"],
+  );
+  const html = Buffer.from(bootstrap.files[0].data, "base64").toString("utf8");
+  assert.doesNotMatch(html, /<script\b/i);
+  assert.equal(bootstrap.projectSettings.installCommand, "");
+  assert.equal(bootstrap.projectSettings.buildCommand, "");
+  assert.equal(bootstrap.projectSettings.outputDirectory, ".");
+  assert.ok(!Object.hasOwn(bootstrap, "env"));
+  assert.ok(!JSON.stringify(bootstrap).includes("test-secret"));
+  assert.ok(
+    !JSON.stringify(bootstrap).includes(
+      JSON.parse(readFileSync(join(path, "owner-secret.json"))).token,
+    ),
+  );
+  const pending = await apply();
+  assert.equal(pending.ready, false);
+  assert.equal(pending.stage, "bootstrap");
+  assert.equal(pending.bootstrap_deployment_id, "dpl_bootstrap");
+  assert.equal(pending.bootstrap_state, "BUILDING");
+  assert.deepEqual(setupCalls, []);
+  assert.ok(!captures.some((entry) => entry.path.includes("/env?")));
+  assert.equal(
+    captures.filter((entry) => entry.path === "/v13/deployments").length,
+    1,
+  );
+  platform.ready();
+  const beforeReady = captures.length;
+  const result = await apply();
+  assert.equal(result.ready, true);
+  assert.equal(state.bootstrap_state, "READY");
+  assert.deepEqual(setupCalls, ["npm", "parseArguments", "outputSettings"]);
+  const environment = captures.find((entry) => entry.path.includes("/env?"));
+  assert.ok(captures.indexOf(environment) >= beforeReady);
+  assert.ok(
+    environment.body.every(
+      (entry) =>
+        entry.type === "encrypted" &&
+        JSON.stringify(entry.target) === '["preview"]',
+    ),
+  );
+  const app = captures.find((entry) => entry.body?.meta?.sourcesqlSetup).body;
+  assert.ok(!Object.hasOwn(app, "target"));
+  assert.ok(app.files.some((file) => file.file === "api/index.ts"));
+  assert.equal((await apply()).ready, true);
+  assert.equal(
+    captures.filter((entry) => entry.body?.meta?.sourcesqlBootstrap).length,
+    1,
+  );
+  assert.equal(
+    captures.filter((entry) => entry.body?.meta?.sourcesqlSetup).length,
+    1,
+  );
+  assert.ok(!JSON.stringify(state).includes("test-secret"));
+});
+test("bootstrap destination mismatches and failed builds stop before app provisioning", async () => {
+  const cases = [
+    { mutate: (deployment) => ({ ...deployment, projectId: "prj_other" }) },
+    { mutate: (deployment) => ({ ...deployment, ownerId: "account_other" }) },
+    { mutate: (deployment) => ({ ...deployment, target: null }) },
+    {
+      mutate: (deployment) => ({
+        ...deployment,
+        meta: { ...deployment.meta, sourcesqlBootstrap: "other" },
+      }),
+    },
+    {
+      mutate: (deployment) => ({
+        ...deployment,
+        meta: { ...deployment.meta, sourcesqlAttempt: "other" },
+      }),
+    },
+    { readyState: "ERROR" },
+    { readyState: "CANCELED" },
+  ];
+  for (const scenario of cases) {
+    const path = workspace(),
+      plan = createPlan(
+        { ...config(), allow_static_bootstrap: true },
+        root,
+        path,
+      ),
+      captures = [],
+      state = {},
+      setupCalls = [];
+    const { api } = bootstrapAPI(plan, captures, scenario);
+    const unexpectedSetup = (name) => () => {
+      setupCalls.push(name);
+      throw Error("unexpected setup call");
+    };
+    const apply = () =>
+      applyPlan(plan, root, path, env, state, () => {}, {
+        api,
+        run: unexpectedSetup("run"),
+        connect: unexpectedSetup("connect"),
+        setupModule: {
+          parseArguments: unexpectedSetup("parseArguments"),
+          outputSettings: unexpectedSetup("outputSettings"),
+        },
+      });
+    const expected = scenario.readyState
+      ? /bootstrap_failed_inspect_deployment/
+      : /bootstrap_destination_mismatch/;
+    await assert.rejects(apply(), expected);
+    await assert.rejects(apply(), expected);
+    assert.deepEqual(setupCalls, []);
+    assert.ok(!captures.some((entry) => entry.path.includes("/env?")));
+    assert.equal(
+      captures.filter((entry) => entry.path === "/v13/deployments").length,
+      1,
+    );
+  }
+});
+test("unknown or ambiguous lost bootstrap responses never trigger a replacement upload", async () => {
+  for (const matches of [
+    () => [],
+    (meta) => [
+      { uid: "dpl_one", meta },
+      { uid: "dpl_two", meta },
+    ],
+  ]) {
+    const path = workspace(),
+      plan = createPlan(
+        { ...config(), allow_static_bootstrap: true },
+        root,
+        path,
+      ),
+      captures = [],
+      state = {};
+    const { api } = bootstrapAPI(plan, captures, { lost: true, matches });
+    const unexpectedSetup = () => {
+      throw Error("unexpected setup call");
+    };
+    const apply = () =>
+      applyPlan(plan, root, path, env, state, () => {}, {
+        api,
+        run: unexpectedSetup,
+        connect: unexpectedSetup,
+        setupModule: {
+          parseArguments: unexpectedSetup,
+          outputSettings: unexpectedSetup,
+        },
+      });
+    await assert.rejects(apply(), /lost bootstrap response/);
+    await assert.rejects(apply(), /bootstrap_uncertain_inspect_project/);
+    assert.ok(!captures.some((entry) => entry.path.includes("/env?")));
+    assert.equal(
+      captures.filter((entry) => entry.path === "/v13/deployments").length,
+      1,
+    );
+  }
+});
+test("a production deployment response is refused before alias assignment", async () => {
+  const path = workspace(),
+    plan = createPlan(config(), root, path),
+    captures = [],
+    state = {};
+  flightReceipt(path, plan);
+  const delegate = fakeAPI(plan, captures);
+  const api = async (route, body, options) => {
+    const response = await delegate(route, body, options);
+    return route === "/v13/deployments/dpl_fixture"
+      ? { ...response, target: "production" }
+      : response;
+  };
+  await assert.rejects(
+    applyPlan(plan, root, path, env, state, () => {}, {
+      api,
+      run: () => {},
+      setupModule,
+    }),
+    /deployment_destination_mismatch/,
+  );
+  assert.equal(
+    captures.filter((entry) => entry.path === "/v13/deployments").length,
+    1,
+  );
+  assert.ok(!captures.some((entry) => entry.path.endsWith("/aliases")));
+  assert.equal(state.alias_ready, undefined);
 });
 test("lost deployment response recovers exact plan metadata without duplicate POST", async () => {
   const path = workspace(),
@@ -357,6 +716,7 @@ test("unknown or multiple deployment matches never trigger a replacement submiss
           id: "prj_fixture",
           name: plan.config.project,
           accountId: plan.config.account_id,
+          targets: { production: { id: "dpl_seed", readyState: "READY" } },
         };
       if (route.startsWith("/v6/deployments")) return { deployments };
       throw Error(route);
@@ -591,6 +951,7 @@ function terminalAPI(
         id: "prj_fixture",
         name: plan.config.project,
         accountId: plan.config.account_id,
+        targets: { production: { id: "dpl_seed", readyState: "READY" } },
       };
     if (route === "/v13/deployments") {
       posts++;

@@ -55,6 +55,7 @@ export function validateConfig(config) {
     "provider",
     "create_database",
     "adopt_existing_project",
+    "allow_static_bootstrap",
     "daily_flight_seconds",
     "enable_execution",
   ]);
@@ -78,6 +79,7 @@ export function validateConfig(config) {
   for (const key of [
     "create_database",
     "adopt_existing_project",
+    "allow_static_bootstrap",
     "enable_execution",
   ])
     if (config[key] !== undefined && typeof config[key] !== "boolean")
@@ -155,6 +157,91 @@ export function validateConfig(config) {
     motherduck_host: host,
     provider,
     daily_flight_seconds: seconds,
+  };
+}
+
+/** A first Vercel deployment is Production; never upload the app into that slot. */
+export function bootstrapFiles() {
+  return [
+    {
+      file: "index.html",
+      data: Buffer.from(
+        '<!doctype html><meta charset="utf-8"><title>sourcesQL</title><p>Research is served by the configured Preview endpoint.</p>\n',
+      ).toString("base64"),
+      encoding: "base64",
+    },
+  ];
+}
+
+async function ensurePreviewPrerequisite(plan, project, state, save, api) {
+  if (
+    !state.bootstrap_attempted &&
+    project.targets?.production?.id &&
+    project.targets.production.readyState === "READY"
+  )
+    return { ready: true };
+  if (!plan.config.allow_static_bootstrap)
+    fail("vercel_first_deployment_requires_static_bootstrap");
+  if (!state.bootstrap_deployment_id) {
+    if (state.bootstrap_attempted) {
+      const found = await api(
+        `/v6/deployments?projectId=${state.project_id}&limit=100`,
+      );
+      if (!uuid.test(state.bootstrap_attempt_id ?? ""))
+        fail("bootstrap_uncertain_inspect_project");
+      const matches = found.deployments.filter(
+        (entry) =>
+          entry.meta?.sourcesqlBootstrap === plan.plan_sha256 &&
+          entry.meta?.sourcesqlAttempt === state.bootstrap_attempt_id,
+      );
+      if (matches.length !== 1) fail("bootstrap_uncertain_inspect_project");
+      state.bootstrap_deployment_id = matches[0].uid ?? matches[0].id;
+      save();
+    } else {
+      state.bootstrap_attempt_id = randomUUID();
+      state.bootstrap_attempted = true;
+      save();
+      const created = await api("/v13/deployments", {
+        name: plan.config.project,
+        project: state.project_id,
+        target: "production",
+        files: bootstrapFiles(),
+        meta: {
+          sourcesqlBootstrap: plan.plan_sha256,
+          sourcesqlAttempt: state.bootstrap_attempt_id,
+        },
+        projectSettings: {
+          framework: null,
+          nodeVersion: "24.x",
+          installCommand: "",
+          buildCommand: "",
+          outputDirectory: ".",
+        },
+      });
+      state.bootstrap_deployment_id = created.id;
+      save();
+    }
+  }
+  const deployment = await api(
+    `/v13/deployments/${state.bootstrap_deployment_id}`,
+  );
+  if (
+    deployment.target !== "production" ||
+    deployment.projectId !== state.project_id ||
+    (deployment.ownerId && deployment.ownerId !== plan.config.account_id) ||
+    deployment.meta?.sourcesqlBootstrap !== plan.plan_sha256 ||
+    deployment.meta?.sourcesqlAttempt !== state.bootstrap_attempt_id
+  )
+    fail("bootstrap_destination_mismatch");
+  state.bootstrap_state = deployment.readyState;
+  save();
+  if (["ERROR", "CANCELED"].includes(deployment.readyState))
+    fail("bootstrap_failed_inspect_deployment");
+  return {
+    ready: deployment.readyState === "READY",
+    stage: "bootstrap",
+    bootstrap_deployment_id: state.bootstrap_deployment_id,
+    bootstrap_state: deployment.readyState,
   };
 }
 
@@ -245,6 +332,12 @@ export function createPlan(config, root, workspace) {
         digest(Buffer.from(file.data, "base64")),
       ]),
     ),
+    static_bootstrap_files_sha256: Object.fromEntries(
+      bootstrapFiles().map((file) => [
+        file.file,
+        digest(Buffer.from(file.data, "base64")),
+      ]),
+    ),
     setup_sha256: digest(readFileSync(join(root, "hosted/setup.mjs"))),
     orchestrator_sha256: digest(
       readFileSync(join(root, "hosted/personal-cloud.mjs")),
@@ -254,6 +347,11 @@ export function createPlan(config, root, workspace) {
     operations: [
       "check Vercel account identity",
       "create or recover the named project",
+      ...(config.allow_static_bootstrap
+        ? [
+            "create or recover a credential-free static Production placeholder if needed before uploading the app",
+          ]
+        : []),
       ...(config.provider.name === "fixture"
         ? []
         : [
@@ -530,6 +628,14 @@ export async function applyPlan(
     fail("project_destination_mismatch");
   state.project_id = project.id;
   save();
+  const prerequisite = await ensurePreviewPrerequisite(
+    plan,
+    project,
+    state,
+    save,
+    api,
+  );
+  if (!prerequisite.ready) return prerequisite;
   if (!state.dependencies_ready) {
     (injected.run ?? run)(
       "npm",
