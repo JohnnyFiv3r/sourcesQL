@@ -5,6 +5,21 @@ and optional Vercel/MotherDuck hosting. **0.2.0** adds compact checkpoints and
 manual evidence-backed updates. See the [release notes](docs/releases/0.2.0.md)
 for adoption and qualification boundaries.
 
+## Fresh hosting patch: 0.2.1 candidate
+
+A live fresh-setup attempt exposed two Vercel API assumptions. Project creation
+rejects a top-level `nodeVersion`; the patch omits it there while retaining Node
+24 in deployment settings. A legacy user record can report Hobby but route
+unscoped writes to a default Pro team. The existing destination guard stopped
+before credentials or MotherDuck resources were written. The patch now refuses
+that personal scope before project creation and asks for an explicit workspace.
+
+Both regressions fail on the earlier implementation and pass with the patch;
+**21 personal-cloud tests** and **18 affected Python setup/packaging tests** pass.
+The app and deployment bundle build successfully. Actual Hobby provisioning and
+fixture execution remain pending a usable workspace; this candidate is not yet
+published. The released 0.2.0 artifacts remain unchanged.
+
 ## Continuation and manual updates: 0.2.0
 
 - Checkpoints retain canonical selections, query provenance, exact amendment and

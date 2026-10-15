@@ -79,7 +79,8 @@ Create a token-free JSON configuration outside source control, for example
 ```json
 {
   "project": "my-sourcesql",
-  "account_id": "your_vercel_account_or_team_id",
+  "account_id": "your_hobby_workspace_team_id",
+  "team_id": "your_hobby_workspace_team_id",
   "alias": "my-sourcesql-personal.vercel.app",
   "database": "sourcesql_personal",
   "principal": "my-stable-owner-id",
@@ -95,9 +96,16 @@ Create a token-free JSON configuration outside source control, for example
 }
 ```
 
-Use the exact Vercel account ID. For a team, also set `"team_id"` to that same ID.
-Setup checks the authenticated account and every recovered project's owning
-account. An existing project is used only if this configuration explicitly adds
+Choose the intended workspace in Vercel and use its exact team ID for both
+`account_id` and `team_id`. Vercel represents modern personal workspaces as teams;
+select the eligible Hobby workspace rather than your login's user ID. A legacy
+user record can report Hobby while unscoped writes route to a default Pro team.
+Setup refuses that ambiguous personal scope before looking up or creating a
+project. It never switches teams or upgrades a plan to continue.
+
+A legacy personal account without a default team can still use its own account
+ID and omit `team_id`. Setup checks the authenticated destination and every
+recovered project's owning account. An existing project is used only if this configuration explicitly adds
 `"adopt_existing_project": true`; that authorizes changes to its Preview
 configuration and alias. Prefer a dedicated project.
 

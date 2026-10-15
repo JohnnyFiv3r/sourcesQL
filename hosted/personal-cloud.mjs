@@ -491,6 +491,8 @@ export async function applyPlan(
   );
   if ((account.id ?? account.user?.id) !== config.account_id)
     fail("vercel_account_mismatch");
+  if (!config.team_id && (account.user ?? account).defaultTeamId)
+    fail("vercel_personal_scope_requires_explicit_team");
   let project = await api(
     `/v9/projects/${encodeURIComponent(state.project_id ?? config.project)}`,
     undefined,
@@ -504,7 +506,6 @@ export async function applyPlan(
     project = await api("/v11/projects", {
       name: config.project,
       framework: null,
-      nodeVersion: "24.x",
       installCommand: "npm ci",
       buildCommand: "npm run build:vercel",
       outputDirectory: "dist",

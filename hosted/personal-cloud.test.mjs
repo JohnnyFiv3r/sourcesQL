@@ -91,6 +91,8 @@ function fakeAPI(plan, captures, { lost = false } = {}) {
           }
         : undefined;
     if (path === "/v11/projects") {
+      if (Object.hasOwn(body, "nodeVersion"))
+        throw Error("vercel_request_failed_400_additional_property_nodeVersion");
       created = true;
       return {
         id: "prj_fixture",
@@ -210,20 +212,24 @@ test("server credentials only enter encrypted Preview requests; persisted state 
     "0",
   );
   assert.ok(!JSON.stringify(state).includes("test-secret"));
-  assert.ok(
-    !Object.hasOwn(
-      captures.find((entry) => entry.path === "/v13/deployments").body,
-      "target",
-    ),
-  );
+  const deployment = captures.find(
+    (entry) => entry.path === "/v13/deployments",
+  ).body;
+  assert.ok(!Object.hasOwn(deployment, "target"));
+  assert.equal(deployment.projectSettings.nodeVersion, "24.x");
   const creations = captures.filter(
     (entry) => entry.path === "/v13/deployments",
   ).length;
-  await applyPlan(plan, root, path, env, state, () => {}, {
+  const resumed = await applyPlan(plan, root, path, env, state, () => {}, {
     api: calls,
     run: () => {},
     setupModule,
   });
+  assert.equal(resumed.ready, true);
+  assert.equal(
+    captures.filter((entry) => entry.path === "/v11/projects").length,
+    1,
+  );
   assert.equal(
     captures.filter((entry) => entry.path === "/v13/deployments").length,
     creations,
@@ -275,6 +281,43 @@ test("unresolved project creation and wrong account stop before any further muta
     }),
     /vercel_account_mismatch/,
   );
+});
+test("a personal account with a default team requires explicit scope before any project access", async () => {
+  const path = workspace(),
+    plan = createPlan(config(), root, path),
+    state = {},
+    requests = [],
+    setupCalls = [];
+  const unexpectedSetup = (name) => () => {
+    setupCalls.push(name);
+    throw Error("unexpected setup call");
+  };
+  await assert.rejects(
+    applyPlan(plan, root, path, env, state, () => {}, {
+      api: async (route) => {
+        requests.push(route);
+        if (route === "/v2/user")
+          return {
+            user: {
+              id: plan.config.account_id,
+              billing: { plan: "hobby" },
+              defaultTeamId: "team_default_pro",
+            },
+          };
+        throw Error("unexpected project access");
+      },
+      run: unexpectedSetup("run"),
+      connect: unexpectedSetup("connect"),
+      setupModule: {
+        parseArguments: unexpectedSetup("parseArguments"),
+        outputSettings: unexpectedSetup("outputSettings"),
+      },
+    }),
+    /^Error: vercel_personal_scope_requires_explicit_team$/,
+  );
+  assert.deepEqual(requests, ["/v2/user"]);
+  assert.deepEqual(setupCalls, []);
+  assert.deepEqual(state, {});
 });
 test("unknown or multiple deployment matches never trigger a replacement submission", async () => {
   const path = workspace(),
