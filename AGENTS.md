@@ -8,4 +8,6 @@ The host authors research SQL; the engine owns AST admission, typed staged evalu
 
 Delegate only nonoverlapping file lanes; root owns shared contracts, storage/worker/coordinator, integration and release evidence. Advertise only tested implemented behavior. Full live/host qualification is separate from fixture tests. Surface consequential product decisions, continue independent work, and keep STATUS.md accurate.
 
+Public product naming is sourcesQL. Keep competitor research, comparison plans, benchmark evidence and results in ignored local files; do not commit or publish them. Preserve SQL syntax and ordinary UI selection terminology when cleaning up product names.
+
 When asked to cut a PR, create it open and ready for review, subscribe to comments, and fix/respond to Codex Code Review comments.
