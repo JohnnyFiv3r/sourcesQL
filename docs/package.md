@@ -64,7 +64,7 @@ with these exact fields:
 Create the matching `pypi` GitHub environment, with the intended release controls.
 The workflow builds and qualifies the same artifacts on Python 3.12, 3.13 and
 3.14 before publishing. A manual workflow run verifies artifacts without
-publishing; a matching version tag such as `v0.1.1` enables the publish job.
+publishing; a matching version tag such as `v0.1.2` enables the publish job.
 Publishing uses short-lived OIDC credentials and PyPI attestations rather than a
 saved PyPI token. Version numbers and uploaded filenames are immutable, so check
 the qualified artifact hashes before pushing the release tag.

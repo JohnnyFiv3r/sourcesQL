@@ -30,14 +30,14 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --background: #0e221d;
-  --foreground: #e5f4ec;
-  --muted: #a7beb2;
-  --subtle: #142e26;
-  --border: #2b4b3e;
+  --background: #191919;
+  --foreground: #f0f0f0;
+  --muted: #aaaaaa;
+  --subtle: #242424;
+  --border: #3a3a3a;
   --primary: #2cd8b6;
   --link: #2cd8b6;
-  --accent: #153d35;
+  --accent: #282828;
 }
 * {
   box-sizing: border-box;

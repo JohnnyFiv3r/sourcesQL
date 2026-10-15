@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sourcesql"
-version = "0.1.1"
+version = "0.1.2"
 description = "Provider-independent SQL research with durable evidence"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -92,5 +92,6 @@ include = [
   "apps/research/ui-history/research-b1349a13ba4d1fbe.html",
   "apps/research/ui-history/research-be8725d56a366d19.html",
   "apps/research/ui-history/research-b5ab74c900f06fdb.html",
+  "apps/research/ui-history/research-a0b4eab71ba980c1.html",
   "apps/research/ui-history/research-a8517535856c8aa3.html",
 ]

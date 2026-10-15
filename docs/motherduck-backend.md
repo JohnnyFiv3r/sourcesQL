@@ -60,7 +60,7 @@ From the repository root, with the development build tools installed:
 
 ```sh
 uv build --wheel
-python hosted/flight/build.py dist/sourcesql-0.1.1-py3-none-any.whl \
+python hosted/flight/build.py dist/sourcesql-0.1.2-py3-none-any.whl \
   --output artifacts/hosted-flight
 ```
 
