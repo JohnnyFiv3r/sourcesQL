@@ -15,7 +15,9 @@ See [current status](../STATUS.md) for recorded evidence and
   publishing, fixture execution and installed-artifact checks on Python 3.12–3.14.
 - **Guided personal cloud:** reviewed, resumable setup for an adopter's own Vercel
   and MotherDuck accounts, private secrets, one owner and finite execution limits.
-  Existing-account provisioning and stored reopening have been exercised.
+  Existing-account provisioning and stored reopening have been exercised. A new
+  Hobby project also passed one bounded fixture Flight and saved-table reopening
+  after reviewed setup recovery.
 - **Search adapters:** Exa, Brave and Serper work locally; hosted gateway,
   Flight-policy and secret-binding paths are implemented. Bounded Brave and Serper
   searches passed in real Flights through a local control gateway.
@@ -37,9 +39,11 @@ packaged plugin is not needed. Local Docker remains an alternative adoption path
 
 ## 1. Finish adoption verification
 
-Run the documented setup with an eligible adopter's fresh personal accounts,
-including Vercel Hobby. Existing-account Pro checks and controlled API responses
-do not establish that path. Keep account creation, consent, OAuth registration
+Repeat the corrected setup from a clean first attempt with an eligible adopter's
+fresh personal accounts. A new project in an existing Hobby workspace passed
+bounded execution and persistence after reviewed recovery; account signup, the
+complete automated first-deployment path and new-workspace client OAuth remain
+separate checks. Keep account creation, consent, OAuth registration
 and any exact-domain protection exception visible to the adopter.
 
 Complete the bounded Brave and Serper checks through Vercel HTTP. Record the

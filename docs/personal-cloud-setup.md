@@ -326,10 +326,12 @@ Flight. A queued job
 still needs an explicit `sourcesql_start_job` call with its exact ID; there is no
 queue-draining scheduler. Pending, failed and unknown states remain visible.
 
-The measured installed-package path used an existing account/project. A fresh
-eligible Hobby account still needs the complete plan, apply, fixture execution
-and fresh-connection read checks above. A successful Pro-account check does not
-qualify that path. Setup also does not verify subscription eligibility or accept
+The measured installed-package path includes a new project in an existing
+eligible Hobby workspace, one bounded fixture Flight and fresh stored-result
+reopening. That run needed reviewed recovery after the Vercel API and first-build
+assumptions were corrected. A clean first-attempt install and a newly registered
+account still need the complete plan/apply checks above; a successful Pro-account
+check does not establish them. Setup also does not verify subscription eligibility or accept
 account terms for the adopter. OAuth login, app rendering and interaction need
 separate checks in the intended client; follow
 [client setup and qualification](clients.md).

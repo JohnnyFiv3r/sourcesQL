@@ -49,12 +49,33 @@ installation requirement. Refresh host tool definitions and reopen saved data
 after an update. Existing hosted Flights embed a pinned wheel and require their
 own reviewed runtime upgrade; publishing a package does not upgrade them.
 
+## Hobby hosting check: 0.2.1 candidate
+
+A new dedicated project, database, owner namespace and F4 Flight were provisioned
+in an existing eligible Hobby workspace. Live recovery corrected Vercel project
+creation, explicit workspace routing and first-deployment assumptions. An
+approved static Production placeholder contained one HTML file and no functions
+or credentials; the app then reached Ready in Preview. Only the configured alias
+was exempted from Vercel protection, with owner authentication still required.
+
+The installed CLI submitted one fixture request and recovered its same durable
+job. One Flight succeeded in 9.35 seconds; a fresh connection reopened the stored
+result, and the standalone app rendered its two rows. Native MotherDuck records
+confirmed one completed job, one settled run, one stored result and a 120-second
+daily reservation. No live search or model calls occurred. The original operator
+app was unchanged.
+
+This qualifies bounded Hobby execution and persistence after reviewed recovery.
+It does not establish a clean first-attempt automated install, signup/consent for
+a newly created account, or ChatGPT/Claude OAuth on the new workspace. The patch
+is a local unpublished candidate; the existing 0.2.0 package is unchanged.
+
 ## Qualification boundaries
 
 | Path | Observed | Still needs separate qualification |
 | --- | --- | --- |
 | Python package | Published wheel install, fixture execution, stored reopening, portable import and repeatable cloud planning | A new release needs its own artifact checks |
-| Personal cloud | Existing-account provisioning, bounded fixture execution and subsequent stored reads | Fresh-account Hobby onboarding and its manual account steps |
+| Personal cloud | Existing-account provisioning, plus a new Hobby project with one fixture Flight, stored reopening and standalone rendering after reviewed recovery | Clean first-attempt setup, new-account signup/consent and client OAuth on the new workspace |
 | Exa | Earlier bounded hosted Auto research and durable results | Current provider configuration and broad research quality |
 | Brave and Serper | One bounded search per provider in real MotherDuck Flights, provenance, replay and fresh stored reads through a local MCP gateway | Dispatch through Vercel HTTP and host rendering for those configurations |
 | ChatGPT | Direct HTTPS with OAuth, current table rendering, checkpoint saving, update-request delivery/read/cancellation and manual evidence review/publication | Checkpoint file download and fresh hosted acquisition |

@@ -25,10 +25,23 @@ affected Python setup/packaging tests** pass. Both candidate distributions pass
 fresh installed-package checks outside the checkout on Python 3.13/Node 24, and
 package audits find no private material.
 
-Hobby resources were provisioned in the approved workspace, but the initial
-Production classification stopped setup before research execution. Corrected
-Preview recovery and fixture execution remain pending; this candidate is not yet
-published. The released 0.2.0 artifacts remain unchanged.
+A new dedicated project in an existing eligible Hobby workspace now passes
+fixture execution and fresh-connection stored reads. The reviewed recovery kept
+one database, owner credential and F4 Flight. A credential-free static Production
+replacement preceded the app's Ready Preview deployment; only its configured
+alias has a protection exception. Unauthenticated MCP returns 401, while the
+shell and OAuth discovery remain reachable. Credentials stay encrypted and
+Preview-only.
+
+Exactly one Flight succeeded in **9.35 seconds**, returning two fixture rows.
+The daily application reservation is **120 seconds**; stored reopening and
+standalone app rendering added no Flight. Canonical MotherDuck records retain
+one completed job and one settled run, with zero provider reservation. This was
+a recovery after the Vercel assumptions above, not an uninterrupted first-attempt
+setup. New-account signup, the complete automated first-deployment path and
+ChatGPT/Claude OAuth on this new workspace remain separate checks. The original
+Pro app is unchanged. This 0.2.1 candidate is not published; released 0.2.0
+artifacts remain unchanged.
 
 ## Continuation and manual updates: 0.2.0
 
