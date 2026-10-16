@@ -49,39 +49,47 @@ installation requirement. Refresh host tool definitions and reopen saved data
 after an update. Existing hosted Flights embed a pinned wheel and require their
 own reviewed runtime upgrade; publishing a package does not upgrade them.
 
-## Hobby hosting check: 0.2.1 candidate
+## Clean Hobby onboarding: 0.2.1
 
-A new dedicated project, database, owner namespace and F4 Flight were provisioned
-in an existing eligible Hobby workspace. Live recovery corrected Vercel project
-creation, explicit workspace routing and first-deployment assumptions. An
-approved static Production placeholder contained one HTML file and no functions
-or credentials; the app then reached Ready in Preview. Only the configured alias
-was exempted from Vercel protection, with owner authentication still required.
+The installed 0.2.1 CLI completed the normal plan/apply/resume path
+from an empty setup workspace in an existing eligible Hobby workspace, without
+prior setup receipts or recovery/repair flags. Setup created a credential-free
+static Production placeholder and waited for Ready before installing local
+dependencies, provisioning the backend or uploading credentials. Ordinary resume
+reused the same attempts, reached Ready with the app in Preview, and assigned the
+reviewed alias. All 18 gateway settings were encrypted Preview-only variables.
 
-The installed CLI submitted one fixture request and recovered its same durable
-job. One Flight succeeded in 9.35 seconds; a fresh connection reopened the stored
-result, and the standalone app rendered its two rows. Native MotherDuck records
-confirmed one completed job, one settled run, one stored result and a 120-second
-daily reservation. No live search or model calls occurred. The original operator
-app was unchanged.
+Exactly one F4 fixture Flight succeeded in 10.733 seconds, returning two rows.
+The reviewed hard runtime and daily reservation were each 120 seconds. A fresh
+MCP session read the saved result. Native MotherDuck records confirmed one settled
+job, one run and one engine result after both host checks, with no provider
+reservation or live search/model calls.
 
-This qualifies bounded Hobby execution and persistence after reviewed recovery.
-It does not establish a clean first-attempt automated install, signup/consent for
-a newly created account, or ChatGPT/Claude OAuth on the new workspace. The patch
-is a local unpublished candidate; the existing 0.2.0 package is unchanged.
+ChatGPT and Claude each completed a real OAuth consent/code exchange using a
+separate public strict third-party SPA client with authorization-code-only grants,
+the host's exact callback and delegated `sourcesql:access` on the new audience.
+Neither connection used a client secret or fixed bearer header; the API denied
+machine-to-machine access. Both actual inline apps displayed the same saved
+two-row table, title and source links.
+
+The earlier Hobby check after reviewed recovery remains separate history: its
+single fixture Flight succeeded in 9.35 seconds. The clean check qualifies setup,
+bounded execution, persistence and both hosts' OAuth/rendering with existing
+accounts. Fresh-account signup, token renewal, live-provider research and the full
+client lifecycle remain unqualified. Release artifacts receive their own archive and installed-package checks.
 
 ## Qualification boundaries
 
 | Path | Observed | Still needs separate qualification |
 | --- | --- | --- |
 | Python package | Published wheel install, fixture execution, stored reopening, portable import and repeatable cloud planning | A new release needs its own artifact checks |
-| Personal cloud | Existing-account provisioning, plus a new Hobby project with one fixture Flight, stored reopening and standalone rendering after reviewed recovery | Clean first-attempt setup, new-account signup/consent and client OAuth on the new workspace |
+| Personal cloud | Clean installed-CLI setup/resume in an existing Hobby workspace, one fixture Flight, stored reopening and separate ChatGPT/Claude OAuth rendering | Fresh-account signup, token renewal, live-provider research and full client lifecycle |
 | Exa | Earlier bounded hosted Auto research and durable results | Current provider configuration and broad research quality |
 | Brave and Serper | One bounded search per provider in real MotherDuck Flights, provenance, replay and fresh stored reads through a local MCP gateway | Dispatch through Vercel HTTP and host rendering for those configurations |
-| ChatGPT | Direct HTTPS with OAuth, current table rendering, checkpoint saving, update-request delivery/read/cancellation and manual evidence review/publication | Checkpoint file download and fresh hosted acquisition |
-| Claude | Saved-table rendering, current controls, child/Back navigation, correction persistence, checkpoint continuation from ChatGPT, update-request read/cancel after Send, and manual evidence review/publication | Tracked expansion and refresh review; fresh hosted acquisition |
+| ChatGPT | Direct HTTPS with OAuth, including the clean Hobby workspace's saved-table rendering; checkpoint saving, update-request delivery/read/cancellation and manual evidence review/publication | Token renewal, checkpoint file download and fresh hosted acquisition |
+| Claude | OAuth and saved-table rendering on the clean Hobby workspace; earlier owner-bearer checks of current controls, child/Back navigation, correction persistence, checkpoint continuation, update-request read/cancel after Send and manual evidence review/publication | Token renewal, tracked expansion and refresh review; fresh hosted acquisition |
 | Cursor | Local Docker fixture rendering and paging | Hosted authentication and full lifecycle; app messaging was unavailable in the tested setup |
-| Continuation 0.2.0 | Installed artifacts, controlled engine/app/Docker/browser checks and stored-data hosted MCP recovery | Remaining client lifecycle paths and fresh-adopter verification |
+| Continuation 0.2.0 | Installed artifacts, controlled engine/app/Docker/browser checks and stored-data hosted MCP recovery | Remaining client lifecycle paths and fresh-account adoption |
 
 See [client connection details](clients.md) for the actual host boundaries and
 [current status](../STATUS.md) for release evidence.

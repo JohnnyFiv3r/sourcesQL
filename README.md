@@ -163,7 +163,7 @@ Follow the [personal-cloud setup guide](https://github.com/JohnnyFiv3r/sourcesQL
 
 Setup provisions a Vercel Preview gateway and a bounded MotherDuck Flight. It keeps credentials server-side, defaults to fixture mode and leaves account creation, OAuth registration and the exact-domain protection exception as visible account steps. Verify one fixture job and reopen its stored result before enabling live research. The [client guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/clients.md) covers ChatGPT, Claude and Cursor, including which host interactions have actually been qualified.
 
-Connect ChatGPT directly to the stable HTTPS `/mcp` URL using OAuth. That one connection provides the research tools and interactive app; no plugin ZIP upload is needed. After a deployment, refresh the existing connection's tool definitions and reopen saved research.
+Connect ChatGPT or Claude to the stable HTTPS `/mcp` URL using OAuth. Both have passed sign-in and saved-table rendering on the Hobby path. That one connection provides the research tools and interactive app; no plugin ZIP upload is needed. After a deployment, refresh the existing connection's tool definitions and reopen saved research.
 
 Eligible personal, non-commercial adopters can choose Vercel Hobby; no Pro-only feature is required by this configuration. MotherDuck, search and model consumption are separate. Included allowances may cover light use, but application budgets do not guarantee that a platform account with billing enabled stops before overage.
 

@@ -15,9 +15,9 @@ See [current status](../STATUS.md) for recorded evidence and
   publishing, fixture execution and installed-artifact checks on Python 3.12–3.14.
 - **Guided personal cloud:** reviewed, resumable setup for an adopter's own Vercel
   and MotherDuck accounts, private secrets, one owner and finite execution limits.
-  Existing-account provisioning and stored reopening have been exercised. A new
-  Hobby project also passed one bounded fixture Flight and saved-table reopening
-  after reviewed setup recovery.
+  The installed 0.2.1 CLI passed clean setup/resume from an empty workspace
+  in an existing eligible Hobby account, one bounded fixture Flight and saved
+  reopening. Separate ChatGPT and Claude OAuth connections rendered that result.
 - **Search adapters:** Exa, Brave and Serper work locally; hosted gateway,
   Flight-policy and secret-binding paths are implemented. Bounded Brave and Serper
   searches passed in real Flights through a local control gateway.
@@ -39,12 +39,13 @@ packaged plugin is not needed. Local Docker remains an alternative adoption path
 
 ## 1. Finish adoption verification
 
-Repeat the corrected setup from a clean first attempt with an eligible adopter's
-fresh personal accounts. A new project in an existing Hobby workspace passed
-bounded execution and persistence after reviewed recovery; account signup, the
-complete automated first-deployment path and new-workspace client OAuth remain
-separate checks. Keep account creation, consent, OAuth registration
-and any exact-domain protection exception visible to the adopter.
+Qualify account signup and consent with an eligible adopter's fresh personal
+accounts. Clean installed-CLI setup, the static-first deployment path, one bounded
+fixture Flight and separate ChatGPT/Claude OAuth rendering have passed in an
+existing eligible Hobby workspace. Token renewal, live-provider research and the
+full client lifecycle remain separate checks. Keep account creation, consent,
+OAuth registration and any exact-domain protection exception visible to the
+adopter. Release artifacts receive their own archive and installed-package checks.
 
 Complete the bounded Brave and Serper checks through Vercel HTTP. Record the
 provider policy, results, provenance, usage reservations and lost-response

@@ -1,47 +1,46 @@
 # Project status
 
 sourcesQL includes a research SQL engine, an MCP App, local Docker packaging
-and optional Vercel/MotherDuck hosting. **0.2.0** adds compact checkpoints and
-manual evidence-backed updates. See the [release notes](docs/releases/0.2.0.md)
-for adoption and qualification boundaries.
+and optional Vercel/MotherDuck hosting. **0.2.1** corrects fresh personal-cloud
+setup; **0.2.0** adds compact checkpoints and manual evidence-backed updates. See
+the [0.2.1 release notes](docs/releases/0.2.1.md) for the hosting changes and the
+[0.2.0 notes](docs/releases/0.2.0.md) for continuation and update boundaries.
 
-## Fresh hosting patch: 0.2.1 candidate
+## Fresh hosting: 0.2.1
 
-A live fresh-setup attempt exposed Vercel API and deployment assumptions. Project
-creation rejects a top-level `nodeVersion`; the patch omits it there while retaining Node
-24 in deployment settings. A legacy user record can report Hobby but route
-unscoped writes to a default Pro team. The existing destination guard stopped
-before credentials or MotherDuck resources were written. The patch now refuses
-that personal scope before project creation and asks for an explicit workspace.
+Fresh setup omits the unsupported `nodeVersion` field from Vercel project
+creation while retaining Node.js 24 in deployments. It refuses legacy personal
+scopes that route writes to a default team and requires the intended workspace
+explicitly. Before backend setup, a fresh project must have an existing
+Production slot or approval for a credential-free static bootstrap. The research
+app is deployed to Preview after that placeholder reaches Ready.
 
-Vercel also classifies the first deployment as Production. The app upload now
-requires an existing Production slot or explicit approval for a static,
-credential-free placeholder. It completes before any backend credentials or app
-files are uploaded. The research app remains in Preview.
+Regression checks cover the rejected field, destination selection, bootstrap
+ordering and recovery using the same saved request. The patch passes 26
+personal-cloud tests and 18 affected Python setup/packaging tests. Release
+artifacts receive separate archive and installed-package checks.
 
-The project-field, destination and first-deployment regressions fail on the earlier
-implementation and pass with the patch. **26 personal-cloud tests** and **18
-affected Python setup/packaging tests** pass. Both candidate distributions pass
-fresh installed-package checks outside the checkout on Python 3.13/Node 24, and
-package audits find no private material.
+A clean installed-CLI attempt in an existing eligible Hobby workspace completed
+normal plan/apply/resume without repair flags or copied setup receipts. The
+static bootstrap reached Ready before dependency installation, Flight creation
+or backend credential upload. The app then reached Ready in Preview, with 18
+encrypted Preview-only variables and an exception for its exact alias.
+Unauthenticated MCP requests returned 401; OAuth discovery remained accessible.
 
-A new dedicated project in an existing eligible Hobby workspace now passes
-fixture execution and fresh-connection stored reads. The reviewed recovery kept
-one database, owner credential and F4 Flight. A credential-free static Production
-replacement preceded the app's Ready Preview deployment; only its configured
-alias has a protection exception. Unauthenticated MCP returns 401, while the
-shell and OAuth discovery remain reachable. Credentials stay encrypted and
-Preview-only.
+Exactly one F4 Flight succeeded in **10.733 seconds**, returning two fixture
+rows within a **120-second** runtime cap and daily application reservation.
+A fresh MCP session reopened the stored result. Separate public PKCE clients
+then completed actual OAuth in ChatGPT and Claude, and both hosts visibly
+rendered the same saved two-row table. Each client received only delegated
+`sourcesql:access` for the exact MCP audience; machine-to-machine access stayed
+disabled. Neither host used a fixed owner bearer header.
 
-Exactly one Flight succeeded in **9.35 seconds**, returning two fixture rows.
-The daily application reservation is **120 seconds**; stored reopening and
-standalone app rendering added no Flight. Canonical MotherDuck records retain
-one completed job and one settled run, with zero provider reservation. This was
-a recovery after the Vercel assumptions above, not an uninterrupted first-attempt
-setup. New-account signup, the complete automated first-deployment path and
-ChatGPT/Claude OAuth on this new workspace remain separate checks. The original
-Pro app is unchanged. This 0.2.1 candidate is not published; released 0.2.0
-artifacts remain unchanged.
+Native storage inspection after both host opens confirmed one completed job,
+one settled Flight run and one stored engine result, with zero provider
+reservation. Original app connections stayed intact. The earlier recovered
+Hobby attempt took 9.35 seconds and remains separate from this clean attempt.
+New-account signup, OAuth token renewal, live provider research and the remaining
+host lifecycle checks are not established by these fixture checks.
 
 ## Continuation and manual updates: 0.2.0
 

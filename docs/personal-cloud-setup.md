@@ -326,15 +326,20 @@ Flight. A queued job
 still needs an explicit `sourcesql_start_job` call with its exact ID; there is no
 queue-draining scheduler. Pending, failed and unknown states remain visible.
 
-The measured installed-package path includes a new project in an existing
-eligible Hobby workspace, one bounded fixture Flight and fresh stored-result
-reopening. That run needed reviewed recovery after the Vercel API and first-build
-assumptions were corrected. A clean first-attempt install and a newly registered
-account still need the complete plan/apply checks above; a successful Pro-account
-check does not establish them. Setup also does not verify subscription eligibility or accept
-account terms for the adopter. OAuth login, app rendering and interaction need
-separate checks in the intended client; follow
-[client setup and qualification](clients.md).
+The installed 0.2.1 CLI completed a clean first-attempt plan/apply/resume
+from an empty setup workspace in an existing eligible Hobby workspace. Its static
+Production placeholder reached Ready before backend provisioning or credential
+upload; ordinary resume then completed the app's Preview deployment without
+recovery flags or prior receipts. One F4 fixture Flight, bounded by a 120-second
+runtime and daily reservation, produced two saved rows. A fresh MCP session and
+actual ChatGPT and Claude apps reopened them after separate real OAuth consent.
+
+This qualifies the measured setup and OAuth/rendering path with existing
+accounts. Fresh-account signup, token renewal, live-provider research and complete
+client interaction remain separate checks. Setup does not verify subscription
+eligibility or accept account terms for the adopter. Follow
+[client setup and qualification](clients.md) and
+[adoption verification](adoption-verification.md) for the exact evidence boundary.
 
 ## Choose a live provider
 

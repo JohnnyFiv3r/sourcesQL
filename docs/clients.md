@@ -7,8 +7,8 @@ message. Fixture or saved data is enough for the first connection checks.
 
 | Client path | Connection | Current evidence |
 | --- | --- | --- |
-| ChatGPT | Personal HTTPS `/mcp` endpoint with OAuth | Direct OAuth connection, saved-table rendering and tool refresh; bounded lifecycle checks remain scoped in [status](../STATUS.md) |
-| Claude | Personal HTTPS `/mcp` endpoint with an encrypted owner bearer header; OAuth is also supported by the gateway | Actual table rendering, child/Back navigation, correction persistence cross-client checkpoint continuation and manual evidence review/publication passed; other lifecycle paths remain unqualified |
+| ChatGPT | Personal HTTPS `/mcp` endpoint with OAuth | Direct OAuth connection and saved-table rendering on the clean Hobby workspace; tool refresh and bounded lifecycle checks remain scoped in [status](../STATUS.md) |
+| Claude | Personal HTTPS `/mcp` endpoint with OAuth; encrypted owner bearer headers are an alternative | Real OAuth and saved-table rendering on the clean Hobby workspace; earlier owner-bearer checks passed child/Back navigation, correction persistence, cross-client checkpoint continuation and manual evidence review/publication |
 | Cursor | Local Docker fixture tested; remote Streamable HTTP configuration is documented below | Actual nine-row fixture rendering and paging passed; host-agent messaging was unavailable in this setup and refresh stayed disabled |
 | Other MCP clients | Supported HTTP or stdio transport | Tools can be used without an interactive renderer; host features vary |
 
@@ -46,9 +46,10 @@ them as display failures.
 
 ## Claude first
 
-The measured personal connection used an encrypted `Authorization: Bearer …`
-request header, configured through Claude's custom-connector authentication
-settings. Its OAuth connection path was not exercised by that check.
+The clean Hobby workspace passed a real OAuth connection and inline saved-table
+rendering in Claude. Earlier lifecycle checks used an encrypted
+`Authorization: Bearer …` request header through Claude's custom-connector
+authentication settings; those observations remain scoped to that connection.
 
 After a server update, open **Customize → Connectors → Yours → sourcesQL →
 More options → Refresh tools list**, then reopen saved research. A fresh
@@ -75,9 +76,11 @@ the app anonymous to get past a login error.
 Complete consent as the configured application owner, enable the connector in a
 new conversation and ask it to reopen an existing fixture research table with
 `open_research`. Confirm the table appears in chat, not just a text response.
-Then inspect source links and research-tree/Back navigation. The measured connection used an encrypted owner bearer header and passed
-rendering, child-table/Back navigation, a synthetic 500-to-501 correction, reload
-persistence and restoration to 500. This did not run new provider research.
+Then inspect source links and research-tree/Back navigation. The earlier
+owner-bearer connection passed rendering, child-table/Back navigation, a synthetic
+500-to-501 correction, reload persistence and restoration to 500. The clean OAuth
+check confirmed the saved two-row table, title and source links. Neither check
+ran new provider research.
 Expansion execution, refresh review and the complete lifecycle remain separate
 qualification work; preserve the exact IDs and report unsupported app messaging or
 view modes rather than assuming they match another host.
@@ -163,6 +166,24 @@ execution; configure that deliberately rather than launching a live search.
 
 Record source review, protocol checks and actual host interaction separately.
 The product's [current status](../STATUS.md) is the published evidence boundary.
+
+## Clean Hobby OAuth checks on 2026-10-15
+
+ChatGPT and Claude separately completed OAuth consent and authorization-code
+exchange for the clean 0.2.1 workspace. Each used a dedicated public
+strict third-party SPA client, authorization-code-only grants and its exact host
+callback. The new API granted only delegated `sourcesql:access` to those clients
+and denied machine-to-machine access. Neither host used a client secret or fixed
+bearer header. The application owner was the configured Google identity; the
+existing Auth0 administrator login was a separate identity.
+
+Both hosts displayed the same saved two-row fixture table, title and source links
+in their actual inline apps. Native backend records still contained one settled
+job/run and no provider reservation after both reads. These checks qualify OAuth
+and rendering with existing accounts, not new-account signup, token renewal,
+live-provider research or the full lifecycle. See
+[adoption verification](adoption-verification.md) for the clean CLI setup and
+bounded Flight evidence.
 
 ## Continuation checks on 2026-10-15
 
