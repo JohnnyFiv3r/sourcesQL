@@ -78,6 +78,7 @@ def test_live_policy_uses_only_secret_reference_and_exact_public_fingerprint():
         )
     ).hexdigest()
     assert settings["provider_policy_sha256"] == expected
+    assert expected == "5e31ea3484b972d2f9b0c9e69ad88f226582b19234e236bc6c3dca5bf0e1e901"
     assert settings["descriptor"] == descriptor
     assert settings["allowed_profiles"] == ("fixture", "exa", "exa_deep", "exa_deep_reasoning")
     assert profile["api_key_env"] == "sourcesql_exa_EXA_API_KEY"
@@ -338,3 +339,365 @@ def test_runner_refuses_a_live_job_bound_to_another_policy_before_engine(
         )
     assert captured["failure"] == "unauthorized"
     assert report["status"] == "failed" and report["error_code"] == "unauthorized"
+
+
+def research_environment(*, model=False, **overrides):
+    return environment(
+        **{
+            "SOURCESQL_EXA_POLICY_VERSION": "exa-research.v3",
+            **(
+                {
+                    "SOURCESQL_OPENAI_MODEL": "gpt-4.1-mini",
+                    "SOURCESQL_OPENAI_SECRET_NAME": "sourcesql_openai",
+                    "sourcesql_openai_OPENAI_API_KEY": "SAFE-SYNTHETIC-MODEL-CREDENTIAL",
+                }
+                if model
+                else {}
+            ),
+            **overrides,
+        }
+    )
+
+
+def research_request(settings, **overrides):
+    return request(
+        **{
+            "budgets": {**settings["descriptor"]["limits"], "max_cost_microusd": 50_000},
+            **overrides,
+        }
+    )
+
+
+@pytest.mark.parametrize("configured_model", [False, True])
+def test_research_v3_fingerprints_effective_limits_model_and_only_secret_references(
+    configured_model,
+):
+    env = research_environment(model=configured_model)
+    settings = policy.load_configuration(env)
+    model = (
+        {
+            "name": "gpt-4.1-mini",
+            "secret_name": "sourcesql_openai",
+            "version": "openai-structured.v1",
+        }
+        if configured_model
+        else None
+    )
+    limits = {
+        "max_search_queries": 32,
+        "max_search_requests": 48,
+        "max_candidates": 2500,
+        "max_fetches": 40,
+        "max_semantic_documents": 40,
+        "max_model_requests": 96,
+        "max_concurrency": 4,
+        "dispatch_deadline_seconds": 100,
+        "max_output_rows": 1000,
+        "max_output_bytes": 4_194_304,
+        "max_input_tokens": 200_000,
+        "max_output_tokens": 16_000,
+    }
+    if not configured_model:
+        limits.update(
+            max_semantic_documents=0, max_model_requests=0, max_input_tokens=0, max_output_tokens=0
+        )
+    descriptor = {
+        "approved_cost_microusd": 50_000,
+        "limits": limits,
+        "model": model,
+        "search_types": policy.SEARCH_TYPES,
+        "secret_name": "sourcesql_exa",
+        "version": "exa-research.v3",
+    }
+    assert settings["descriptor"] == descriptor
+    assert (
+        settings["provider_policy_sha256"]
+        == hashlib.sha256(
+            json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+    )
+    for name, search_type in policy.SEARCH_TYPES.items():
+        profile = settings["profiles"][name]
+        assert profile["search_type"] == search_type
+        assert profile["fetch_adapter"] == "exa"
+        assert profile["allowed_source_hosts"] == []
+        assert profile["allow_public_source_hosts"] is True
+        assert profile.get("model") == (
+            {
+                "name": "gpt-4.1-mini",
+                "api_key_env": "sourcesql_openai_OPENAI_API_KEY",
+                "retries": 0,
+            }
+            if configured_model
+            else None
+        )
+        assert not {"embedding", "private_disclosure", "base_url", "api_key"} & set(profile)
+    assert "SAFE-SYNTHETIC" not in json.dumps(settings)
+    rotated = policy.load_configuration(
+        {
+            **env,
+            "sourcesql_exa_EXA_API_KEY": "ROTATED-EXA-KEY",
+            "sourcesql_openai_OPENAI_API_KEY": "ROTATED-MODEL-KEY",
+        }
+    )
+    assert rotated == settings
+
+
+@pytest.mark.parametrize("version", ["exa-search.v1", "exa-research.v2"])
+def test_legacy_configuration_keeps_search_only_grants_and_ignores_unrelated_model_env(version):
+    settings = policy.load_configuration(environment(SOURCESQL_EXA_POLICY_VERSION=version))
+    with_model = policy.load_configuration(
+        research_environment(model=True, **{"SOURCESQL_EXA_POLICY_VERSION": version})
+    )
+    assert with_model == settings
+    for profile in settings["profiles"].values():
+        assert "model" not in profile and "allow_public_source_hosts" not in profile
+    assert "limits" not in settings["descriptor"] and "model" not in settings["descriptor"]
+    for budgets in [
+        {**policy.LIMITS, "max_search_queries": 3, "max_cost_microusd": 50_000},
+        {**policy.LIMITS, "max_candidates": 11, "max_cost_microusd": 50_000},
+    ]:
+        budgets["dispatch_deadline_seconds"] = 60
+        with pytest.raises(SourcesQLError):
+            policy.validate_request(request(budgets=budgets), settings, environment())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"SOURCESQL_OPENAI_MODEL": "gpt-4.1-mini"},
+        {"SOURCESQL_OPENAI_SECRET_NAME": "sourcesql_openai"},
+        {"SOURCESQL_OPENAI_MODEL": "", "SOURCESQL_OPENAI_SECRET_NAME": "sourcesql_openai"},
+        {
+            "SOURCESQL_OPENAI_MODEL": "https://other.example/model",
+            "SOURCESQL_OPENAI_SECRET_NAME": "sourcesql_openai",
+        },
+        {
+            "SOURCESQL_OPENAI_MODEL": "openai/gpt-4.1-mini",
+            "SOURCESQL_OPENAI_SECRET_NAME": "sourcesql_openai",
+        },
+        {"SOURCESQL_OPENAI_MODEL": "gpt model", "SOURCESQL_OPENAI_SECRET_NAME": "sourcesql_openai"},
+        {"SOURCESQL_OPENAI_MODEL": "g" * 129, "SOURCESQL_OPENAI_SECRET_NAME": "sourcesql_openai"},
+        {"SOURCESQL_OPENAI_MODEL": "gpt-4.1-mini", "SOURCESQL_OPENAI_SECRET_NAME": "BAD_NAME"},
+        {"SOURCESQL_OPENAI_MODEL": "gpt-4.1-mini", "SOURCESQL_OPENAI_SECRET_NAME": "a" * 64},
+    ],
+)
+def test_research_model_configuration_is_an_optional_validated_pair(overrides):
+    with pytest.raises(ValueError):
+        policy.load_configuration(research_environment(**overrides))
+
+
+@pytest.mark.parametrize("configured_model", [False, True])
+@pytest.mark.parametrize("source_mode", ["allow_excerpt", "require_document"])
+def test_research_v3_admits_broad_budget_and_source_mode_without_promising_complete_documents(
+    configured_model, source_mode
+):
+    env = research_environment(model=configured_model)
+    settings = policy.load_configuration(env)
+    policy.validate_request(research_request(settings, source_mode=source_mode), settings, env)
+    assert not settings["profiles"]["exa"].get("assume_complete")
+
+
+@pytest.mark.parametrize(
+    "credential", ["sourcesql_exa_EXA_API_KEY", "sourcesql_openai_OPENAI_API_KEY"]
+)
+@pytest.mark.parametrize("value", [None, "", "bad key", "bad\nkey", "x" * 4097])
+def test_research_v3_checks_both_configured_credentials_before_dispatch(credential, value):
+    env = research_environment(model=True)
+    settings = policy.load_configuration(env)
+    if value is None:
+        del env[credential]
+    else:
+        env[credential] = value
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(research_request(settings), settings, env)
+    assert error.value.code == "provider_unavailable"
+
+
+@pytest.mark.parametrize("name", list(policy.RESEARCH_LIMITS))
+def test_research_request_cannot_expand_any_effective_ceiling(name):
+    env = research_environment(model=True)
+    settings = policy.load_configuration(env)
+    requested = research_request(settings)
+    requested["budgets"][name] += 1
+    with pytest.raises(SourcesQLError):
+        policy.validate_request(requested, settings, env)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "max_semantic_documents",
+        "max_model_requests",
+        "max_input_tokens",
+        "max_output_tokens",
+    ],
+)
+def test_research_without_model_cannot_reserve_semantic_work(name):
+    env = research_environment()
+    settings = policy.load_configuration(env)
+    requested = research_request(settings)
+    requested["budgets"][name] = 1
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(requested, settings, env)
+    assert error.value.code == "unauthorized"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"allow_public_source_hosts": False},
+        {"allowed_source_hosts": ["private.example"]},
+        {"fetch_adapter": "http"},
+        {"approved_cost_microusd": 1_000_000},
+        {"api_key_env": "UNREVIEWED_EXA_KEY"},
+        {"model": None},
+        {
+            "model": {
+                "name": "gpt-4.1-mini",
+                "api_key_env": "sourcesql_openai_OPENAI_API_KEY",
+                "retries": 1,
+            }
+        },
+        {
+            "model": {
+                "name": "gpt-4.1-mini",
+                "api_key_env": "sourcesql_openai_OPENAI_API_KEY",
+                "retries": 0,
+                "base_url": "https://other.example/v1",
+            }
+        },
+    ],
+)
+def test_research_profile_cannot_drift_from_its_public_policy(change):
+    env = research_environment(model=True)
+    settings = policy.load_configuration(env)
+    settings["profiles"]["exa"].update(change)
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(research_request(settings), settings, env)
+    assert error.value.code == "unauthorized"
+
+
+def test_research_effective_limits_cannot_change_under_the_same_fingerprint():
+    env = research_environment()
+    settings = policy.load_configuration(env)
+    settings["descriptor"]["limits"]["max_candidates"] = 2499
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(research_request(settings), settings, env)
+    assert error.value.code == "unauthorized"
+
+
+@pytest.mark.parametrize("configured_model", [False, True])
+def test_research_explain_grants_only_configured_operators(configured_model):
+    settings = policy.load_configuration(research_environment(model=configured_model))
+    allowed = {"WEB_SEARCH", "WEB_FETCH"}
+    if configured_model:
+        allowed.update({"SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL", "SEM_NORM"})
+    for operator in allowed:
+        policy.validate_explain(
+            {
+                "plan": {
+                    "stages": [
+                        {"stage": "external", "operator": operator},
+                    ]
+                }
+            },
+            settings,
+        )
+    for operator in {"SEM_SCORE", "WEB_CRAWL", "SEM_MATCH"} - allowed:
+        with pytest.raises(SourcesQLError) as error:
+            policy.validate_explain(
+                {
+                    "plan": {
+                        "stages": [
+                            {"stage": "external", "operator": operator},
+                        ]
+                    }
+                },
+                settings,
+            )
+        assert error.value.code == "unsupported_capability"
+    with pytest.raises(SourcesQLError):
+        policy.validate_explain(
+            {
+                "plan": {
+                    "stages": [
+                        {"stage": "external", "operator": "WEB_FETCH"},
+                    ]
+                }
+            }
+        )
+    policy.validate_explain({"plan": {"stages": []}}, policy.load_configuration({}))
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+def test_opt_in_reasoning_effort_is_bound_to_the_model_profile_and_public_policy(effort):
+    env = research_environment(
+        model=True, SOURCESQL_OPENAI_MODEL="gpt-6-astra", SOURCESQL_OPENAI_REASONING_EFFORT=effort
+    )
+    settings = policy.load_configuration(env)
+    assert settings["descriptor"]["model"] == {
+        "name": "gpt-6-astra",
+        "secret_name": "sourcesql_openai",
+        "version": "openai-structured.v1",
+        "reasoning_effort": effort,
+    }
+    for profile in settings["profiles"].values():
+        assert profile["model"] == {
+            "name": "gpt-6-astra",
+            "api_key_env": "sourcesql_openai_OPENAI_API_KEY",
+            "retries": 0,
+            "reasoning_effort": effort,
+        }
+    policy.validate_request(research_request(settings), settings, env)
+    without_effort = policy.load_configuration(
+        {key: value for key, value in env.items() if key != "SOURCESQL_OPENAI_REASONING_EFFORT"}
+    )
+    assert settings["provider_policy_sha256"] != without_effort["provider_policy_sha256"]
+    assert "reasoning_effort" not in without_effort["descriptor"]["model"]
+    if effort == "low":
+        assert (
+            settings["provider_policy_sha256"]
+            == "a2415a6fbb03bd46204b7fc2d450ffd9fd342496374d97ade2e6cfe125eda3b8"
+        )
+    settings["profiles"]["exa"]["model"]["reasoning_effort"] = (
+        "medium" if effort == "low" else "low"
+    )
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(research_request(settings), settings, env)
+    assert error.value.code == "unauthorized"
+
+
+@pytest.mark.parametrize("effort", ["", "none", "minimal", "LOW", "ultra", "auto", 1])
+def test_reasoning_effort_refuses_unknown_values(effort):
+    with pytest.raises(ValueError):
+        policy.load_configuration(
+            research_environment(model=True, SOURCESQL_OPENAI_REASONING_EFFORT=effort)
+        )
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("version", ["exa-search.v1", "exa-research.v2"])
+def test_reasoning_effort_is_not_enabled_on_legacy_policies(model, version):
+    with pytest.raises(ValueError):
+        policy.load_configuration(
+            research_environment(
+                model=model,
+                SOURCESQL_EXA_POLICY_VERSION=version,
+                SOURCESQL_OPENAI_REASONING_EFFORT="low",
+            )
+        )
+
+
+def test_reasoning_effort_cannot_exist_without_the_model_pair():
+    with pytest.raises(ValueError):
+        policy.load_configuration(research_environment(SOURCESQL_OPENAI_REASONING_EFFORT="low"))
+
+
+@pytest.mark.parametrize("key", ["reasoning_effort", "reasoningEffort"])
+def test_request_cannot_override_the_trusted_reasoning_effort(key):
+    env = research_environment(model=True, SOURCESQL_OPENAI_REASONING_EFFORT="low")
+    settings = policy.load_configuration(env)
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(research_request(settings, **{key: "high"}), settings, env)
+    assert error.value.code == "unauthorized"

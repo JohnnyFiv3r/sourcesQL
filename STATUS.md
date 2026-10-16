@@ -6,6 +6,24 @@ classification and published review-history messages, and reports configured
 hosted worker versions. See the [0.2.2 release notes](docs/releases/0.2.2.md).
 The earlier 0.2.1 hosting and 0.2.0 continuation checks remain scoped below.
 
+## Research candidate: 0.2.3 (unreleased)
+
+The source candidate adds opt-in wider Exa retrieval, bounded parallel search,
+source fetching and configured OpenAI extraction to personal-cloud hosting.
+Small defaults and older hosted policies remain unchanged. Native OpenAI uses
+Responses; supporting quotes acquire exact coordinates in code. Invalid evidence
+is excluded from semantic cache reuse, and incomplete fetched text cannot satisfy
+`require_document`. Optional reasoning effort is part of the reviewed policy.
+See [the research configuration](docs/exa-research.md).
+
+The existing personal-cloud Preview now runs the reviewed source candidate.
+A capped live pipeline and a separate saved-result projection completed through
+Vercel and the versioned Flight; the projection made no provider or model calls.
+This is bounded integration qualification, not complete research coverage or
+factual-accuracy certification. Personal-cloud onboarding defaults retain their
+older search policy unless explicitly reconfigured. No 0.2.3 package has been
+published. Operator evidence and quality experiments remain private.
+
 ## Released fixes and runtime alignment: 0.2.2
 
 [Release v0.2.2](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.2)

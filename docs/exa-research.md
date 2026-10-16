@@ -153,3 +153,51 @@ cancellation and lost-submission recovery. It should not be hidden inside a shor
 Flight polling loop. The fixed low effort is documented at $0.025; metered auto
 has a configurable budget with a $1 minimum and a larger default. No Agent run,
 subscription or new credential destination is enabled by this search-mode change.
+
+## Wider research and grounded extraction
+
+The opt-in `exa-research.v3` policy separates ordinary defaults from explicit
+research ceilings. Its configured maximums are 32 query strings, 48 search
+requests, 2,500 returned candidates, 40 document fetches and four concurrent
+search requests. Each Exa query accepts at most 100 results. These are ceilings,
+not default work sizes or evidence that a run found that many relevant entities.
+Existing v1 and v2 deployments retain their original fingerprints and limits.
+
+Use `SOURCESQL_EXA_POLICY_VERSION=exa-research.v3` in both the gateway and its
+reviewed Flight. To enable semantic extraction, configure
+`SOURCESQL_OPENAI_MODEL` and `SOURCESQL_OPENAI_SECRET_NAME` together and bind that
+MotherDuck Flight secret with its `OPENAI_API_KEY` entry. The gateway needs the
+secret's name, not its value. The policy fingerprint includes the model identity
+and effective limits; dispatch refuses a different model or missing secret
+before reserving or submitting a Flight. Without a model, v3 exposes search and
+fetch but reserves zero semantic/model tokens. It never advertises embeddings
+as configured merely because a language model is available.
+
+The host still plans the search terms. Inspect the composition of the acquired
+sources before semantic work: company profiles may help organization discovery
+but provide little project-level evidence. Use task-appropriate SQL to route
+source types, deduplicate repeated URLs and preserve the excluded population
+for coverage review. Do not turn a prioritized document sample into a claim of
+complete entity coverage.
+
+Default to `source_mode: "allow_excerpt"` for discovery. After SQL filtering,
+`WEB_FETCH(url)` can materialize retained source text for each surviving row;
+use one multi-field `SEM_EXTRACT` or `SEM_EXTRACT_ALL` per document where useful.
+Exa Contents is not verified complete document coverage. Setting
+`require_document` may trigger fetching all incomplete search hits before SQL
+filtering, and refuses text that does not establish completeness.
+
+Native OpenAI extraction uses Responses with storage disabled and no hidden SDK
+retries. Explicit OpenAI-compatible endpoints retain Chat Completions. Models
+copy exact supporting quotations; the adapter establishes their character
+coordinates deterministically in the inspected window. Missing, altered and
+ambiguous quotes are refused. Valid preexisting coordinates can disambiguate a
+repeated quote. Text support still does not establish factual truth, freshness
+or correct entity identity.
+
+The model output ceiling includes reasoning tokens. Input tokens are accounted
+from reported usage after dispatch; cost figures and application reservations
+remain estimates, not a provider billing hard stop. Use finite request/token
+limits and a separate total experiment budget. Broader ceilings do not extend a
+Flight's runtime or its daily application reservation. Local qualification and
+hosted deployment must be recorded separately.

@@ -421,3 +421,44 @@ def test_null_semantic_inputs_reach_coordinator_for_unprocessed_receipts():
     )
     assert table.rows == [{"matched": None}]
     assert len(calls) == 1 and calls[0][1][0] is None
+
+
+def test_deduplicated_sql_survivors_are_fetched_before_multifield_extraction():
+    class Tracked:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, name, args, options):
+            self.calls.append((name, args, options))
+            if name == "WEB_SEARCH":
+                return [dict(SOURCES[0]), dict(SOURCES[0]), dict(SOURCES[2])]
+            if name == "WEB_FETCH":
+                assert args == [SOURCES[0]["url"]]
+                return [
+                    {**SOURCES[0], "content": "Aurora planned 600 MW; operating capacity unstated"}
+                ]
+            assert name == "SEM_EXTRACT"
+            assert args[0] == "Aurora planned 600 MW; operating capacity unstated"
+            return {"project": "Aurora", "planned_mw": "600", "operating_mw": None}
+
+    fixture = Tracked()
+    table, _ = execute(
+        """WITH discovered AS (
+        SELECT url,title FROM WEB_SEARCH('campus development','power supply')
+    ), candidates AS (
+        SELECT url,min(title) AS title FROM discovered
+        WHERE title <> 'Other' GROUP BY url
+    ), fetched AS (
+        SELECT url,WEB_FETCH(url) AS documents FROM candidates
+    ), extracted AS (
+        SELECT url,SEM_EXTRACT(documents[1].content,'Extract stated facts; keep unknown null',
+          project := 'campus name',planned_mw := 'announced MW',
+          operating_mw := 'operating MW') AS facts FROM fetched
+    ) SELECT facts.project AS project,TRY_CAST(facts.planned_mw AS BIGINT) AS planned_mw,
+        facts.operating_mw AS operating_mw,url FROM extracted ORDER BY project,url""",
+        fixture=fixture,
+    )
+    assert table.rows == [
+        {"project": "Aurora", "planned_mw": 600, "operating_mw": None, "url": SOURCES[0]["url"]}
+    ]
+    assert [call[0] for call in fixture.calls] == ["WEB_SEARCH", "WEB_FETCH", "SEM_EXTRACT"]

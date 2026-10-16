@@ -708,8 +708,8 @@ class _Binder:
                 "Operator arguments must be deterministic scalar expressions from the source row"
             )
         if name in ("WEB_SEARCH", "WEB_FETCH"):
-            if not 1 <= len(args) <= 8:
-                refuse("Web source operators require one to eight strings", "invalid_query")
+            if not 1 <= len(args) <= 32:
+                refuse("Web source operators require one to 32 strings", "invalid_query")
             allowed = (
                 {
                     "published_after",
@@ -737,8 +737,8 @@ class _Binder:
                     refuse("Row-dependent web arguments must have VARCHAR type", "invalid_query")
             for key, value in kwargs.items():
                 raw = literal_value(value, self.parameters)
-                if key == "per_query_limit" and (type(raw) is not int or not 1 <= raw <= 20):
-                    refuse("per_query_limit must be an integer from 1 to 20", "invalid_query")
+                if key == "per_query_limit" and (type(raw) is not int or not 1 <= raw <= 100):
+                    refuse("per_query_limit must be an integer from 1 to 100", "invalid_query")
                 if key == "mode" and raw not in ("cache_preferred", "live"):
                     refuse("Unsupported fetch mode", "invalid_query")
                 if key.startswith("published_"):

@@ -193,8 +193,28 @@ def test_publication_options_validate_real_dates_and_explicit_policy():
         "published_after := '2026-01-01'",
         "undated_policy := 'guess'",
         "allow_post_filter := 'true'",
-        "per_query_limit := 21",
+        "per_query_limit := 101",
         "per_query_limit := 1e3",
     ):
         with pytest.raises(SourcesQLError):
             admit(f"SELECT url FROM WEB_SEARCH('campuses',{options})")
+
+
+@pytest.mark.parametrize("count", [21, 100])
+def test_provider_specific_result_counts_are_admitted_before_profile_validation(count):
+    plan = admit(f"SELECT url FROM WEB_SEARCH('research',per_query_limit := {count})")
+    assert plan.custom_operators == ("WEB_SEARCH",)
+    assert plan.explain["external_dispatch_during_explain"] is False
+
+
+@pytest.mark.parametrize("operator", ["WEB_SEARCH", "WEB_FETCH"])
+def test_broad_source_arguments_accept_32_and_refuse_33_before_dispatch(operator):
+    args = [f"'coverage term {index}'" for index in range(32)]
+    if operator == "WEB_FETCH":
+        args = [f"'https://public.example/{index}'" for index in range(32)]
+    plan = admit(f"SELECT url FROM {operator}({','.join(args)})")
+    assert plan.custom_operators == (operator,)
+    assert plan.explain["external_dispatch_during_explain"] is False
+    with pytest.raises(SourcesQLError) as error:
+        admit(f"SELECT url FROM {operator}({','.join([*args, args[0]])})")
+    assert error.value.code == "invalid_query"

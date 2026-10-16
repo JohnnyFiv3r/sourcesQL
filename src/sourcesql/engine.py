@@ -544,7 +544,9 @@ class Engine:
             def dispatch(operator, args, kwargs):
                 check_active()
                 if time.monotonic() > deadline:
-                    raise SourcesQLError("budget_exhausted", "Dispatch deadline exceeded", "dispatch")
+                    raise SourcesQLError(
+                        "budget_exhausted", "Dispatch deadline exceeded", "dispatch"
+                    )
                 context = {k: v for k, v in kwargs.items() if k.startswith("_")}
                 options = {k: v for k, v in kwargs.items() if not k.startswith("_")}
                 if operator in ("WEB_SEARCH", "WEB_FETCH"):
@@ -623,6 +625,9 @@ class Engine:
                     cached = db.execute(
                         "SELECT value FROM semantic_cache WHERE key=?", (cachekey,)
                     ).fetchone()
+                cacheable = {"supported_text", "processed", "not_stated", "unknown", "no_match"}
+                if cached and strict_json(cached[0]).get("status") not in cacheable:
+                    cached = None
                 if cached:
                     value = strict_json(cached[0])
                     budget.reserve("cache_hits", limit="unbounded_counter")
@@ -658,10 +663,10 @@ class Engine:
                                     "Supporting text span does not match inspected source",
                                     "semantic",
                                 )
-                    if value["status"] not in ("failed", "not_processed", "invalid_output"):
+                    if value["status"] in cacheable:
                         with self.store.db() as db:
                             db.execute(
-                                "INSERT OR IGNORE INTO semantic_cache VALUES(?,?)",
+                                "INSERT OR REPLACE INTO semantic_cache VALUES(?,?)",
                                 (cachekey, canonical(value).decode()),
                             )
                 outcomes.append(
@@ -1037,7 +1042,8 @@ class Engine:
         if (
             not isinstance(bundle, dict)
             or set(bundle) != {"format", "root_result_id", "results", "content_sha256"}
-            or bundle.get("format") not in {"sourcesql.engine-bundle.v1", "open-webql.engine-bundle.v1"}
+            or bundle.get("format")
+            not in {"sourcesql.engine-bundle.v1", "open-webql.engine-bundle.v1"}
         ):
             raise SourcesQLError("invalid_request", "Invalid bundle")
         body = {k: v for k, v in bundle.items() if k != "content_sha256"}
@@ -1107,7 +1113,9 @@ class Engine:
                 sid, text = source.get("source_version_id"), source.get("content")
                 if isinstance(text, str):
                     if sid in source_texts and source_texts[sid] != text:
-                        raise SourcesQLError("evidence_invalid", "Conflicting imported source identity")
+                        raise SourcesQLError(
+                            "evidence_invalid", "Conflicting imported source identity"
+                        )
                     source_texts[sid] = text
         for record in results.values():
             for item in record["metadata"].get("evidence", []) + record["metadata"].get(
@@ -1214,14 +1222,18 @@ class Engine:
                 "private_local",
                 "private_derived",
             ):
-                raise SourcesQLError("unauthorized", "This launcher cannot read private run metadata")
+                raise SourcesQLError(
+                    "unauthorized", "This launcher cannot read private run metadata"
+                )
         if receipt.get("result_id"):
             result = self.store.authorize(receipt["result_id"])
             if not self.allow_private and result.get("data_classification") in (
                 "private_local",
                 "private_derived",
             ):
-                raise SourcesQLError("unauthorized", "This launcher cannot read private run metadata")
+                raise SourcesQLError(
+                    "unauthorized", "This launcher cannot read private run metadata"
+                )
         return receipt
 
     def cancel(self, run_id):

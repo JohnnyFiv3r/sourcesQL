@@ -13,7 +13,11 @@ import {
   BackendError,
   type SqlClient,
 } from "../server/motherduck.js";
-import { exaFingerprint, type HostedExaPolicy } from "../server/hosted-exa.js";
+import {
+  exaConfiguration,
+  exaFingerprint,
+  type HostedExaPolicy,
+} from "../server/hosted-exa.js";
 import {
   hostedSearchConfiguration,
   hostedSearchFingerprint,
@@ -1353,6 +1357,241 @@ function configureExa(h: Harness) {
   };
   h.flightSecrets = ["sourcesql_exa"];
 }
+
+const exaResearchPolicy = (model: boolean): HostedExaPolicy => ({
+  ...exaPolicy(10_000_000),
+  policyVersion: "exa-research.v3",
+  ...(model
+    ? { model: { name: "gpt-4.1-mini", secretName: "sourcesql_openai" } }
+    : {}),
+});
+
+function configureResearchExa(h: Harness, policy: HostedExaPolicy) {
+  configureExa(h);
+  Object.assign(h.flightConfig, exaConfiguration(policy));
+  h.flightSecrets = [
+    policy.secretName,
+    ...(policy.model ? [policy.model.secretName] : []),
+  ];
+}
+
+for (const model of [false, true]) {
+  test(`v3 ${model ? "model" : "no-model"} capabilities and durable normalized budgets match effective grants`, async () => {
+    const h = await harness();
+    try {
+      const policy = exaResearchPolicy(model);
+      configureResearchExa(h, policy);
+      const engine = h.engine("owner-a", { exa: policy });
+      await engine.initialize();
+      const capabilities = await engine.call<Row>("capabilities");
+      assert.equal(capabilities.default_profile, "fixture");
+      const live = capabilities.profiles.filter(
+        (entry: Row) => entry.mode === "live",
+      );
+      assert.equal(live.length, 3);
+      for (const entry of live) {
+        assert.deepEqual(entry.operators, [
+          "WEB_SEARCH",
+          "WEB_FETCH",
+          ...(model
+            ? ["SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL", "SEM_NORM"]
+            : []),
+        ]);
+        assert.equal(entry.model_configured, model);
+        assert.equal(entry.model_name, model ? "gpt-4.1-mini" : null);
+        assert.equal(entry.embedding_configured, false);
+        assert.equal(entry.research_agent_configured, false);
+        assert.match(
+          entry.fetched_text_coverage,
+          /completeness is not established/,
+        );
+        assert.equal(entry.search_limits.max_search_queries, 32);
+        assert.equal(entry.search_limits.max_search_requests, 48);
+        assert.equal(entry.search_limits.max_candidates, 2500);
+        assert.equal(entry.search_limits.max_fetches, 40);
+        assert.equal(
+          entry.search_limits.max_semantic_documents,
+          model ? 40 : 0,
+        );
+        assert.equal(entry.search_limits.max_model_requests, model ? 96 : 0);
+        assert.equal(entry.search_limits.max_input_tokens, model ? 200_000 : 0);
+        assert.equal(entry.search_limits.max_output_tokens, model ? 16_000 : 0);
+      }
+      const request = {
+        ...liveQuery(),
+        source_mode: "require_document",
+        budgets: {
+          max_candidates: 1200,
+          max_fetches: 6,
+          max_semantic_documents: model ? 6 : 0,
+          max_model_requests: model ? 12 : 0,
+          max_cost_microusd: 40_000,
+          dispatch_deadline_seconds: 80,
+        },
+      };
+      const job = await engine.call<Row>("query", request);
+      const saved = (
+        await engine.connection((client) =>
+          client.query(
+            `SELECT request_json,provider_policy_sha256,provider_cost_reserved_microusd FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+            [job.job_id],
+          ),
+        )
+      ).rows[0];
+      const normalized = JSON.parse(saved.request_json);
+      assert.equal(normalized.source_mode, "require_document");
+      assert.deepEqual(normalized.budgets, {
+        dispatch_deadline_seconds: 80,
+        max_candidates: 1200,
+        max_concurrency: 4,
+        max_fetches: 6,
+        max_input_tokens: model ? 200_000 : 0,
+        max_model_requests: model ? 12 : 0,
+        max_output_bytes: 4_194_304,
+        max_output_rows: 1000,
+        max_output_tokens: model ? 16_000 : 0,
+        max_search_queries: 32,
+        max_search_requests: 48,
+        max_semantic_documents: model ? 6 : 0,
+        max_cost_microusd: 40_000,
+      });
+      assert.equal(saved.provider_policy_sha256, exaFingerprint(policy));
+      assert.equal(Number(saved.provider_cost_reserved_microusd), 0);
+      const defaultJob = await engine.call<Row>("query", liveQuery());
+      const defaults = (
+        await engine.connection((client) =>
+          client.query(
+            `SELECT request_json FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+            [defaultJob.job_id],
+          ),
+        )
+      ).rows[0];
+      assert.equal(
+        JSON.parse(defaults.request_json).source_mode,
+        "allow_excerpt",
+      );
+      await assert.rejects(
+        engine.call("query", { ...liveQuery(), source_mode: "guess" }),
+        { code: "unsupported_capability" },
+      );
+      for (const budgets of [
+        { max_candidates: 2501 },
+        { max_search_queries: 33 },
+        { max_search_requests: 49 },
+        { max_cost_microusd: 50_001 },
+        ...(!model
+          ? [{ max_model_requests: 1 }, { max_semantic_documents: 1 }]
+          : []),
+      ])
+        await assert.rejects(
+          engine.call("query", { ...liveQuery(), budgets }),
+          { code: "invalid_request" },
+        );
+      assert.equal(h.submissions, 0);
+      assert.equal(await providerReserve(engine), "0");
+    } finally {
+      await h.close();
+    }
+  });
+}
+
+test("v3 model Flight drift and missing secret refuse before reservation, then exact binding dispatches once", async () => {
+  const h = await harness();
+  try {
+    const policy = exaResearchPolicy(true);
+    configureResearchExa(h, policy);
+    const queue = h.engine("owner-a", { exa: policy });
+    await queue.initialize();
+    const request = liveQuery();
+    const queued = await queue.call<Row>("query", request);
+    const submitter = h.engine("owner-a", {
+      exa: policy,
+      allowSubmission: true,
+    });
+    const expected = { ...h.flightConfig };
+    for (const change of [
+      { SOURCESQL_OPENAI_MODEL: "gpt-4.1" },
+      { SOURCESQL_OPENAI_SECRET_NAME: "other_openai" },
+      { SOURCESQL_OPENAI_MODEL: undefined },
+      { SOURCESQL_OPENAI_SECRET_NAME: undefined },
+      { SOURCESQL_EXA_SECRET_NAME: "other_exa" },
+      { SOURCESQL_EXA_POLICY_VERSION: "exa-research.v2" },
+    ]) {
+      h.flightConfig = { ...expected, ...change };
+      await assert.rejects(
+        submitter.call("start_job", { job_id: queued.job_id }),
+        { code: "unsupported_capability" },
+      );
+      assert.equal(h.submissions, 0);
+      assert.equal(await providerReserve(submitter), "0");
+    }
+    h.flightConfig = expected;
+    h.flightSecrets = [policy.secretName];
+    await assert.rejects(
+      submitter.call("start_job", { job_id: queued.job_id }),
+      { code: "unsupported_capability" },
+    );
+    assert.equal(h.submissions, 0);
+    assert.equal(await providerReserve(submitter), "0");
+    const before = (
+      await submitter.connection((client) =>
+        client.query(
+          `SELECT dispatch_intent_at FROM ${submitter.table("jobs")} WHERE id=$1::UUID`,
+          [queued.job_id],
+        ),
+      )
+    ).rows[0];
+    assert.equal(before.dispatch_intent_at, null);
+    h.flightSecrets = [policy.secretName, policy.model!.secretName];
+    await submitter.call("start_job", { job_id: queued.job_id });
+    const replay = await submitter.call<Row>("query", request);
+    assert.equal(replay.job_id, queued.job_id);
+    assert.equal(h.submissions, 1);
+    assert.equal(await providerReserve(submitter), "50000");
+    assert.equal(h.runs.length, 1);
+  } finally {
+    await h.close();
+  }
+});
+
+test("v3 no-model policy refuses unexpected model configuration before native dispatch", async () => {
+  const h = await harness();
+  try {
+    const policy = exaResearchPolicy(false);
+    configureResearchExa(h, policy);
+    const queue = h.engine("owner-a", { exa: policy });
+    await queue.initialize();
+    const queued = await queue.call<Row>("query", liveQuery());
+    const submitter = h.engine("owner-a", {
+      exa: policy,
+      allowSubmission: true,
+    });
+    const expected = { ...h.flightConfig };
+    for (const extra of [
+      { SOURCESQL_OPENAI_MODEL: "gpt-4.1-mini" },
+      { SOURCESQL_OPENAI_SECRET_NAME: "sourcesql_openai" },
+      {
+        SOURCESQL_OPENAI_MODEL: "gpt-4.1-mini",
+        SOURCESQL_OPENAI_SECRET_NAME: "sourcesql_openai",
+      },
+    ]) {
+      h.flightConfig = { ...expected, ...extra };
+      await assert.rejects(
+        submitter.call("start_job", { job_id: queued.job_id }),
+        { code: "unsupported_capability" },
+      );
+      assert.equal(h.submissions, 0);
+      assert.equal(await providerReserve(submitter), "0");
+    }
+    h.flightConfig = expected;
+    await submitter.call("start_job", { job_id: queued.job_id });
+    assert.equal(h.submissions, 1);
+    assert.equal(await providerReserve(submitter), "50000");
+  } finally {
+    await h.close();
+  }
+});
+
 async function providerReserve(engine: MotherDuckEngine) {
   return (
     await engine.connection((client) =>

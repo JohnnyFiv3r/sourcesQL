@@ -214,7 +214,7 @@ def execute_job(
         )
         if operation == "query":
             if request.get("profile", "fixture") != "fixture":
-                helper.validate_explain(engine.explain(**request))
+                helper.validate_explain(engine.explain(**request), settings)
             result = engine.query(**request)
         elif operation == "import_table":
             result = engine.import_table(**request)

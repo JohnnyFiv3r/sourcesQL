@@ -5,6 +5,9 @@ import type { ResearchEngine, EngineResult } from "./engine.js";
 import type { ResearchState, ResearchStateBackend } from "./store.js";
 import {
   exaSearchTypes,
+  exaResearchLimits,
+  exaOperators,
+  exaConfiguration,
   exaDeadline,
   isExaProfile,
   exaBudgets,
@@ -542,13 +545,16 @@ export class MotherDuckEngine implements ResearchEngine {
         },
       };
       if (isExaProfile(request.profile)) {
+        const research = this.options.exa!.policyVersion === "exa-research.v3";
         if (
           params.source_mode !== undefined &&
-          params.source_mode !== "allow_excerpt"
+          !(
+            research ? ["allow_excerpt", "require_document"] : ["allow_excerpt"]
+          ).includes(params.source_mode)
         )
           throw new BackendError(
             "unsupported_capability",
-            "Hosted Exa initially supports search excerpts only",
+            "Source mode is unavailable in the configured hosted Exa policy",
           );
         try {
           request.budgets = exaBudgets(budgets, this.options.exa!, deadline);
@@ -558,7 +564,7 @@ export class MotherDuckEngine implements ResearchEngine {
             "Hosted Exa budget exceeds operator approval",
           );
         }
-        request.source_mode = "allow_excerpt";
+        request.source_mode = params.source_mode ?? "allow_excerpt";
       } else if (isHostedSearchProfile(request.profile)) {
         if (
           params.source_mode !== undefined &&
@@ -782,18 +788,28 @@ export class MotherDuckEngine implements ResearchEngine {
         );
       if (this.options.exa) {
         const policy = this.options.exa;
+        const required = exaConfiguration(policy);
         const secrets = JSON.parse(detail.secrets_json ?? "[]");
+        const configuredPolicy = {
+          ...config,
+          SOURCESQL_EXA_POLICY_VERSION:
+            config.SOURCESQL_EXA_POLICY_VERSION ?? "exa-search.v1",
+        };
         if (
-          config.SOURCESQL_ALLOW_LIVE_EXA !== "1" ||
           config.SOURCESQL_ALLOW_LIVE_BRAVE === "1" ||
           config.SOURCESQL_ALLOW_LIVE_SERPER === "1" ||
-          config.SOURCESQL_EXA_APPROVED_COST_MICROUSD !==
-            String(policy.approvedCostMicrousd) ||
-          config.SOURCESQL_EXA_SECRET_NAME !== policy.secretName ||
-          (config.SOURCESQL_EXA_POLICY_VERSION ?? "exa-search.v1") !==
-            (policy.policyVersion ?? "exa-search.v1") ||
+          Object.entries(required).some(
+            ([key, value]) => configuredPolicy[key] !== value,
+          ) ||
+          (!policy.model?.reasoningEffort &&
+            config.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined) ||
+          (!policy.model &&
+            (config.SOURCESQL_OPENAI_MODEL !== undefined ||
+              config.SOURCESQL_OPENAI_SECRET_NAME !== undefined ||
+              config.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined)) ||
           !Array.isArray(secrets) ||
-          !secrets.includes(policy.secretName)
+          !secrets.includes(policy.secretName) ||
+          (policy.model && !secrets.includes(policy.model.secretName))
         )
           throw new BackendError(
             "unsupported_capability",
@@ -1161,15 +1177,18 @@ export class MotherDuckEngine implements ResearchEngine {
                   mode: "live",
                   provider: "exa",
                   live_qualified: false,
-                  operators: ["WEB_SEARCH"],
+                  operators: exaOperators(this.options.exa!),
                   search_type,
                   source_mode: "allow_excerpt",
-                  model_configured: false,
+                  model_configured: !!this.options.exa!.model,
+                  model_name: this.options.exa!.model?.name ?? null,
                   embedding_configured: false,
+                  fetched_text_coverage:
+                    this.options.exa!.policyVersion === "exa-research.v3"
+                      ? "Retained provider text; completeness is not established"
+                      : null,
                   search_limits: {
-                    max_search_queries: 2,
-                    max_search_requests: 2,
-                    max_candidates: 10,
+                    ...exaResearchLimits(this.options.exa!),
                     max_cost_microusd: this.options.exa!.approvedCostMicrousd,
                     dispatch_deadline_seconds: exaDeadline(
                       this.options.exa!,
@@ -1214,7 +1233,9 @@ export class MotherDuckEngine implements ResearchEngine {
         daily_execution_reserve_seconds: this.dailySeconds,
         flight_submission_enabled: !!this.options.allowSubmission,
         limitations: [
-          "Hosted private profiles are not configured; optional live providers are search-only",
+          this.options.exa?.policyVersion === "exa-research.v3"
+            ? "Live research uses retained provider text; exact quotes establish text support, not source completeness or factual truth"
+            : "Hosted private profiles are not configured; optional live providers are search-only",
           "Explain requires local engine",
           "Queued jobs require explicit start; status never dispatches",
           "Execution reserves are not an account-wide billing cap",
@@ -1401,6 +1422,23 @@ export async function createMotherDuckBackend(
             secretName: environment.SOURCESQL_EXA_SECRET_NAME ?? "",
             policyVersion:
               environment.SOURCESQL_EXA_POLICY_VERSION ?? "exa-search.v1",
+            ...(environment.SOURCESQL_OPENAI_MODEL !== undefined ||
+            environment.SOURCESQL_OPENAI_SECRET_NAME !== undefined ||
+            environment.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined
+              ? {
+                  model: {
+                    name: environment.SOURCESQL_OPENAI_MODEL ?? "",
+                    secretName: environment.SOURCESQL_OPENAI_SECRET_NAME ?? "",
+                    ...(environment.SOURCESQL_OPENAI_REASONING_EFFORT !==
+                    undefined
+                      ? {
+                          reasoningEffort:
+                            environment.SOURCESQL_OPENAI_REASONING_EFFORT,
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
           }
         : undefined,
   });

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import date, datetime
+from time import monotonic
 from typing import Any
 
 import httpx
@@ -18,15 +20,17 @@ from .common import (
 )
 
 
-def search_options(options: dict) -> int:
+def search_options(options: dict, *, maximum: int = 20) -> int:
     if options.get("query_time") is not None:
         raise SourcesQLError(
             "unsupported_capability", "Historical search is not implemented", "acquisition"
         )
     count = options.get("per_query_limit", 20)
-    if type(count) is not int or not 1 <= count <= 20:
+    if type(count) is not int or not 1 <= count <= maximum:
         raise SourcesQLError(
-            "invalid_request", "per_query_limit must be between 1 and 20", "acquisition"
+            "invalid_request",
+            f"per_query_limit must be between 1 and {maximum}",
+            "acquisition",
         )
     for name in ("published_after", "published_before"):
         value = options.get(name)
@@ -258,11 +262,20 @@ class ExaProvider:
             "supported_search_types": list(self.search_types),
             "multi_query": "separate_requests_with_per_query_limits_and_lineage",
             "additional_queries": False,
+            "max_per_query_results": 100,
+            "concurrent_queries": "budget_bounded_maximum_four",
             "fetch": True,
             "fresh_fetch": "maxAgeHours=0",
         }
 
-    def _request(self, path: str, body: dict, budget: Budget, counter: str) -> dict:
+    @staticmethod
+    def _check_dispatch(budget: Budget, deadline: float | None = None) -> None:
+        if budget.cancelled:
+            raise SourcesQLError("cancelled", "Run cancelled", "dispatch")
+        if deadline is not None and monotonic() >= deadline:
+            raise SourcesQLError("budget_exhausted", "Dispatch deadline exhausted", "dispatch")
+
+    def _reserve_request(self, path: str, budget: Budget, counter: str) -> dict:
         if not self.api_key:
             raise SourcesQLError(
                 "provider_unavailable", "Exa credentials are not configured", "acquisition"
@@ -271,13 +284,28 @@ class ExaProvider:
         event: dict[str, Any] = {
             "kind": "fetch" if counter == "fetches" else "search",
             "provider": "exa",
-            "status": "dispatched",
+            "status": "reserved",
             "usage": provider_usage("exa"),
         }
         if path == "/search":
             event["search_type"] = self.search_type
         self.events.append(event)
+        return event
+
+    def _request(
+        self,
+        path: str,
+        body: dict,
+        budget: Budget,
+        counter: str,
+        *,
+        event: dict | None = None,
+        deadline: float | None = None,
+    ) -> dict:
+        event = event if event is not None else self._reserve_request(path, budget, counter)
         try:
+            self._check_dispatch(budget, deadline)
+            event["status"] = "dispatched"
             result = api_json(
                 self.client,
                 "POST",
@@ -298,9 +326,13 @@ class ExaProvider:
             return result
         except SourcesQLError as error:
             event["status"] = (
-                "remote_outcome_unknown"
-                if getattr(error, "remote_outcome_unknown", False)
-                else "failed"
+                "not_dispatched"
+                if event["status"] == "reserved"
+                else (
+                    "remote_outcome_unknown"
+                    if getattr(error, "remote_outcome_unknown", False)
+                    else "failed"
+                )
             )
             raise
 
@@ -336,7 +368,7 @@ class ExaProvider:
 
     def search(self, queries: list[str], options: dict, budget: Budget) -> list[dict]:
         validate_queries(queries)
-        count = search_options({"per_query_limit": 10, **options})
+        count = search_options({"per_query_limit": 10, **options}, maximum=100)
         if (
             any(options.get(k) is not None for k in ("published_after", "published_before"))
             and options.get("undated_policy", "exclude") != "exclude"
@@ -346,12 +378,18 @@ class ExaProvider:
                 "Exa native publication filters require undated_policy='exclude'",
                 "acquisition",
             )
-        rows = []
+        concurrency = min(budget.limits["max_concurrency"], 4, len(queries))
+        if concurrency < 1:
+            raise SourcesQLError(
+                "budget_exhausted", "External concurrency allowance exhausted", "dispatch"
+            )
+        deadline = monotonic() + budget.limits["dispatch_deadline_seconds"]
+
         # Exa's additionalQueries merges all variations into one ranked result
         # pool without per-query attribution. SQL's variadic WEB_SEARCH promises
         # a limit and honest hit lineage for each input, so retain one request per
         # query; deep modes still perform Exa's internal multi-step retrieval.
-        for query_index, query in enumerate(queries):
+        def request_body(query: str) -> dict:
             body: dict[str, Any] = {
                 "query": query,
                 "type": self.search_type,
@@ -372,8 +410,13 @@ class ExaProvider:
             ):
                 if source in options:
                     body[target] = options[source]
-            budget.reserve("search_queries", limit="max_search_queries")
-            result = self._request("/search", body, budget, "search_requests")
+            return body
+
+        def acquire(query_index: int, query: str, body: dict, event: dict) -> list[dict]:
+            result = self._request(
+                "/search", body, budget, "search_requests", event=event, deadline=deadline
+            )
+            result_rows = []
             for rank, row in enumerate(self._rows(result)[:count], 1):
                 row["hits"] = [
                     {
@@ -384,8 +427,58 @@ class ExaProvider:
                         "request_id": result.get("requestId"),
                     }
                 ]
+                result_rows.append(row)
+            return result_rows
+
+        # Only the owner thread reserves attempts and creates events. At most
+        # `concurrency` requests are in flight, so failure/cancellation stops
+        # further dispatch without leaving an executor queue of hidden work.
+        acquired: dict[int, list[dict]] = {}
+        errors: dict[int, Exception] = {}
+        next_query = 0
+        pending: dict[Future, int] = {}
+        with ThreadPoolExecutor(
+            max_workers=concurrency, thread_name_prefix="sourcesql-exa"
+        ) as pool:
+            while pending or (next_query < len(queries) and not errors):
+                while not errors and next_query < len(queries) and len(pending) < concurrency:
+                    query_index = next_query
+                    query = queries[query_index]
+                    try:
+                        self._check_dispatch(budget, deadline)
+                        budget.reserve("search_queries", limit="max_search_queries")
+                        event = self._reserve_request("/search", budget, "search_requests")
+                        event["query_index"] = query_index
+                        pending[
+                            pool.submit(acquire, query_index, query, request_body(query), event)
+                        ] = query_index
+                        next_query += 1
+                    except Exception as error:
+                        errors[query_index] = error
+                if not pending:
+                    break
+                done, _ = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
+                for future in sorted(done, key=pending.__getitem__):
+                    query_index = pending.pop(future)
+                    try:
+                        acquired[query_index] = future.result()
+                    except Exception as error:
+                        errors[query_index] = error
+                if not errors:
+                    try:
+                        self._check_dispatch(budget, deadline)
+                    except SourcesQLError as error:
+                        errors[next_query] = error
+                # Already dispatched HTTP requests have bounded client timeouts.
+                # Drain their outcomes before returning; never retry or abandon
+                # an unknown remote effect merely because another query failed.
+        rows = []
+        for query_index in sorted(acquired):
+            for row in acquired[query_index]:
                 self.hits.extend(row["hits"])
                 rows.append(row)
+        if errors:
+            raise errors[min(errors)]
         return rows
 
     def fetch(self, urls: list[str], options: dict, budget: Budget) -> list[dict]:

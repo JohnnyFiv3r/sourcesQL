@@ -14,8 +14,10 @@ is an allowlist, not a claim of all DuckDB syntax.
 
 The installed signatures are:
 
-- `WEB_SEARCH(q1, ..., q8, per_query_limit := 1..20, published_after := 'ISO date or offset-bearing instant', published_before := ..., undated_policy := 'include'|'exclude'|'error', allow_post_filter := true|false)`
-- `WEB_FETCH(url1, ..., url8, mode := 'cache_preferred'|'live')`
+- `WEB_SEARCH(q1, ..., q32, per_query_limit := 1..100, published_after := 'ISO date or offset-bearing instant', published_before := ..., undated_policy := 'include'|'exclude'|'error', allow_post_filter := true|false)`
+Exa accepts up to 100 results per query; other providers and fixture mode accept at most 20. Profile limits and explicitly chosen run budgets also apply. Ordinary defaults remain eight search queries and 200 candidates.
+
+- `WEB_FETCH(url1, ..., url32, mode := 'cache_preferred'|'live')`
 - `SEM_MATCH(text, 'predicate')` returns Boolean or SQL NULL.
 - `SEM_EXTRACT(text, 'definition', type := 'VARCHAR'|'BOOLEAN'|'BIGINT'|'DOUBLE'|'DECIMAL(18,2)'|'DATE'|'TIMESTAMPTZ', evidence := true|false)` returns a nullable scalar. Alternatively, named `field := 'definition'` options produce a compile-time VARCHAR struct; `type` cannot combine with named fields.
 - `SEM_EXTRACT_ALL(text, 'entity definition', field := 'definition', ..., evidence := 'per_field')` returns a list of structs, or a list of VARCHAR scalars without named fields.

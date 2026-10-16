@@ -13,6 +13,7 @@ import re
 from collections.abc import Mapping
 
 POLICY_VERSION = "exa-research.v2"
+RESEARCH_POLICY_VERSION = "exa-research.v3"
 SEARCH_TYPES = {
     "exa": "auto",
     "exa_deep": "deep",
@@ -34,7 +35,78 @@ LIMITS = {
     "max_input_tokens": 0,
     "max_output_tokens": 0,
 }
+RESEARCH_LIMITS = {
+    "max_search_queries": 32,
+    "max_search_requests": 48,
+    "max_candidates": 2500,
+    "max_fetches": 40,
+    "max_semantic_documents": 40,
+    "max_model_requests": 96,
+    "max_concurrency": 4,
+    "dispatch_deadline_seconds": 100,
+    "max_output_rows": 1000,
+    "max_output_bytes": 4_194_304,
+    "max_input_tokens": 200_000,
+    "max_output_tokens": 16_000,
+}
+SEMANTIC_OPERATORS = {"SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL", "SEM_NORM"}
+REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 SEARCH_POLICY_VERSIONS = {"brave": "brave-search.v1", "serper": "serper-search.v1"}
+
+
+def _model_configuration(environment: Mapping[str, str]) -> dict | None:
+    name = environment.get("SOURCESQL_OPENAI_MODEL")
+    secret_name = environment.get("SOURCESQL_OPENAI_SECRET_NAME")
+    effort = environment.get("SOURCESQL_OPENAI_REASONING_EFFORT")
+    if name is None and secret_name is None:
+        if effort is not None:
+            raise ValueError("Reasoning effort requires a configured OpenAI model and secret")
+        return None
+    if (
+        not isinstance(name, str)
+        or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", name)
+        or not isinstance(secret_name, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", secret_name)
+        or (effort is not None and (not isinstance(effort, str) or effort not in REASONING_EFFORTS))
+    ):
+        raise ValueError("Configure a simple OpenAI model and MotherDuck Flight secret together")
+    return {
+        "name": name,
+        "secret_name": secret_name,
+        "version": "openai-structured.v1",
+        **({"reasoning_effort": effort} if effort is not None else {}),
+    }
+
+
+def _research_limits(model: dict | None) -> dict:
+    limits = dict(RESEARCH_LIMITS)
+    if model is None:
+        for name in (
+            "max_semantic_documents",
+            "max_model_requests",
+            "max_input_tokens",
+            "max_output_tokens",
+        ):
+            limits[name] = 0
+    return limits
+
+
+def _model_profile(model: dict) -> dict:
+    return {
+        "name": model["name"],
+        "api_key_env": model["secret_name"] + "_OPENAI_API_KEY",
+        "retries": 0,
+        **({"reasoning_effort": model["reasoning_effort"]} if "reasoning_effort" in model else {}),
+    }
+
+
+def _credential_available(environment: Mapping[str, str], name: str) -> bool:
+    secret = environment.get(name)
+    return (
+        isinstance(secret, str)
+        and 0 < len(secret) <= 4096
+        and all(33 <= ord(character) <= 126 for character in secret)
+    )
 
 
 def _approved_integer(environment: Mapping[str, str], key: str, default=None) -> int:
@@ -110,9 +182,13 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     if enabled_providers[0] != "exa":
         return _load_search_configuration(enabled_providers[0], environment)
     version = environment.get("SOURCESQL_EXA_POLICY_VERSION", POLICY_VERSION)
-    if version not in {"exa-search.v1", POLICY_VERSION}:
+    if version not in {"exa-search.v1", POLICY_VERSION, RESEARCH_POLICY_VERSION}:
         raise ValueError("Unknown hosted Exa policy version")
-    search_types = SEARCH_TYPES if version == POLICY_VERSION else {"exa": "auto"}
+    research = version == RESEARCH_POLICY_VERSION
+    if not research and "SOURCESQL_OPENAI_REASONING_EFFORT" in environment:
+        raise ValueError("Reasoning effort requires the hosted Exa research v3 policy")
+    search_types = SEARCH_TYPES if version != "exa-search.v1" else {"exa": "auto"}
+    model = _model_configuration(environment) if research else None
     approval = environment.get(
         "SOURCESQL_EXA_APPROVED_COST_MICROUSD", str(DEFAULT_APPROVED_COST_MICROUSD)
     )
@@ -127,7 +203,8 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     secret_environment = "EXA_API_KEY" if secret_name is None else secret_name + "_EXA_API_KEY"
     descriptor = {
         "approved_cost_microusd": approved,
-        **({"search_types": search_types} if version == POLICY_VERSION else {}),
+        **({"limits": _research_limits(model), "model": model} if research else {}),
+        **({"search_types": search_types} if version != "exa-search.v1" else {}),
         "secret_name": secret_name,
         "version": version,
     }
@@ -146,6 +223,8 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
         "fetch_adapter": "exa",
         "allowed_source_hosts": [],
         "hosted_profile_fingerprint": fingerprint,
+        **({"allow_public_source_hosts": True} if research else {}),
+        **({"model": _model_profile(model)} if model is not None else {}),
     }
     return {
         "profiles": {
@@ -167,19 +246,31 @@ def validate_request(
     profile_name = request.get("profile", "fixture")
     if profile_name == "fixture":
         return
-    if (
-        not isinstance(profile_name, str)
-        or profile_name not in settings["allowed_profiles"]
-    ):
+    if not isinstance(profile_name, str) or profile_name not in settings["allowed_profiles"]:
         raise SourcesQLError("unsupported_capability", "Hosted profile is not enabled", "dispatch")
     if set(request).intersection(
-        {"mode", "provider", "search_type", "api_key", "api_key_env", "hosted_profile_fingerprint"}
+        {
+            "mode",
+            "provider",
+            "search_type",
+            "api_key",
+            "api_key_env",
+            "hosted_profile_fingerprint",
+            "model",
+            "embedding",
+            "fetch_adapter",
+            "allowed_source_hosts",
+            "allow_public_source_hosts",
+            "reasoning_effort",
+            "reasoningEffort",
+        }
     ):
         raise SourcesQLError(
             "unauthorized", "Hosted provider policy cannot be overridden", "dispatch"
         )
     profile = settings["profiles"][profile_name]
     provider = settings["descriptor"].get("provider", "exa")
+    research = settings["descriptor"]["version"] == RESEARCH_POLICY_VERSION
     if (
         not settings["provider_policy_sha256"]
         or profile.get("hosted_profile_fingerprint") != settings["provider_policy_sha256"]
@@ -189,25 +280,55 @@ def validate_request(
         or (provider != "exa" and profile_name != provider)
     ):
         raise SourcesQLError("unauthorized", "Hosted provider policy mismatch", "dispatch")
-    secret = environment.get(profile["api_key_env"])
-    if (
-        not isinstance(secret, str)
-        or not secret
-        or len(secret) > 4096
-        or any(ord(character) < 33 or ord(character) > 126 for character in secret)
-    ):
+    if research:
+        descriptor = settings["descriptor"]
+        model = descriptor["model"]
+        descriptor_fingerprint = hashlib.sha256(
+            json.dumps(descriptor, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode(
+                "ascii"
+            )
+        ).hexdigest()
+        expected_secret = (
+            "EXA_API_KEY"
+            if descriptor["secret_name"] is None
+            else descriptor["secret_name"] + "_EXA_API_KEY"
+        )
+        if (
+            descriptor_fingerprint != settings["provider_policy_sha256"]
+            or descriptor["limits"] != _research_limits(model)
+            or profile.get("approved_cost_microusd") != descriptor["approved_cost_microusd"]
+            or profile.get("api_key_env") != expected_secret
+            or profile.get("allow_live") is not True
+            or profile.get("metering_policy") != "estimated"
+            or profile.get("allow_public_source_hosts") is not True
+            or profile.get("fetch_adapter") != "exa"
+            or profile.get("allowed_source_hosts") != []
+            or profile.get("model") != (_model_profile(model) if model is not None else None)
+        ):
+            raise SourcesQLError("unauthorized", "Hosted research policy mismatch", "dispatch")
+    if not _credential_available(environment, profile["api_key_env"]):
         raise SourcesQLError(
             "provider_unavailable", "Search credentials are not configured", "dispatch"
         )
-    if request.get("source_mode") != "allow_excerpt":
+    if (
+        research
+        and model is not None
+        and not _credential_available(environment, profile["model"]["api_key_env"])
+    ):
         raise SourcesQLError(
-            "unsupported_capability", "Hosted search requires provider-returned excerpts", "dispatch"
+            "provider_unavailable", "Semantic model credentials are not configured", "dispatch"
+        )
+    source_modes = {"allow_excerpt", "require_document"} if research else {"allow_excerpt"}
+    source_mode = request.get("source_mode")
+    if not isinstance(source_mode, str) or source_mode not in source_modes:
+        raise SourcesQLError(
+            "unsupported_capability", "Hosted profile does not permit this source mode", "dispatch"
         )
     limits = Budget(request.get("budgets")).limits
     approved = profile["approved_cost_microusd"]
     if not 0 < limits["max_cost_microusd"] <= approved:
         raise SourcesQLError("unauthorized", "Request exceeds trusted Exa approval", "dispatch")
-    ceilings = dict(LIMITS)
+    ceilings = dict(settings["descriptor"]["limits"] if research else LIMITS)
     if provider != "exa" or settings["descriptor"]["version"] == "exa-search.v1":
         ceilings["dispatch_deadline_seconds"] = 60
     if any(limits[name] > ceiling for name, ceiling in ceilings.items()):
@@ -222,14 +343,20 @@ def validate_request(
             )
 
 
-def validate_explain(explanation: dict) -> None:
+def validate_explain(explanation: dict, settings: dict | None = None) -> None:
     from sourcesql.contracts import SourcesQLError
 
+    allowed = {"WEB_SEARCH"}
+    descriptor = (settings or {}).get("descriptor") or {}
+    if descriptor.get("version") == RESEARCH_POLICY_VERSION:
+        allowed.add("WEB_FETCH")
+        if descriptor["model"] is not None:
+            allowed.update(SEMANTIC_OPERATORS)
     stages = explanation.get("plan", {}).get("stages", [])
     if any(
-        stage.get("stage") == "external" and stage.get("operator") != "WEB_SEARCH"
+        stage.get("stage") == "external" and stage.get("operator") not in allowed
         for stage in stages
     ):
         raise SourcesQLError(
-            "unsupported_capability", "Hosted profiles currently support search only", "dispatch"
+            "unsupported_capability", "Operator is not enabled by the hosted profile", "dispatch"
         )

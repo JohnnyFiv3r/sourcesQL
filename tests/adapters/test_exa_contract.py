@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
+import time
 
 import httpx
 import pytest
 
 from sourcesql.contracts import Budget, SourcesQLError
 from sourcesql.providers import ExaProvider, ProviderRegistry
+from sourcesql.providers.search import BraveProvider, SerperProvider
 
 
 def public_dns(host, port, **kwargs):
@@ -102,7 +105,7 @@ def test_one_three_hit_search_retains_source_citations_without_fetch_or_model():
 
 
 @pytest.mark.parametrize("through_registry", [False, True])
-@pytest.mark.parametrize("limit", [None, 3, 10, 20])
+@pytest.mark.parametrize("limit", [None, 3, 10, 20, 100])
 def test_default_search_uses_bare_highlights_and_count_only_for_intentional_limits(
     through_registry, limit
 ):
@@ -483,3 +486,200 @@ def test_owned_client_timeout_allows_deep_reasoning_latency_without_unbounded_wa
         assert provider.client.timeout.connect == read_timeout
     finally:
         provider.client.close()
+
+
+@pytest.mark.parametrize("through_registry", [False, True])
+def test_intentional_hundred_result_search_bounds_provider_over_return(through_registry):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        assert json.loads(request.content) == {
+            "query": "regional campus construction and power delivery",
+            "type": "auto",
+            "numResults": 100,
+            "contents": {"highlights": True},
+        }
+        return httpx.Response(
+            200,
+            json={
+                "requestId": "wide-request",
+                "results": [
+                    {"url": f"https://public.example/{i}", "highlights": [f"Source {i}."]}
+                    for i in range(110)
+                ],
+            },
+        )
+
+    http_client = client(respond)
+    provider = (
+        ProviderRegistry(profile(http_client))
+        if through_registry
+        else ExaProvider("synthetic", http_client)
+    )
+    budget = Budget({"max_candidates": 100, "max_cost_microusd": 10000})
+    rows = provider.search(
+        ["regional campus construction and power delivery"], {"per_query_limit": 100}, budget
+    )
+    assert len(calls) == len(provider.events) == 1
+    assert len(rows) == len(provider.hits) == 100
+    assert [row["hits"][0]["rank"] for row in rows] == list(range(1, 101))
+    assert all(
+        row["content_basis"] == "excerpt" and not row["coverage"]["complete"] for row in rows
+    )
+    assert budget.counts["search_queries"] == budget.counts["search_requests"] == 1
+    if through_registry:
+        assert budget.counts["candidates"] == 100
+
+
+@pytest.mark.parametrize(
+    "provider_class,limit", [(ExaProvider, 101), (BraveProvider, 21), (SerperProvider, 21)]
+)
+def test_each_provider_retains_its_own_documented_result_ceiling(provider_class, limit):
+    provider = provider_class("synthetic", client(lambda _: pytest.fail("unexpected dispatch")))
+    budget = Budget()
+    with pytest.raises(SourcesQLError, match="per_query_limit") as error:
+        provider.search(["construction"], {"per_query_limit": limit}, budget)
+    assert error.value.code == "invalid_request"
+    assert provider.events == [] and budget.counts == {}
+
+
+def test_concurrent_exa_queries_preserve_input_order_and_independent_source_versions():
+    queries = [f"independent research angle {i}" for i in range(6)]
+    barrier = threading.Barrier(3)
+    lock = threading.Lock()
+    active = peak = 0
+    completion_order = []
+
+    def respond(request):
+        nonlocal active, peak
+        query_index = queries.index(json.loads(request.content)["query"])
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            barrier.wait(timeout=2)
+            time.sleep((2 - query_index % 3) * 0.01)
+            return httpx.Response(
+                200,
+                json={
+                    "requestId": f"request-{query_index}",
+                    "results": [
+                        {
+                            "url": "https://public.example/shared",
+                            "highlights": [f"Independently returned version {query_index}."],
+                        },
+                        {
+                            "url": f"https://public.example/{query_index}",
+                            "highlights": ["Another source."],
+                        },
+                    ],
+                },
+            )
+        finally:
+            with lock:
+                active -= 1
+                completion_order.append(query_index)
+
+    provider = ExaProvider("synthetic", client(respond))
+    budget = Budget({"max_search_queries": 6, "max_search_requests": 6, "max_concurrency": 3})
+    rows = provider.search(queries, {"per_query_limit": 2}, budget)
+    assert peak == 3 and active == 0
+    assert completion_order != list(range(6))
+    assert [event["query_index"] for event in provider.events] == list(range(6))
+    assert all(event["status"] == "completed" for event in provider.events)
+    assert [(hit["query_index"], hit["rank"]) for hit in provider.hits] == [
+        (query_index, rank) for query_index in range(6) for rank in (1, 2)
+    ]
+    assert [row["hits"][0]["request_id"] for row in rows] == [
+        f"request-{query_index}" for query_index in range(6) for _ in range(2)
+    ]
+    shared = [row for row in rows if row["url"] == "https://public.example/shared"]
+    assert len({row["source_version_id"] for row in shared}) == 6
+    assert budget.counts == {"search_queries": 6, "search_requests": 6}
+
+
+def test_exa_concurrency_one_keeps_sequential_dispatch_and_owner_thread_reservations():
+    calls = []
+    reservations = []
+    owner_thread = threading.get_ident()
+
+    def observe(counter, amount):
+        reservations.append((counter, amount, threading.get_ident()))
+
+    def respond(request):
+        calls.append(json.loads(request.content)["query"])
+        assert len(reservations) == len(calls) * 2
+        return httpx.Response(200, json={"results": []})
+
+    provider = ExaProvider("synthetic", client(respond))
+    budget = Budget({"max_concurrency": 1}, on_reserve=observe)
+    provider.search(["first angle", "second angle", "third angle"], {}, budget)
+    assert calls == ["first angle", "second angle", "third angle"]
+    assert all(thread_id == owner_thread for _, _, thread_id in reservations)
+    assert [counter for counter, _, _ in reservations] == ["search_queries", "search_requests"] * 3
+
+
+@pytest.mark.parametrize("transport_unknown", [False, True])
+def test_exa_concurrent_failure_drains_started_attempts_without_retry_or_more_queries(
+    transport_unknown,
+):
+    barrier = threading.Barrier(2)
+    calls = []
+
+    def respond(request):
+        query = json.loads(request.content)["query"]
+        calls.append(query)
+        barrier.wait(timeout=2)
+        if query == "first":
+            if transport_unknown:
+                raise httpx.ReadTimeout("synthetic timeout")
+            return httpx.Response(429)
+        time.sleep(0.03)
+        return httpx.Response(200, json={"results": []})
+
+    provider = ExaProvider("synthetic", client(respond))
+    budget = Budget({"max_concurrency": 2})
+    with pytest.raises(SourcesQLError) as error:
+        provider.search(["first", "second", "never dispatched"], {}, budget)
+    assert error.value.code == "provider_unavailable"
+    assert sorted(calls) == ["first", "second"]
+    assert budget.counts == {"search_queries": 2, "search_requests": 2}
+    assert [event["status"] for event in provider.events] == [
+        "remote_outcome_unknown" if transport_unknown else "failed",
+        "completed",
+    ]
+
+
+def test_exa_cancellation_after_reservation_prevents_disclosure_without_refunding_attempt():
+    def cancel(counter, amount):
+        if counter == "search_requests":
+            budget.cancelled = True
+
+    budget = Budget({"max_concurrency": 1}, on_reserve=cancel)
+    provider = ExaProvider("synthetic", client(lambda _: pytest.fail("unexpected dispatch")))
+    with pytest.raises(SourcesQLError) as error:
+        provider.search(["private research intent", "second"], {}, budget)
+    assert error.value.code == "cancelled"
+    assert budget.counts == {"search_queries": 1, "search_requests": 1}
+    assert [event["status"] for event in provider.events] == ["not_dispatched"]
+
+
+def test_exa_dispatch_deadline_stops_later_queries_without_retry(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr("sourcesql.providers.search.monotonic", lambda: now[0])
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        now[0] = 2.0
+        return httpx.Response(200, json={"results": []})
+
+    provider = ExaProvider("synthetic", client(respond))
+    budget = Budget({"max_concurrency": 1, "dispatch_deadline_seconds": 1})
+    with pytest.raises(SourcesQLError, match="deadline") as error:
+        provider.search(["first", "never dispatched"], {}, budget)
+    assert error.value.code == "budget_exhausted"
+    assert len(calls) == 1
+    assert budget.counts == {"search_queries": 1, "search_requests": 1}
+    assert provider.events[0]["status"] == "completed"

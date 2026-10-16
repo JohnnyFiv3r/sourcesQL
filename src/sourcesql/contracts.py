@@ -73,6 +73,15 @@ DEFAULT_LIMITS = {
 }
 
 
+# Defaults keep ordinary runs small; wider research needs explicit finite overrides.
+HARD_LIMITS = {
+    **DEFAULT_LIMITS,
+    "max_search_queries": 32,
+    "max_search_requests": 48,
+    "max_candidates": 2500,
+}
+
+
 class Budget:
     """One shared allowance for the whole run. Provider attempts reserve before dispatch."""
 
@@ -85,8 +94,10 @@ class Budget:
         for key, value in (limits or {}).items():
             if key not in self.limits or type(value) is not int or value < 0:
                 raise SourcesQLError("invalid_request", "Invalid budget")
-            if key != "max_cost_microusd" and value > DEFAULT_LIMITS[key]:
-                raise SourcesQLError("invalid_request", "Requested budget exceeds v0.1 ceiling")
+            if key != "max_cost_microusd" and value > HARD_LIMITS[key]:
+                raise SourcesQLError(
+                    "invalid_request", "Requested budget exceeds the supported ceiling"
+                )
             self.limits[key] = value
         self.counts: dict[str, int] = {}
         self.lock = threading.Lock()

@@ -402,7 +402,9 @@ def test_late_provider_timeout_cannot_erase_cancellation_or_unknown_settlement(
             entered.set()
             assert release.wait(3)
             event["status"] = "remote_outcome_unknown"
-            raise SourcesQLError("provider_unavailable", "Synthetic provider timeout", "acquisition")
+            raise SourcesQLError(
+                "provider_unavailable", "Synthetic provider timeout", "acquisition"
+            )
 
     import sourcesql.providers
 
@@ -431,3 +433,57 @@ def test_late_provider_timeout_cannot_erase_cancellation_or_unknown_settlement(
     assert final["status"] == "cancelled"
     assert final["settlement_status"] == "pending" and final["unsettled_requests"] == 1
     assert final["result_id"] is None and counts(engine)[0] == 0
+
+
+def test_invalid_semantic_evidence_is_not_cached_and_old_failed_cache_is_ignored(
+    tmp_path, monkeypatch
+):
+    from sourcesql.contracts import SemanticOutcome
+    from sourcesql.providers import ProviderRegistry
+
+    original = ProviderRegistry.semantic
+    calls = []
+
+    def semantic(registry, operator, text, instruction, fields, options, budget):
+        calls.append((operator, text, instruction, fields, dict(options)))
+        if len(calls) == 1:
+            return SemanticOutcome(None, "evidence_invalid", usage={"requests": 1})
+        return original(registry, operator, text, instruction, fields, options, budget)
+
+    monkeypatch.setattr(ProviderRegistry, "semantic", semantic)
+    engine = make_engine(tmp_path)
+    sql = "SELECT url,SEM_EXTRACT(content,'project name') AS project FROM WEB_SEARCH('Aurora') WHERE title = 'Aurora Campus planning'"
+    with pytest.raises(SourcesQLError, match="Required semantic processing failed"):
+        engine.query(query=sql, request_id=str(uuid.uuid4()))
+    with engine.store.db() as db:
+        assert db.execute("SELECT count(*) FROM semantic_cache").fetchone()[0] == 0
+        operator, text, instruction, fields, options = calls[0]
+        key = digest(
+            [
+                operator,
+                text,
+                instruction,
+                fields,
+                options,
+                digest({"mode": "fixture", "provider": "fixture"}),
+            ]
+        )
+        db.execute(
+            "INSERT INTO semantic_cache VALUES(?,?)",
+            (
+                key,
+                json.dumps(
+                    {
+                        "value": None,
+                        "status": "evidence_invalid",
+                        "support": [],
+                        "usage": {"requests": 1},
+                    }
+                ),
+            ),
+        )
+    result = engine.query(query=sql, request_id=str(uuid.uuid4()))
+    assert result["rows"][0]["project"] == "Aurora Campus"
+    assert len(calls) == 2
+    cached = engine.query(query=sql, request_id=str(uuid.uuid4()))
+    assert cached["rows"] == result["rows"] and len(calls) == 2

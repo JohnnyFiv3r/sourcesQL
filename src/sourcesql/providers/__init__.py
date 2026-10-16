@@ -73,6 +73,7 @@ class ProviderRegistry:
                             key,
                             base_url=model_config.get("base_url"),
                             retries=model_config.get("retries", 0),
+                            reasoning_effort=model_config.get("reasoning_effort"),
                         )
                 else:
                     self.semantic_provider = PydanticSemanticProvider(model_config)
@@ -184,6 +185,7 @@ class ProviderRegistry:
             self.mode == "live"
             and "WEB_FETCH" in operators
             and not self.profile.get("allowed_source_hosts")
+            and self.profile.get("allow_public_source_hosts") is not True
         ):
             raise SourcesQLError(
                 "unauthorized", "Live fetch requires permitted source hosts", "acquisition"
@@ -197,7 +199,10 @@ class ProviderRegistry:
             if self.mode == "live" and self.profile.get("provider") == "exa"
             else options
         )
-        requested_limit = search_options(search_settings)
+        requested_limit = search_options(
+            search_settings,
+            maximum=100 if self.mode == "live" and self.profile.get("provider") == "exa" else 20,
+        )
         remaining = budget.limits["max_candidates"] - budget.counts.get("candidates", 0)
         per_query_limit = min(requested_limit, remaining // len(queries))
         if per_query_limit < 1:
@@ -253,19 +258,30 @@ class ProviderRegistry:
             raise SourcesQLError("invalid_request", "Fetch URLs must be strings", "acquisition")
         if self.mode == "live":
             allowed = self.profile.get("allowed_source_hosts")
-            if not isinstance(allowed, list) or not allowed:
+            public_sources = self.profile.get("allow_public_source_hosts") is True
+            if not public_sources and (not isinstance(allowed, list) or not allowed):
                 raise SourcesQLError(
                     "unauthorized", "Live fetch requires permitted source hosts", "acquisition"
                 )
             for url in urls:
                 host = urlsplit(normalized_url(url)).hostname
-                if host not in allowed:
+                if not public_sources and host not in allowed:
                     raise SourcesQLError(
                         "unauthorized", "Source destination is not permitted", "acquisition"
                     )
                 resolver = self.profile.get("resolver")
                 resolve_public(url, resolver) if resolver else resolve_public(url)
-        return self.fetch_provider.fetch(urls, options, budget)
+        rows = self.fetch_provider.fetch(urls, options, budget)
+        if options.get("source_mode") == "require_document" and any(
+            row.get("status") == "acquired" and not row.get("coverage", {}).get("complete")
+            for row in rows
+        ):
+            raise SourcesQLError(
+                "provider_unavailable",
+                "Required complete source text could not be acquired",
+                "acquisition",
+            )
+        return rows
 
     def semantic(
         self,
