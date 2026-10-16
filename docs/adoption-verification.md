@@ -4,6 +4,22 @@ A package install, a working gateway and a rendered MCP App establish different
 parts of the adoption path. Keep their evidence separate when qualifying a new
 release or helping someone connect their own account.
 
+## Candidate: 0.2.3
+
+Public setup now uploads the exact reviewed files through content-addressed
+requests, persists each acknowledgment, then submits a compact deployment
+manifest. Controlled tests cover interruption, digest/account/team drift,
+incomplete uploads and existing uncertain-deployment recovery. This fixes the
+inline-upload implementation described in the historical 0.2.2 section below;
+a fresh installed-CLI first attempt still needs its own acceptance receipt.
+
+Default partial execution preserves independently supported named fields when a
+sibling's evidence is invalid. Unsupported answers remain NULL, and explicit
+strict mode remains available. A bounded hosted check reused two retained source
+documents, made two model calls without search or fetch, and preserved six
+source-bound cells while leaving absent publication dates NULL. This is runtime
+evidence, not a full ChatGPT/Claude lifecycle or automatic gap-filling check.
+
 ## Released qualification: 0.2.2
 
 [v0.2.2](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.2) was

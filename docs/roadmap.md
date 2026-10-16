@@ -42,14 +42,11 @@ packaged plugin is not needed. Local Docker remains an alternative adoption path
 
 ## 1. Finish adoption verification
 
-Implement public content-addressed deployment uploads before qualifying fresh
-0.2.2 provisioning. Packaged personal-cloud setup still sends inline files; the
-measured rollout payload was 10.79 MB. An initial inline attempt lost status
-without a deployment ID; the successful existing-project rollout used an
-operator-only content-reference helper. This does not establish a numeric service
-limit or qualify public onboarding. Preserve plan integrity, resumable attempts
-and private credential handling, then measure a clean installed-CLI first attempt
-from an empty setup workspace without that helper or reused receipts.
+Qualify the new public content-addressed uploader with a fresh installed-CLI
+first attempt. Upload acknowledgments and compact manifests now replace the
+large inline app payload; controlled tests cover interruption, exact plan/team
+binding and deployment recovery. Use an empty setup workspace and the normal
+plan/apply/resume path, with no private upload helper or reused receipts.
 
 Qualify account signup and consent with an eligible adopter's fresh personal
 accounts. Clean installed-CLI setup, the static-first deployment path, one bounded

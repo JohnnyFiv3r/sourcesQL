@@ -250,3 +250,16 @@ def test_split_part_and_regex_filters_have_closed_scalar_types():
 def test_string_filter_admission_does_not_widen_types_functions_or_options(expression):
     with pytest.raises(SourcesQLError):
         admit(f"SELECT {expression} AS value FROM input.a", input_schemas=SCHEMAS)
+
+
+
+def test_search_count_is_named_and_bad_positional_count_has_repair_hint():
+    for sql, params in [
+        ("SELECT title FROM WEB_SEARCH('query', 6)", {}),
+        ("SELECT title FROM WEB_SEARCH($query, $limit)", {"query": "query", "limit": 6}),
+    ]:
+        with pytest.raises(SourcesQLError, match="per_query_limit := N") as error:
+            admit(sql, parameters=params)
+        assert error.value.code == "invalid_query"
+    admitted = admit("SELECT title FROM WEB_SEARCH('query', per_query_limit := 6)")
+    assert admitted.custom_operators == ("WEB_SEARCH",)

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../server/mcp.js";
+import { MotherDuckEngine } from "../server/motherduck.js";
 import { ResearchStore } from "../server/store.js";
 import type { ResearchEngine } from "../server/engine.js";
 import { snapshotSchema } from "../src/schema.js";
@@ -74,6 +75,51 @@ test("MCP defaults to retained partial work and forwards an explicit strict choi
       "capabilities",
       "query",
     ]);
+  } finally {
+    await client.close();
+    await server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("native hosted tool discovery omits local-only explain without touching the database", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-native-tools-"));
+  const htmlPath = join(directory, "research.html");
+  await writeFile(htmlPath, "<!doctype html><html>Fixture</html>");
+  const engine = new MotherDuckEngine({
+    database: "sourcesql",
+    host: "pg.us-east-1-aws.motherduck.com",
+    token: "synthetic-token",
+    principal: "synthetic-owner",
+    flightId: "4252d0f1-fa38-495a-b305-a897fcb859a3",
+    clientFactory() {
+      throw new Error("Tool discovery must not open a database connection");
+    },
+  });
+  const server = createServer(
+    new ResearchStore(join(directory, "unused"), snapshotSchema.parse(sample)),
+    htmlPath,
+    { engine },
+  );
+  const client = new Client({ name: "native-tools-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  try {
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const { tools } = await client.listTools();
+    assert.equal(
+      tools.some((tool) => tool.name === "sourcesql_explain"),
+      false,
+    );
+    for (const name of [
+      "sourcesql_capabilities",
+      "sourcesql_query",
+      "sourcesql_job_status",
+      "open_research",
+    ])
+      assert.ok(
+        tools.some((tool) => tool.name === name),
+        name,
+      );
   } finally {
     await client.close();
     await server.close();

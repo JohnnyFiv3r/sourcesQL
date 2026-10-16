@@ -338,6 +338,72 @@ export function deploymentFiles(root) {
     if (!files.some((file) => file.file === path)) fail("missing_public_input");
   return files.sort((a, b) => a.file.localeCompare(b.file));
 }
+export async function uploadDeploymentFiles(plan, root, state, save, api) {
+  const files = deploymentFiles(root).map((file) => {
+    const bytes = Buffer.from(file.data, "base64");
+    const sha256 = digest(bytes);
+    if (plan.public_files_sha256[file.file] !== sha256)
+      fail("plan_changed_review_again");
+    return {
+      file: file.file,
+      sha: createHash("sha1").update(bytes).digest("hex"),
+      size: bytes.length,
+      sha256,
+      bytes,
+    };
+  });
+  if (files.length !== Object.keys(plan.public_files_sha256).length)
+    fail("plan_changed_review_again");
+  const manifest = files.map(({ file, sha, size, sha256 }) => ({
+    file,
+    sha,
+    size,
+    sha256,
+  }));
+  const manifestSha256 = digest(JSON.stringify(manifest));
+  const scope = {
+    account_id: plan.config.account_id,
+    team_id: plan.config.team_id ?? null,
+    manifest_sha256: manifestSha256,
+  };
+  if (
+    state.public_uploads &&
+    Object.entries(scope).some(
+      ([key, value]) => state.public_uploads[key] !== value,
+    )
+  )
+    fail("public_upload_state_mismatch");
+  state.public_uploads ??= { ...scope, files: {} };
+  // SHA-1 is the Vercel wire identifier; SHA-256 remains the plan's authority.
+  const identities = new Map();
+  for (const file of files) {
+    if (identities.has(file.sha) && identities.get(file.sha) !== file.sha256)
+      fail("public_upload_digest_collision");
+    identities.set(file.sha, file.sha256);
+  }
+  for (const file of files) {
+    const prior = state.public_uploads.files[file.sha];
+    if (prior && (prior.sha256 !== file.sha256 || prior.size !== file.size))
+      fail("public_upload_state_mismatch");
+    if (prior?.uploaded === true) continue;
+    state.public_uploads.files[file.sha] = {
+      sha256: file.sha256,
+      size: file.size,
+      attempted: true,
+    };
+    save();
+    // Repeating the same content digest after a lost upload acknowledgment is safe;
+    // deployment creation still uses its separate, non-repeatable attempt barrier.
+    await api("/v2/files", file.bytes, {
+      binary: true,
+      contentDigest: file.sha,
+    });
+    state.public_uploads.files[file.sha].uploaded = true;
+    save();
+  }
+  return files.map(({ file, sha, size }) => ({ file, sha, size }));
+}
+
 export function createPlan(config, root, workspace) {
   config = validateConfig(config);
   const manifest = readJSON(join(workspace, "bundle/manifest.json"));
@@ -457,8 +523,15 @@ export async function vercelAPI(
   token,
   path,
   body,
-  { fetcher = fetch, allow404 = false } = {},
+  { fetcher = fetch, allow404 = false, binary = false, contentDigest } = {},
 ) {
+  if (
+    binary &&
+    (path !== "/v2/files" ||
+      !Buffer.isBuffer(body) ||
+      contentDigest !== createHash("sha1").update(body).digest("hex"))
+  )
+    fail("invalid_public_upload");
   const url = new URL(path, "https://api.vercel.com");
   if (url.origin !== "https://api.vercel.com")
     fail("untrusted_api_destination");
@@ -467,14 +540,27 @@ export async function vercelAPI(
     method: body === undefined ? "GET" : "POST",
     headers: {
       Authorization: "Bearer " + token,
-      "Content-Type": "application/json",
+      "Content-Type": binary ? "application/octet-stream" : "application/json",
+      ...(binary
+        ? {
+            "x-vercel-digest": contentDigest,
+            "Content-Length": String(body.length),
+          }
+        : {}),
     },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(body === undefined
+      ? {}
+      : { body: binary ? body : JSON.stringify(body) }),
     redirect: "error",
     signal: AbortSignal.timeout(30000),
   });
   if (allow404 && response.status === 404) return undefined;
   if (!response.ok) fail("vercel_request_failed_" + response.status);
+  // Successful file uploads have an empty body; they are not JSON responses.
+  if (binary) {
+    await response.arrayBuffer();
+    return;
+  }
   return response.json(); // Never log this response; env mutation responses can include values.
 }
 export function setupArguments(config, workspace) {
@@ -832,13 +918,14 @@ export async function applyPlan(
       state.deployment_id = matches[0].uid ?? matches[0].id;
       save();
     } else {
+      const files = await uploadDeploymentFiles(plan, root, state, save, api);
       state.deployment_attempt_id ??= randomUUID();
       state.deployment_attempted = true;
       save();
       const deployment = await api("/v13/deployments", {
         name: config.project,
         project: state.project_id,
-        files: deploymentFiles(root),
+        files,
         meta: {
           sourcesqlSetup: plan.plan_sha256,
           sourcesqlAttempt: state.deployment_attempt_id,

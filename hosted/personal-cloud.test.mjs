@@ -16,6 +16,7 @@ import {
   createPlan,
   assertPlan,
   deploymentFiles,
+  uploadDeploymentFiles,
   bootstrapFiles,
   applyPlan,
   environmentSettings,
@@ -86,6 +87,7 @@ function fakeAPI(
     deploymentMeta;
   return async (path, body) => {
     captures.push({ path, body });
+    if (path === "/v2/files") return;
     if (path === "/v2/user") return { user: { id: plan.config.account_id } };
     if (path.startsWith("/v9/projects/"))
       return created
@@ -1100,6 +1102,7 @@ function terminalAPI(
   ]);
   let posts = 0;
   const api = async (route, body) => {
+    if (route === "/v2/files") return;
     if (route === "/v2/user") return { user: { id: plan.config.account_id } };
     if (route.startsWith("/v9/projects"))
       return {
@@ -1355,5 +1358,200 @@ test("owner credential persists once and conflicting explicit credentials stop b
   assert.equal(
     JSON.parse(readFileSync(join(path, "owner-secret.json"))).token,
     first,
+  );
+});
+
+test("public file upload uses exact binary bytes, digest and team scope with empty success body", async () => {
+  const team = "team_fixture01",
+    bytes = Buffer.from("reviewed public asset\n"),
+    sha = createHash("sha1").update(bytes).digest("hex");
+  let calls = 0;
+  const result = await vercelAPI(
+    { ...config(), account_id: team, team_id: team },
+    "private-vercel-token",
+    "/v2/files",
+    bytes,
+    {
+      binary: true,
+      contentDigest: sha,
+      fetcher: async (url, options) => {
+        calls++;
+        assert.equal(url.origin, "https://api.vercel.com");
+        assert.equal(url.pathname, "/v2/files");
+        assert.equal(url.searchParams.get("teamId"), team);
+        assert.equal(options.method, "POST");
+        assert.equal(
+          options.headers.Authorization,
+          "Bearer private-vercel-token",
+        );
+        assert.equal(
+          options.headers["Content-Type"],
+          "application/octet-stream",
+        );
+        assert.equal(options.headers["x-vercel-digest"], sha);
+        assert.equal(options.headers["Content-Length"], String(bytes.length));
+        assert.deepEqual(options.body, bytes);
+        assert.equal(options.redirect, "error");
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => new ArrayBuffer(0),
+          json: () => assert.fail("empty upload response is not JSON"),
+        };
+      },
+    },
+  );
+  assert.equal(result, undefined);
+  assert.equal(calls, 1);
+  for (const [route, body, contentDigest] of [
+    ["/v11/projects", bytes, sha],
+    ["/v2/files", "text", sha],
+    ["/v2/files", bytes, "0".repeat(40)],
+  ])
+    await assert.rejects(
+      vercelAPI(config(), "secret", route, body, {
+        binary: true,
+        contentDigest,
+        fetcher: () => assert.fail("invalid upload must not dispatch"),
+      }),
+      /invalid_public_upload/,
+    );
+});
+
+test("digest uploads resume acknowledged files and safely repeat only an unacknowledged digest", async () => {
+  const path = workspace(),
+    plan = createPlan(config(), root, path),
+    state = {},
+    saves = [],
+    uploads = [];
+  let loseSecond = true;
+  const api = async (route, bytes, options) => {
+    assert.equal(route, "/v2/files");
+    assert.equal(options.binary, true);
+    assert.ok(Buffer.isBuffer(bytes));
+    assert.equal(
+      options.contentDigest,
+      createHash("sha1").update(bytes).digest("hex"),
+    );
+    uploads.push({
+      sha: options.contentDigest,
+      sha256: hash(bytes),
+      size: bytes.length,
+    });
+    const persisted = saves.at(-1).public_uploads.files[options.contentDigest];
+    assert.equal(persisted.attempted, true);
+    assert.notEqual(persisted.uploaded, true);
+    if (loseSecond && uploads.length === 2)
+      throw Error("lost upload acknowledgment");
+  };
+  const save = () => saves.push(structuredClone(state));
+  await assert.rejects(
+    uploadDeploymentFiles(plan, root, state, save, api),
+    /lost upload acknowledgment/,
+  );
+  assert.equal(state.public_uploads.files[uploads[0].sha].uploaded, true);
+  assert.notEqual(state.public_uploads.files[uploads[1].sha].uploaded, true);
+  const unacknowledged = uploads[1];
+  loseSecond = false;
+  const refs = await uploadDeploymentFiles(plan, root, state, save, api);
+  assert.deepEqual(uploads[2], unacknowledged);
+  assert.equal(uploads.filter((x) => x.sha === uploads[0].sha).length, 1);
+  assert.ok(
+    refs.every((ref) => Object.keys(ref).sort().join(",") === "file,sha,size"),
+  );
+  assert.equal(refs.length, Object.keys(plan.public_files_sha256).length);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(refs)) <
+      Buffer.byteLength(JSON.stringify(deploymentFiles(root))) / 20,
+  );
+  const count = uploads.length;
+  assert.deepEqual(
+    await uploadDeploymentFiles(plan, root, state, save, api),
+    refs,
+  );
+  assert.equal(uploads.length, count);
+  assert.ok(!JSON.stringify(state).includes("private-vercel-token"));
+  assert.ok(!JSON.stringify(state).includes("reviewed public asset"));
+});
+
+test("upload receipts refuse source, account, team and content identity drift before dispatch", async () => {
+  const path = workspace(),
+    plan = createPlan(config(), root, path),
+    state = {};
+  await uploadDeploymentFiles(
+    plan,
+    root,
+    state,
+    () => {},
+    async () => {},
+  );
+  const stop = () => assert.fail("drift must stop before upload");
+  const changedSource = structuredClone(plan);
+  changedSource.public_files_sha256[
+    Object.keys(changedSource.public_files_sha256)[0]
+  ] = "0".repeat(64);
+  await assert.rejects(
+    uploadDeploymentFiles(changedSource, root, state, () => {}, stop),
+    /plan_changed_review_again/,
+  );
+  const changedAccount = structuredClone(plan);
+  changedAccount.config.account_id = "another_account";
+  await assert.rejects(
+    uploadDeploymentFiles(changedAccount, root, state, () => {}, stop),
+    /public_upload_state_mismatch/,
+  );
+  const changedTeam = structuredClone(plan);
+  changedTeam.config.team_id = "another_team";
+  await assert.rejects(
+    uploadDeploymentFiles(changedTeam, root, state, () => {}, stop),
+    /public_upload_state_mismatch/,
+  );
+  const tampered = structuredClone(state);
+  Object.values(tampered.public_uploads.files)[0].sha256 = "0".repeat(64);
+  await assert.rejects(
+    uploadDeploymentFiles(plan, root, tampered, () => {}, stop),
+    /public_upload_state_mismatch/,
+  );
+});
+
+test("failed content upload leaves deployment creation untouched and resume sends compact references", async () => {
+  const path = workspace(),
+    plan = createPlan(config(), root, path),
+    captures = [],
+    state = { plan_sha256: plan.plan_sha256 };
+  flightReceipt(path, plan);
+  const delegate = fakeAPI(plan, captures);
+  let lose = true;
+  const api = async (route, body, options) => {
+    if (route === "/v2/files" && lose)
+      throw Error("synthetic unconfirmed upload");
+    return delegate(route, body, options);
+  };
+  const injected = { api, run: () => {}, setupModule };
+  await assert.rejects(
+    applyPlan(plan, root, path, env, state, () => {}, injected),
+    /unconfirmed upload/,
+  );
+  assert.notEqual(state.deployment_attempted, true);
+  assert.equal(state.deployment_attempt_id, undefined);
+  assert.ok(!captures.some((entry) => entry.path === "/v13/deployments"));
+  lose = false;
+  assert.equal(
+    (await applyPlan(plan, root, path, env, state, () => {}, injected)).ready,
+    true,
+  );
+  const deployment = captures.find(
+    (entry) => entry.path === "/v13/deployments",
+  ).body;
+  assert.ok(
+    deployment.files.every(
+      (file) => Object.keys(file).sort().join(",") === "file,sha,size",
+    ),
+  );
+  assert.ok(!JSON.stringify(deployment).includes('"data":'));
+  assert.ok(!JSON.stringify(deployment).includes("test-secret"));
+  assert.equal(
+    captures.filter((entry) => entry.path === "/v13/deployments").length,
+    1,
   );
 });

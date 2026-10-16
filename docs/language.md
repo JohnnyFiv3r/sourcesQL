@@ -46,3 +46,16 @@ work. NULL semantic inputs retain an unprocessed outcome, distinct from false.
 
 Fixture compiler/planner tests and local engine tests cover these mechanics.
 They do not establish live semantic quality or a hosted ChatGPT qualification.
+
+
+Research requests default to `partial_policy: "retain_partial"`. Missing facts
+remain NULL. For named `SEM_EXTRACT` fields, invalid evidence makes that field
+unavailable while independently supported siblings retain their values and
+citations; the receipt remains partial. Set `partial_policy: "strict"` explicitly
+when the whole result must be rejected if required semantic processing fails.
+A failed field is distinct from an ordinarily absent fact.
+
+All positional `WEB_SEARCH` arguments are query strings. Use
+`WEB_SEARCH('query', per_query_limit := 6)` to request six results; a numeric
+second positional argument is rejected. `sourcesql_explain` is available with
+the local Python engine; native hosted connections do not expose that tool.

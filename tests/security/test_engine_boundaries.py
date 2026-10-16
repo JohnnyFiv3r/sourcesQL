@@ -454,7 +454,7 @@ def test_invalid_semantic_evidence_is_not_cached_and_old_failed_cache_is_ignored
     engine = make_engine(tmp_path)
     sql = "SELECT url,SEM_EXTRACT(content,'project name') AS project FROM WEB_SEARCH('Aurora') WHERE title = 'Aurora Campus planning'"
     with pytest.raises(SourcesQLError, match="Required semantic processing failed"):
-        engine.query(query=sql, request_id=str(uuid.uuid4()))
+        engine.query(query=sql, request_id=str(uuid.uuid4()), partial_policy="strict")
     with engine.store.db() as db:
         assert db.execute("SELECT count(*) FROM semantic_cache").fetchone()[0] == 0
         operator, text, instruction, fields, options = calls[0]

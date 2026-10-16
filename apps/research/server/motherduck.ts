@@ -133,6 +133,7 @@ const runColumns = `CAST(run_id AS VARCHAR) AS run_id,CAST(flight_id AS VARCHAR)
   flight_version,CAST(run_number AS VARCHAR) AS run_number,status,exit_code,CAST(config AS JSON)::VARCHAR AS config_json`;
 
 export class MotherDuckEngine implements ResearchEngine {
+  readonly supportsExplain = false;
   readonly namespace: string;
   readonly schema: string;
   readonly maxRuntime: number;

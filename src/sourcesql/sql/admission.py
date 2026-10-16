@@ -761,7 +761,10 @@ class _Binder:
                         or name == "WEB_SEARCH"
                         and len(value) > 2000
                     ):
-                        refuse("Web source arguments require nonempty strings", "invalid_query")
+                        message = "Web source arguments require nonempty strings"
+                        if name == "WEB_SEARCH":
+                            message += "; use per_query_limit := N for a result limit"
+                        refuse(message, "invalid_query")
                 elif self.infer(arg, sources) != "VARCHAR":
                     refuse("Row-dependent web arguments must have VARCHAR type", "invalid_query")
             for key, value in kwargs.items():

@@ -31,6 +31,7 @@ export type EngineResult = {
   next_offset: number | null;
 };
 export interface ResearchEngine {
+  readonly supportsExplain?: boolean;
   call<T = Record<string, unknown>>(
     method: string,
     params?: Record<string, unknown>,

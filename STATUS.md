@@ -26,6 +26,27 @@ factual-accuracy certification. Personal-cloud onboarding defaults retain their
 older search policy unless explicitly reconfigured. No 0.2.3 package has been
 published. Operator evidence and quality experiments remain private.
 
+The candidate now retains partial research by default. Missing facts remain NULL;
+named extraction fields with invalid support become unavailable without discarding
+independently cited siblings. Explicit strict execution remains available.
+Field diagnostics and partial status survive semantic-cache reuse. Bounded batches
+and targeted follow-up instructions preserve completed work without repeating
+discovery or replaying uncertain submissions.
+
+A separate post-demo check processed two retained official source documents on the
+updated hosted worker: two model calls, no search or fetch, six cells with exact
+source quotations, and two unsupported publication dates left NULL. This qualifies
+that measured path, not automatic gap filling in either host. The operator has a
+separate explicit two-dollar per-job research grant; normal adopter settings do
+not inherit it. Native hosted tool discovery omits the local-only Explain tool.
+
+Public personal-cloud setup now uploads the reviewed files by content digest
+before creating a deployment. Saved upload acknowledgments survive interruption;
+an incomplete upload never crosses the deployment-creation barrier. Controlled
+tests cover the compact manifest, account/team binding and ordinary recovery.
+A fresh installed-CLI first attempt remains a separate release gate.
+
+
 The candidate now supports authorized reuse of retained source documents and
 canonical cell evidence through supported projections and joins. A bounded live
 three-document extraction preserved source dates and exact support; subsequent
@@ -388,20 +409,18 @@ broad research quality or upgraded provider workers.
 
 ## Current limits
 
-The earlier qualified hosted Exa run used `exa-search.v1`: Auto search excerpts,
-**two queries and ten candidate pages per job**, with no additional fetches or
-model calls. A reviewed `exa-research.v2` Flight is provisioned, but a new live
-Vercel Exa check remains pending after an earlier attempt reached its configured
-daily Flight reservation. That reservation is an application guard, not
-MotherDuck's account-wide free allowance. Provisioning alone is not live provider
-qualification.
+Hosted Exa research is opt-in. The research policy can admit up to 32 query
+strings, 2,500 candidates and 40 document fetches, but configured budgets and
+explicit approval bound each actual run. These are ceilings, not measured search
+coverage. Bounded hosted Auto retrieval and structured extraction have completed;
+broad recall, general semantic quality and automatic cell-specific follow-up
+remain separate qualification work. Legacy search policies keep their original
+limits, and guided onboarding does not silently provision a model-capable profile.
 
-Broad discovery instructions ask for at least six diverse queries. An agent must
-report when the configured profile cannot accommodate that coverage; it must not
-silently shrink the task or bypass execution limits. Broad fanout, hosted
-semantic processing and live research quality remain unqualified. Brave/Serper
-receipts now include the bounded Vercel HTTP checks above; provider-specific
-ChatGPT/Claude rendering and wider coverage remain separate checks.
+Brave/Serper receipts include earlier bounded Vercel HTTP checks; provider-specific
+ChatGPT/Claude rendering and wider coverage remain separate checks. Configured
+worker versions and exact execution artifacts must be verified independently of
+package publication.
 
 Guided setup supports one configured owner; account creation, OAuth registration
 and the exact-domain protection exception remain manual. This is not a shared

@@ -1729,21 +1729,22 @@ export function createServer(
       },
       () => safe(async () => engineResult(await engine.call("capabilities"))),
     );
-    tools.registerTool(
-      "sourcesql_explain",
-      {
-        description:
-          "Admit and explain a bounded query without provider dispatch.",
-        inputSchema: querySchema,
-        annotations: {
-          readOnlyHint: true,
-          idempotentHint: true,
-          openWorldHint: false,
+    if (engine.supportsExplain !== false)
+      tools.registerTool(
+        "sourcesql_explain",
+        {
+          description:
+            "Admit and explain a bounded query without provider dispatch.",
+          inputSchema: querySchema,
+          annotations: {
+            readOnlyHint: true,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
         },
-      },
-      (args) =>
-        safe(async () => engineResult(await engine.call("explain", args))),
-    );
+        (args) =>
+          safe(async () => engineResult(await engine.call("explain", args))),
+      );
     tools.registerTool(
       "sourcesql_query",
       {
