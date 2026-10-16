@@ -83,7 +83,8 @@ export function validateExaPolicy(policy: HostedExaPolicy): void {
     policy.approvedCostMicrousd > 1000000 ||
     !Number.isSafeInteger(policy.dailyCostMicrousd) ||
     policy.dailyCostMicrousd < policy.approvedCostMicrousd ||
-    policy.dailyCostMicrousd > (research ? 10_000_000 : 1_000_000) ||
+    // Trusted operator configuration ceiling; defaults and spending grants are separate.
+    policy.dailyCostMicrousd > (research ? 50_000_000 : 1_000_000) ||
     ![
       undefined,
       "exa-search.v1",

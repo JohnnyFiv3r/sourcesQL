@@ -497,9 +497,26 @@ export class MotherDuckEngine implements ResearchEngine {
       ...(job.status === "failed"
         ? {
             error_code: job.error_code ?? "execution_failed",
+            ...(job.engine_run_id ? { run_id: job.engine_run_id } : {}),
             error: {
               code: job.error_code ?? "execution_failed",
-              message: "Research execution failed safely",
+              message:
+                (
+                  {
+                    provider_timeout:
+                      "The model request timed out; its remote outcome is unknown. Saved results are retained. Inspect the run before authorizing another extraction.",
+                    provider_connection_error:
+                      "The model connection failed; its remote outcome is unknown. Saved results are retained. Inspect the run before authorizing another extraction.",
+                    provider_http_error:
+                      "The model provider rejected the request. Saved results are retained; inspect the run before continuing.",
+                    provider_error:
+                      "The model request failed. Saved results are retained; inspect the run before continuing.",
+                    invalid_output:
+                      "Research output failed validation. Saved results are retained.",
+                    evidence_invalid:
+                      "Source evidence failed validation. Saved results are retained.",
+                  } as Record<string, string>
+                )[job.error_code] ?? "Research execution failed safely",
             },
           }
         : {}),
@@ -1287,6 +1304,7 @@ export class MotherDuckEngine implements ResearchEngine {
           this.options.engineVersion === "0.2.3"
             ? ["original", "effective", "sources"]
             : ["original", "effective"],
+        semantic_limits: { extract_all_max_items_per_call: 8 },
         default_profile: "fixture",
         recommended_research_profile: this.options.exa
           ? "exa"

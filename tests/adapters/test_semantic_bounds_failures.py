@@ -1,0 +1,162 @@
+"""Bound model output before dispatch and retain safe failure/settlement distinctions."""
+
+import asyncio
+import json
+
+import httpx
+import pytest
+from pydantic import ValidationError
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.usage import RequestUsage
+
+from sourcesql.contracts import Budget, SourcesQLError
+from sourcesql.providers.semantic import PydanticSemanticProvider, output_schema
+
+
+@pytest.mark.parametrize("fields", [{}, {"name": "entity name"}])
+@pytest.mark.parametrize("options,maximum", [({}, 8), ({"max_items": 2}, 2), ({"max_items": 0}, 0)])
+def test_all_output_schema_has_the_exact_configured_item_bound(fields, options, maximum):
+    schema = output_schema("SEM_EXTRACT_ALL", fields, options)
+    variants = schema.model_json_schema()["properties"]["value"]["anyOf"]
+    assert next(v for v in variants if v["type"] == "array")["maxItems"] == maximum
+    item = {"name": "synthetic"} if fields else "synthetic"
+    schema.model_validate({"value": [item] * maximum, "status": "supported_text", "support": []})
+    with pytest.raises(ValidationError):
+        schema.model_validate(
+            {"value": [item] * (maximum + 1), "status": "supported_text", "support": []}
+        )
+
+
+@pytest.mark.parametrize("maximum", [-1, 9, True, "2"])
+def test_invalid_all_limit_is_refused_before_model_dispatch(maximum):
+    provider = PydanticSemanticProvider(FunctionModel(lambda *_: pytest.fail("unexpected model")))
+    budget = Budget()
+    with pytest.raises(SourcesQLError) as error:
+        provider.semantic(
+            "SEM_EXTRACT_ALL", "source", "entities", {}, {"max_items": maximum}, budget
+        )
+    assert error.value.code == "invalid_request"
+    assert provider.events == [] and budget.counts == {}
+
+
+def test_all_model_prompt_and_schema_share_the_bound_and_oversized_output_is_invalid():
+    calls = []
+
+    def model(messages, info):
+        calls.append(messages)
+        instructions = info.instructions or ""
+        assert "SEM_EXTRACT_ALL must return at most 2 items" in instructions
+        return ModelResponse(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {"value": ["one", "two", "three"], "status": "supported_text", "support": []},
+                )
+            ],
+            usage=RequestUsage(input_tokens=12, output_tokens=8),
+        )
+
+    provider = PydanticSemanticProvider(FunctionModel(model))
+    budget = Budget()
+    outcome = provider.semantic(
+        "SEM_EXTRACT_ALL", "one two three", "entities", {}, {"max_items": 2}, budget
+    )
+    assert outcome.value is None and outcome.status == "invalid_output"
+    assert outcome.usage["validation_error"]["code"] == "invalid_output"
+    assert outcome.usage["failure"]["error_type"] == "schema"
+    assert outcome.usage["failure"]["remote_outcome_unknown"] is False
+    assert budget.counts == {"model_requests": 1, "input_tokens": 12, "output_tokens": 8}
+    assert len(calls) == 1 and provider.events[0]["status"] == "completed_validation_failed"
+
+
+@pytest.mark.parametrize(
+    "kind,code",
+    [
+        ("timeout", "provider_timeout"),
+        ("connection", "provider_connection_error"),
+        ("http", "provider_http_error"),
+        ("unknown", "provider_error"),
+    ],
+)
+def test_failed_model_calls_have_safe_taxonomy_without_retry_or_settlement_loss(kind, code):
+    secret = "synthetic-credential-DO-NOT-EXPOSE"
+    request = httpx.Request("POST", "https://private.example/?key=" + secret)
+    errors = {
+        "timeout": httpx.ReadTimeout(secret, request=request),
+        "connection": httpx.ConnectError(secret, request=request),
+        "http": ModelHTTPError(429, "synthetic-model", {"secret": secret}),
+        "unknown": RuntimeError(secret),
+    }
+    calls = []
+
+    def model(*_):
+        calls.append(1)
+        raise errors[kind]
+
+    provider = PydanticSemanticProvider(FunctionModel(model), retries=2)
+    budget = Budget({"max_model_requests": 3})
+    outcome = provider.semantic("SEM_EXTRACT", "source", "entity", {}, {}, budget)
+    assert outcome.value is None and outcome.status == "failed"
+    assert outcome.usage["failure"]["code"] == code
+    assert outcome.usage["failure"]["error_type"] == kind
+    assert outcome.usage["failure"]["remote_outcome_unknown"] is True
+    assert outcome.usage["failure"]["retryable"] is False
+    assert provider.events[0]["status"] == "remote_outcome_unknown"
+    assert provider.events[0]["error_code"] == code
+    assert len(calls) == budget.counts["model_requests"] == 1
+    serialized = json.dumps({"usage": outcome.usage, "events": provider.events})
+    assert secret not in serialized and "private.example" not in serialized
+    if kind == "http":
+        assert outcome.usage["failure"]["http_status"] == 429
+
+
+@pytest.mark.parametrize("kind", ["timeout", "connection"])
+def test_native_openai_wrapped_transport_failure_is_classified_without_sdk_retry(monkeypatch, kind):
+    calls = []
+
+    def transport(request):
+        calls.append(request)
+        error = httpx.ReadTimeout if kind == "timeout" else httpx.ConnectError
+        raise error("synthetic private transport detail", request=request)
+
+    monkeypatch.setattr(
+        "openai.DefaultAsyncHttpxClient",
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(transport), **kwargs),
+    )
+    provider = PydanticSemanticProvider.openai("synthetic-model", "synthetic-key", retries=2)
+    try:
+        budget = Budget({"max_model_requests": 3})
+        outcome = provider.semantic("SEM_EXTRACT", "source", "entity", {}, {}, budget)
+        assert outcome.status == "failed"
+        assert outcome.usage["failure"]["code"] == (
+            "provider_timeout" if kind == "timeout" else "provider_connection_error"
+        )
+        assert outcome.usage["failure"]["remote_outcome_unknown"] is True
+        assert len(calls) == budget.counts["model_requests"] == 1
+        assert "private transport detail" not in json.dumps(outcome.usage)
+    finally:
+        asyncio.run(provider.model.client.close())
+
+
+def test_duplicate_output_json_keeps_schema_diagnostic_and_completed_usage():
+    def model(_messages, info):
+        return ModelResponse(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    '{"value":true,"value":false,"status":"processed","support":[]}',
+                )
+            ],
+            usage=RequestUsage(input_tokens=9, output_tokens=4),
+        )
+
+    provider = PydanticSemanticProvider(FunctionModel(model))
+    outcome = provider.semantic("SEM_MATCH", "source", "entity", {}, {}, Budget())
+    assert outcome.status == "invalid_output" and outcome.value is None
+    assert outcome.usage["validation_error"]["code"] == "invalid_output"
+    assert outcome.usage["input_tokens"] == 9 and outcome.usage["output_tokens"] == 4
+    assert provider.events[0]["status"] == "completed_validation_failed"
+    assert provider.events[0]["error_code"] == "invalid_output"
+    assert provider.events[0]["error_type"] == "schema"

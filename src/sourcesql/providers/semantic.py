@@ -6,10 +6,10 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
 import math
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from pydantic.json_schema import SkipJsonSchema
 
 from ..contracts import Budget, SemanticOutcome, SourcesQLError, canonical
@@ -228,6 +228,77 @@ def validate_outcome(
     return SemanticOutcome(value, status, support, usage)
 
 
+def extraction_item_limit(options: dict) -> int:
+    maximum = options.get("max_items", 8)
+    if type(maximum) is not int or not 0 <= maximum <= 8:
+        raise SourcesQLError("invalid_request", "Invalid extraction item limit", "semantic")
+    return maximum
+
+
+def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
+    """Allowlisted diagnostics only; exception text and provider bodies are private."""
+    from openai import (
+        APIConnectionError,
+        APIResponseValidationError,
+        APIStatusError,
+        APITimeoutError,
+    )
+    from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
+
+    chain: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None and len(chain) < 8 and all(current is not e for e in chain):
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    category, code, message = "unknown", "provider_error", "Semantic model request failed"
+    http_status = None
+    if any(isinstance(e, (TimeoutError, httpx.TimeoutException, APITimeoutError)) for e in chain):
+        category, code, message = "timeout", "provider_timeout", "Semantic model request timed out"
+    elif any(isinstance(e, (httpx.TransportError, APIConnectionError)) for e in chain):
+        category, code, message = (
+            "connection",
+            "provider_connection_error",
+            "Semantic model connection failed",
+        )
+    elif response := next(
+        (
+            e
+            for e in chain
+            if isinstance(e, (httpx.HTTPStatusError, APIStatusError, ModelHTTPError))
+        ),
+        None,
+    ):
+        category, code, message = (
+            "http",
+            "provider_http_error",
+            "Semantic model provider rejected the request",
+        )
+        status = (
+            response.response.status_code
+            if isinstance(response, httpx.HTTPStatusError)
+            else response.status_code
+        )
+        if type(status) is int and 100 <= status <= 599:
+            http_status = status
+    elif any(
+        isinstance(e, (ValidationError, APIResponseValidationError, UnexpectedModelBehavior))
+        for e in chain
+    ):
+        category, code, message = (
+            "schema",
+            "invalid_output",
+            "Semantic model output did not match the required schema",
+        )
+    return {
+        "code": code,
+        "message": message,
+        "error_type": category,
+        "remote_outcome_unknown": remote_outcome_unknown,
+        "retryable": False,
+        **({"http_status": http_status} if http_status is not None else {}),
+    }
+
+
 def output_schema(operator: str, fields: dict[str, str], options: dict) -> type[BaseModel]:
     if operator == "SEM_NORM":
         return NormalizedOutput
@@ -242,7 +313,7 @@ def output_schema(operator: str, fields: dict[str, str], options: dict) -> type[
             **field_definitions,
         )
     if operator == "SEM_EXTRACT_ALL":
-        value_type = list[value_type]
+        value_type = Annotated[list[value_type], Field(max_length=extraction_item_limit(options))]
     return create_model(
         "SemanticOutput",
         __config__=ConfigDict(extra="forbid", strict=True),
@@ -414,12 +485,18 @@ class PydanticSemanticProvider:
                         ):
                             json_object(part.args.encode("utf-8"))
                     return response
-                except SourcesQLError:
+                except SourcesQLError as error:
                     if event["status"] == "completed":
                         event["status"] = "completed_validation_failed"
+                    if error.code == "invalid_output":
+                        event.update(error_code="invalid_output", error_type="schema")
                     raise
-                except Exception:
+                except Exception as error:
                     event["status"] = "remote_outcome_unknown"
+                    failure = semantic_failure(error, remote_outcome_unknown=True)
+                    event.update(error_code=failure["code"], error_type=failure["error_type"])
+                    if "http_status" in failure:
+                        event["http_status"] = failure["http_status"]
                     raise
 
         agent = Agent(
@@ -447,6 +524,12 @@ class PydanticSemanticProvider:
                 "Scalar support field is value. Normalization must return one mapping entry "
                 "for every distinct original collection value and must preserve ambiguous "
                 "values as null; keys are local grouping labels, never global entity IDs."
+                + (
+                    f" SEM_EXTRACT_ALL must return at most {extraction_item_limit(options)} items. "
+                    "Never exceed this limit; return an empty list when no items match."
+                    if operator == "SEM_EXTRACT_ALL"
+                    else ""
+                )
             ),
         )
         remaining = budget.limits["max_model_requests"] - budget.counts.get("model_requests", 0)
@@ -526,14 +609,39 @@ class PydanticSemanticProvider:
                     ),
                 },
             )
-        except Exception:
+        except Exception as error:
+            failure = semantic_failure(
+                error,
+                remote_outcome_unknown=any(
+                    e["status"] == "remote_outcome_unknown" for e in events[first_event:]
+                ),
+            )
+            if failure["code"] == "invalid_output":
+                for event in events[first_event:]:
+                    if event["status"] == "completed":
+                        event.update(
+                            status="completed_validation_failed",
+                            error_code="invalid_output",
+                            error_type="schema",
+                        )
             return SemanticOutcome(
                 None,
-                "failed",
+                "invalid_output" if failure["code"] == "invalid_output" else "failed",
                 usage={
                     "model": self.profile_name,
                     "cost_microusd": None,
-                    "reason": "model_request_failed",
+                    "reason": failure["code"],
+                    "failure": failure,
+                    **(
+                        {
+                            "validation_error": {
+                                "code": failure["code"],
+                                "message": failure["message"],
+                            }
+                        }
+                        if failure["code"] == "invalid_output"
+                        else {}
+                    ),
                     "requests": len(events) - first_event,
                     "input_tokens": sum(
                         e.get("usage", {}).get("input_tokens", 0) for e in events[first_event:]

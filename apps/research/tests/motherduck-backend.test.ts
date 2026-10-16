@@ -2697,3 +2697,37 @@ test("monthly-only jobs can use more than the legacy daily default while a zero 
     await h.close();
   }
 });
+
+test("failed hosted model jobs reopen with distinct safe errors and never redispatch", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    const job = await engine.call<Row>("query", query());
+    h.runs[0].status = "RUN_STATUS_FAILED";
+    h.runs[0].exit_code = 1;
+    for (const [code, message] of [
+      ["provider_timeout", "timed out"],
+      ["provider_connection_error", "connection failed"],
+      ["provider_http_error", "provider rejected"],
+      ["invalid_output", "output failed validation"],
+      ["evidence_invalid", "evidence failed validation"],
+    ]) {
+      await engine.connection((connection) =>
+        connection.query(
+          `UPDATE ${engine.table("jobs")} SET status='failed',error_code=$1,error_message=$2 WHERE id=$3::UUID`,
+          [code, "PRIVATE-RAW-PROVIDER-BODY", job.job_id],
+        ),
+      );
+      const view = await engine.call<Row>("job_status", { job_id: job.job_id });
+      assert.equal(view.status, "failed");
+      assert.equal(view.error.code, code);
+      assert.ok(view.error.message.toLowerCase().includes(message));
+      assert.ok(!JSON.stringify(view).includes("PRIVATE-RAW"));
+      assert.equal(view.result_id, undefined);
+      assert.equal(h.submissions, 1);
+    }
+  } finally {
+    await h.close();
+  }
+});

@@ -183,16 +183,20 @@ test("research configuration carries names and the reviewed policy, never creden
   );
 });
 
-test("only the opt-in research policy admits the approved ten-dollar daily ceiling", () => {
-  validateExaPolicy({
-    ...research(),
-    approvedCostMicrousd: 1_000_000,
-    dailyCostMicrousd: 10_000_000,
-  });
+test("only explicit research v3 configuration permits a daily ceiling up to fifty dollars", () => {
+  for (const dailyCostMicrousd of [
+    10_000_000, 12_000_000, 20_000_000, 50_000_000,
+  ])
+    validateExaPolicy({
+      ...research(),
+      approvedCostMicrousd: 1_000_000,
+      dailyCostMicrousd,
+    });
   for (const policy of [
     { ...base, dailyCostMicrousd: 1_000_001 },
+    { ...base, policyVersion: "exa-search.v1", dailyCostMicrousd: 1_000_001 },
     { ...base, policyVersion: "exa-research.v2", dailyCostMicrousd: 1_000_001 },
-    { ...research(), dailyCostMicrousd: 10_000_001 },
+    { ...research(), dailyCostMicrousd: 50_000_001 },
     { ...research(), approvedCostMicrousd: 1_000_001 },
     { ...research(), dailyCostMicrousd: 49_999 },
     { ...research(), approvedCostMicrousd: Number.NaN },

@@ -274,3 +274,42 @@ def test_oversized_intermediate_fails_instead_of_publishing_clipped_count(tmp_pa
     assert receipt["result_id"] is None
     assert receipt["errors"][0]["code"] == "budget_exhausted"
     assert published == 1  # The original imported input only; no clipped count.
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["provider_timeout", "provider_connection_error", "provider_http_error", "provider_error"],
+)
+def test_model_failure_keeps_category_without_copying_provider_text(tmp_path, monkeypatch, code):
+    from sourcesql.contracts import SemanticOutcome
+    from sourcesql.providers import ProviderRegistry
+
+    calls = []
+
+    def failed(registry, operator, text, instruction, fields, options, budget):
+        calls.append(operator)
+        return SemanticOutcome(
+            None,
+            "failed",
+            usage={
+                "failure": {
+                    "code": code,
+                    "message": "PRIVATE_PROVIDER_BODY_MUST_NOT_ESCAPE",
+                    "remote_outcome_unknown": True,
+                    "retryable": False,
+                }
+            },
+        )
+
+    monkeypatch.setattr(ProviderRegistry, "semantic", failed)
+    engine = Engine(tmp_path / "engine")
+    source = imported(engine, [("content", "VARCHAR")], [{"content": "Retained source text"}])
+    with pytest.raises(SourcesQLError) as error:
+        engine.query(
+            query="SELECT SEM_EXTRACT(content,'stated value') AS value FROM input.saved",
+            inputs={"saved": binding(source)},
+        )
+    assert error.value.code == code
+    assert "PRIVATE_PROVIDER_BODY" not in error.value.safe_message
+    assert len(calls) == 1
+    assert engine.capabilities()["semantic_limits"]["extract_all_max_items_per_call"] == 8

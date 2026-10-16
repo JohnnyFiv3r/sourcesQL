@@ -262,6 +262,7 @@ class Engine:
                 for k, v in self.profiles.items()
             ],
             "limits": Budget().limits,
+            "semantic_limits": {"extract_all_max_items_per_call": 8},
             "sql_shapes": [
                 "select",
                 "nonrecursive_cte",
@@ -734,6 +735,20 @@ class Engine:
                     )
                     and request.get("partial_policy", "strict") == "strict"
                 ):
+                    failure = (value.get("usage") or {}).get("failure") or {}
+                    failure_messages = {
+                        "provider_timeout": "Semantic model request timed out",
+                        "provider_connection_error": "Semantic model connection failed",
+                        "provider_http_error": "Semantic model provider rejected the request",
+                        "provider_error": "Semantic model request failed",
+                    }
+                    if failure.get("code") in failure_messages:
+                        raise SourcesQLError(
+                            failure["code"], failure_messages[failure["code"]], "semantic"
+                        )
+                    validation = (value.get("usage") or {}).get("validation_error") or {}
+                    if validation.get("code") in {"invalid_output", "evidence_invalid"}:
+                        raise SourcesQLError(validation["code"], validation["message"], "semantic")
                     raise SourcesQLError(
                         "invalid_output", "Required semantic processing failed", "semantic"
                     )

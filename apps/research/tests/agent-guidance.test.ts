@@ -9,6 +9,8 @@ import { ResearchStore } from "../server/store.js";
 import type { ResearchEngine } from "../server/engine.js";
 import {
   SOURCESQL_CAPABILITIES_DESCRIPTION,
+  SOURCESQL_EXTRACTION_BATCH_GUIDANCE,
+  SOURCESQL_RECOVERY_GUIDANCE,
   SOURCESQL_QUERY_DESCRIPTION,
   SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
   SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS,
@@ -165,6 +167,61 @@ test("MCP initialize exposes the research workflow before any tool or provider i
     instructions,
     /filters are not pushed across CTE\/LIMIT boundaries/,
   );
+});
+
+test("MCP initialize bounds extraction batches while retaining complete saved-source coverage", async () => {
+  const wire = await discover();
+  const instructions = wire.instructions!;
+  assert.ok(instructions.includes(SOURCESQL_EXTRACTION_BATCH_GUIDANCE));
+  assert.match(
+    instructions,
+    /hard maximum of 8 extracted items per source invocation/,
+  );
+  assert.match(instructions, /stricter configured limit/);
+  assert.match(instructions, /explicit bounded entity set/);
+  assert.match(instructions, /evidence-preserving source windows/);
+  assert.match(instructions, /view:"sources" and the exact saved result_id/);
+  assert.match(instructions, /Track completed, pending and unresolved/);
+  assert.match(
+    instructions,
+    /Preserve the full requested coverage across batches/,
+  );
+  assert.match(instructions, /do not silently keep the first eight items/);
+  assert.match(instructions, /Do not invent a max_items SQL argument/);
+  assert.match(instructions, /does not authorize extra provider work/);
+  assert.deepEqual(wire.calls, []);
+});
+
+test("MCP initialize preserves failure identity and requires approved fallback or uncertain-work recovery", async () => {
+  const wire = await discover();
+  const instructions = wire.instructions!;
+  assert.ok(instructions.includes(SOURCESQL_RECOVERY_GUIDANCE));
+  assert.match(
+    instructions,
+    /Do not fall back to ChatGPT web search.*unless the user explicitly approves/,
+  );
+  assert.match(
+    instructions,
+    /including after validation errors, timeouts, provider failures or capacity blocks/,
+  );
+  assert.match(
+    instructions,
+    /Distinguish invalid_output.*from a timeout or provider failure/,
+  );
+  assert.match(instructions, /timeout does not prove invalid output/);
+  assert.match(instructions, /Preserve completed result_id handles/);
+  assert.match(instructions, /open_research with that exact job_id/);
+  assert.match(
+    instructions,
+    /no job handle.*without fabricating a widget or identifier/,
+  );
+  assert.match(instructions, /correct.*using saved input.sources/);
+  assert.match(
+    instructions,
+    /remote_outcome_unknown or submission_unknown, do not automatically replay/,
+  );
+  assert.match(instructions, /stop for explicit recovery authorization/);
+  assert.deepEqual(wire.calls, []);
 });
 
 test("tools/list describes research capabilities, inputs and side effects concisely while initialize retains planning", async () => {
