@@ -167,6 +167,8 @@ class Harness {
     options: {
       allowSubmission?: boolean;
       dailySeconds?: number;
+      monthlySeconds?: number;
+      monthlyProviderCostMicrousd?: number;
       exa?: HostedExaPolicy;
       search?: HostedSearchPolicy;
     } = {},
@@ -180,7 +182,9 @@ class Harness {
       flightId,
       principal,
       allowSubmission: options.allowSubmission ?? false,
-      dailySeconds: options.dailySeconds ?? 600,
+      dailySeconds: options.dailySeconds,
+      monthlySeconds: options.monthlySeconds,
+      monthlyProviderCostMicrousd: options.monthlyProviderCostMicrousd,
       sourceSha256: reviewedSourceHash,
       requirementsSha256: reviewedRequirementsHash,
       exa: options.exa,
@@ -2174,6 +2178,7 @@ test("an exhausted automatic start preserves one queued handle across replay and
       limit: 600,
       used: 600,
       unit: "seconds",
+      services: ["motherduck"],
     });
     assert.equal(first.can_resume, false);
     assert.deepEqual(first.dispatch_blocked, {
@@ -2529,4 +2534,166 @@ test("hosted worker version stays unknown without an explicit reviewed version p
     assert.throws(() => new MotherDuckEngine({ ...pinned, ...override }), {
       code: "invalid_request",
     });
+});
+
+function monthWindow() {
+  const now = new Date();
+  return {
+    start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+      .toISOString()
+      .slice(0, 10),
+    previous: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
+      .toISOString()
+      .slice(0, 10),
+    next: new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
+    ).toISOString(),
+  };
+}
+test("monthly Flight reservations carry existing work forward, exclude other months and survive reopening", async () => {
+  const h = await harness();
+  try {
+    const legacy = h.engine();
+    await legacy.initialize();
+    const window = monthWindow();
+    for (const [day, seconds] of [
+      [window.start, 120],
+      [window.previous, 9999],
+      [window.next.slice(0, 10), 9999],
+    ])
+      await legacy.connection((c) =>
+        c.query(
+          `INSERT INTO ${legacy.table("flight_allowances")} VALUES($1,$2::BIGINT)`,
+          [day, seconds],
+        ),
+      );
+    const engine = h.engine("owner-a", {
+      allowSubmission: true,
+      monthlySeconds: 240,
+    });
+    const caps = await engine.call<Row>("capabilities");
+    assert.equal(caps.daily_execution_reserve_seconds, null);
+    assert.equal(caps.monthly_execution_reserve_seconds, 240);
+    const first = await engine.call<Row>("query", query());
+    assert.equal(h.submissions, 1);
+    h.runs[0].status = "RUN_STATUS_FAILED";
+    await engine.call("job_status", { job_id: first.job_id });
+    const request = query();
+    const blocked = await engine.call<Row>("query", request);
+    assert.equal(blocked.status, "queued");
+    assert.deepEqual(blocked.capacity, {
+      resource: "flight_compute",
+      reason: "operator_limit",
+      allowance: "configured",
+      period: "month",
+      resets_at: window.next,
+      services: ["motherduck"],
+      limit: 240,
+      used: 240,
+      unit: "seconds",
+    });
+    const reopened = h.engine("owner-a", {
+      allowSubmission: true,
+      monthlySeconds: 240,
+    });
+    assert.deepEqual(
+      (await reopened.call<Row>("job_status", { job_id: blocked.job_id }))
+        .capacity,
+      blocked.capacity,
+    );
+    assert.equal(
+      (await reopened.call<Row>("query", request)).job_id,
+      blocked.job_id,
+    );
+    await assert.rejects(
+      reopened.call("start_job", { job_id: blocked.job_id }),
+      { code: "budget_exhausted" },
+    );
+    assert.equal(h.submissions, 1);
+    assert.equal(await runtimeReserve(engine), String(240 + 9999 + 9999));
+  } finally {
+    await h.close();
+  }
+});
+test("monthly search/model reservations refuse before charging Flight or provider rows", async () => {
+  const h = await harness();
+  try {
+    configureExa(h);
+    const engine = h.engine("owner-a", {
+      allowSubmission: true,
+      exa: exaPolicy(),
+      monthlySeconds: 18000,
+      monthlyProviderCostMicrousd: 100000,
+    });
+    await engine.initialize();
+    const window = monthWindow();
+    for (const [day, cost] of [
+      [window.start, 50000],
+      [window.previous, 999999],
+      [window.next.slice(0, 10), 999999],
+    ])
+      await engine.connection((c) =>
+        c.query(
+          `INSERT INTO ${engine.table("provider_allowances")} VALUES($1,$2::BIGINT)`,
+          [day, cost],
+        ),
+      );
+    const first = await engine.call<Row>("query", liveQuery());
+    h.runs[0].status = "RUN_STATUS_FAILED";
+    await engine.call("job_status", { job_id: first.job_id });
+    const request = liveQuery();
+    const blocked = await engine.call<Row>("query", request);
+    assert.equal(blocked.status, "queued");
+    assert.equal(blocked.capacity.resource, "search_model_budget");
+    assert.equal(blocked.capacity.period, "month");
+    assert.equal(blocked.capacity.used, 100000);
+    assert.equal(blocked.capacity.resets_at, window.next);
+    assert.deepEqual(blocked.capacity.services, ["exa"]);
+    assert.equal(blocked.can_resume, false);
+    assert.equal(
+      (await engine.call<Row>("query", request)).job_id,
+      blocked.job_id,
+    );
+    assert.equal(h.submissions, 1);
+    assert.equal(await runtimeReserve(engine), "120");
+    assert.equal(
+      await providerReserve(engine),
+      String(100000 + 999999 + 999999),
+    );
+  } finally {
+    await h.close();
+  }
+});
+test("monthly-only jobs can use more than the legacy daily default while a zero monthly cap stays closed", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", {
+      allowSubmission: true,
+      monthlySeconds: 1800,
+    });
+    await engine.initialize();
+    await reserveRuntimeDay(engine, 600);
+    await engine.call("query", query());
+    assert.equal(h.submissions, 1);
+    assert.equal(await runtimeReserve(engine), "720");
+    const closed = h.engine("owner-b", {
+      allowSubmission: true,
+      monthlySeconds: 0,
+      monthlyProviderCostMicrousd: 0,
+    });
+    await closed.initialize();
+    const blocked = await closed.call<Row>("query", query());
+    assert.equal(blocked.capacity.period, "month");
+    assert.equal(blocked.capacity.limit, 0);
+    assert.equal(blocked.can_resume, false);
+    assert.equal(h.submissions, 1);
+    for (const bad of [-1, NaN, Infinity, 1.5, 2678401])
+      assert.throws(() => h.engine("invalid", { monthlySeconds: bad }));
+    for (const bad of [-1, NaN, Infinity, 1.5, 1000000001])
+      assert.throws(() =>
+        h.engine("invalid", { monthlyProviderCostMicrousd: bad }),
+      );
+  } finally {
+    await h.close();
+  }
 });

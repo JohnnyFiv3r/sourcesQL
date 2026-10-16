@@ -3,6 +3,7 @@ import {
   Check,
   CircleAlert,
   Clock,
+  ExternalLink,
   LoaderCircle,
   Pause,
   Play,
@@ -18,7 +19,27 @@ export type ResearchJobStatusPanelProps = {
   onCheck(): void;
   onResume(): void;
   onOpenResult?(): void;
+  onOpenBilling?(url: string): void;
 };
+
+type CapacityService = NonNullable<ResearchCapacity["services"]>[number];
+// Verified provider-owned billing destinations. Job receipts select services, never URLs.
+const BILLING_DESTINATIONS = {
+  motherduck: {
+    label: "MotherDuck billing",
+    href: "https://app.motherduck.com/settings/billing",
+  },
+  exa: { label: "Exa billing", href: "https://dashboard.exa.ai/billing" },
+  brave: {
+    label: "Brave billing",
+    href: "https://api-dashboard.search.brave.com/app/settings/billing?tab=payment-method",
+  },
+  serper: { label: "Serper billing", href: "https://serper.dev/billing" },
+  openai: {
+    label: "OpenAI API billing",
+    href: "https://platform.openai.com/account/billing/overview",
+  },
+} as const satisfies Record<CapacityService, { label: string; href: string }>;
 
 function capacityMessage(capacity: ResearchCapacity) {
   if (capacity.reason === "account_configuration")
@@ -125,6 +146,7 @@ export function ResearchJobStatusPanel({
   onCheck,
   onResume,
   onOpenResult,
+  onOpenBilling,
 }: ResearchJobStatusPanelProps) {
   const { job } = view;
   const message = jobMessage(view);
@@ -154,6 +176,12 @@ export function ResearchJobStatusPanel({
         }).format(reset)
       : undefined;
   const usage = job.capacity && capacityUsage(job.capacity);
+  const billing =
+    job.status === "queued" && job.capacity
+      ? [...new Set(job.capacity.services ?? [])]
+          .filter((service) => Object.hasOwn(BILLING_DESTINATIONS, service))
+          .map((service) => BILLING_DESTINATIONS[service])
+      : [];
   return (
     <section className="job-status-panel" aria-label="Research job">
       <div
@@ -177,6 +205,36 @@ export function ResearchJobStatusPanel({
           )}
         </div>
       </div>
+      {billing.length > 0 && (
+        <div className="job-status-billing">
+          <p className="job-status-billing-note">
+            Upgrades or adding a card are optional. Configured app limits may
+            still need adjustment. Billing changes do not resume this job.
+          </p>
+          <nav
+            className="job-status-billing-links"
+            aria-label="Provider billing"
+          >
+            {billing.map((destination) => (
+              <a
+                key={destination.href}
+                href={destination.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(event) => {
+                  if (onOpenBilling) {
+                    event.preventDefault();
+                    onOpenBilling(destination.href);
+                  }
+                }}
+              >
+                {destination.label}
+                <ExternalLink size={12} aria-hidden="true" />
+              </a>
+            ))}
+          </nav>
+        </div>
+      )}
       {error && (
         <p className="job-status-error" role="alert">
           {error}

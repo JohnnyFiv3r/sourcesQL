@@ -15,6 +15,11 @@ export const capacitySchema = z
     ]),
     period: z.enum(["day", "month", "unknown"]),
     allowance: z.enum(["configured", "included", "unknown"]),
+    services: z
+      .array(z.enum(["motherduck", "exa", "brave", "serper", "openai"]))
+      .max(5)
+      .refine((values) => new Set(values).size === values.length)
+      .optional(),
     resets_at: z.iso.datetime().optional(),
     limit: z.number().int().nonnegative().optional(),
     used: z.number().int().nonnegative().optional(),

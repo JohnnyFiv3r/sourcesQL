@@ -53,6 +53,39 @@
 .job-status-reset time {
   color: var(--foreground, #202020);
 }
+.job-status-billing {
+  min-width: 0;
+  padding-top: 11px;
+  border-top: 1px solid var(--border, #dddddd);
+}
+.job-status-billing-note {
+  margin: 0;
+  color: var(--muted, #666666);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.job-status-billing-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.job-status-billing-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--link, #17654b);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.job-status-billing-links svg {
+  flex: none;
+}
 .job-status-error {
   max-height: 90px;
   overflow: auto;

@@ -244,8 +244,17 @@ dispatch response identifies a mismatched run, the gateway attempts to cancel
 it; that does not guarantee that cancellation was acknowledged or that no
 compute was billed.
 
-The daily reserve is an application allowance for one namespace. It conservatively
-charges the full configured runtime before each deliberate submission, including
+Monthly reservations and optional daily guards apply to one owner namespace.
+`SOURCESQL_FLIGHT_MONTHLY_SECONDS` bounds the UTC calendar month's sum of reserved
+Flight runtime; `SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD` bounds search/model
+reservations. `SOURCESQL_FLIGHT_DAILY_SECONDS` adds an explicit daily guard. If no
+monthly Flight limit or daily setting exists, the legacy 600-second daily default
+remains. The selected provider's separate per-job and daily cost policy also
+applies. A zero monthly cap disables the corresponding new dispatches.
+
+The gateway sums existing dated ledger rows inside the same transaction as
+claiming a job and reserving its cost. It conservatively reserves the full
+configured runtime before each deliberate submission, including
 work whose dispatch outcome is uncertain. It is not a provider-reported usage
 meter, a refund calculation, a MotherDuck account-wide allowance, or a hard stop
 before billing. Other applications, database queries, storage and external

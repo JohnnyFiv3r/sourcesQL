@@ -56,6 +56,8 @@ export function validateConfig(config) {
     "create_database",
     "adopt_existing_project",
     "allow_static_bootstrap",
+    "monthly_flight_seconds",
+    "monthly_provider_cost_microusd",
     "daily_flight_seconds",
     "enable_execution",
   ]);
@@ -84,8 +86,25 @@ export function validateConfig(config) {
   ])
     if (config[key] !== undefined && typeof config[key] !== "boolean")
       fail("invalid_configuration");
-  const seconds = config.daily_flight_seconds ?? 600;
-  if (!Number.isSafeInteger(seconds) || seconds < 0 || seconds > 1800)
+  const monthlyFlight =
+    config.monthly_flight_seconds === undefined
+      ? 18000
+      : config.monthly_flight_seconds;
+  const monthlyProvider =
+    config.monthly_provider_cost_microusd === undefined
+      ? 10000000
+      : config.monthly_provider_cost_microusd;
+  for (const [value, maximum] of [
+    [monthlyFlight, 2678400],
+    [monthlyProvider, 1000000000],
+  ])
+    if (!Number.isSafeInteger(value) || value < 0 || value > maximum)
+      fail("invalid_configuration");
+  const seconds = config.daily_flight_seconds;
+  if (
+    seconds !== undefined &&
+    (!Number.isSafeInteger(seconds) || seconds < 0 || seconds > 86400)
+  )
     fail("invalid_configuration");
   const oauth = config.oauth;
   strictKeys(oauth, ["issuer", "subject", "jwks_uri"]);
@@ -152,11 +171,19 @@ export function validateConfig(config) {
     )
       fail("invalid_provider_configuration");
   }
+  const {
+    monthly_flight_seconds: _monthlyFlight,
+    monthly_provider_cost_microusd: _monthlyProvider,
+    daily_flight_seconds: _dailyFlight,
+    ...baseConfig
+  } = config;
   return {
-    ...config,
+    ...baseConfig,
     motherduck_host: host,
     provider,
-    daily_flight_seconds: seconds,
+    monthly_flight_seconds: monthlyFlight,
+    monthly_provider_cost_microusd: monthlyProvider,
+    ...(seconds !== undefined ? { daily_flight_seconds: seconds } : {}),
   };
 }
 
@@ -364,7 +391,13 @@ export function createPlan(config, root, workspace) {
     ],
     limits: {
       plan_default: "Hobby for eligible personal use; never upgrades accounts",
-      flight_seconds_per_day: config.daily_flight_seconds,
+      reservation_period: "UTC calendar month",
+      allowance: "configured",
+      flight_seconds_per_month: config.monthly_flight_seconds,
+      provider_cost_microusd_per_month: config.monthly_provider_cost_microusd,
+      ...(config.daily_flight_seconds !== undefined
+        ? { flight_seconds_per_day: config.daily_flight_seconds }
+        : {}),
       scheduled_jobs: 0,
       active_jobs: 1,
       queued_jobs: "explicit resume",
@@ -395,10 +428,20 @@ export function environmentSettings(config, settings, secrets) {
     secrets.RESEARCH_BEARER_TOKEN.length < 32
   )
     fail("missing_credentials");
+  // The lower-level setup retains its legacy daily default. Personal-cloud
+  // plans use monthly reservations unless a daily guard was explicitly chosen.
+  const { SOURCESQL_FLIGHT_DAILY_SECONDS: _legacyDaily, ...baseSettings } =
+    settings;
   return {
-    ...settings,
+    ...baseSettings,
     SOURCESQL_ALLOW_FLIGHT_SUBMISSION: config.enable_execution ? "1" : "0",
-    SOURCESQL_FLIGHT_DAILY_SECONDS: String(config.daily_flight_seconds),
+    SOURCESQL_FLIGHT_MONTHLY_SECONDS: String(config.monthly_flight_seconds),
+    SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD: String(
+      config.monthly_provider_cost_microusd,
+    ),
+    ...(config.daily_flight_seconds !== undefined
+      ? { SOURCESQL_FLIGHT_DAILY_SECONDS: String(config.daily_flight_seconds) }
+      : {}),
     RESEARCH_AUTH_MODE: "protected",
     RESEARCH_PUBLIC_ORIGIN: "https://" + config.alias,
     RESEARCH_BEARER_TOKEN: secrets.RESEARCH_BEARER_TOKEN,

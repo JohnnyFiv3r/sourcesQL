@@ -36,21 +36,31 @@ from canonical engine data after immutable-value validation; caller-supplied
 imports retain full evidence checks. This does not establish population coverage,
 current status beyond the cited dates, or general research-quality parity.
 
-Capacity-blocked hosted jobs now have an app view through
-`open_research({job_id})`. It preserves the saved request, displays the configured
-resource reservation and UTC-day reset in local time, and offers read-only
-status checks plus explicit resume. It does not reduce search coverage, dispatch
-queued work automatically or claim to measure a provider's included allowance.
-The existing Preview keeps its 1,200-second daily Flight reservation and unchanged
-provider limits. Nine browser cases through the actual local MCP bridge cover
-configured daily capacity, provider-confirmed monthly fixture capacity and
-uncertain submission at desktop and mobile widths; they establish UI behavior,
-not live provider-quota enforcement. Application checks passed 332 tests and the
-updated packaging resource checks passed nine. The existing Preview endpoint
-returns the new capacity view for the saved queued job without dispatch intent
-or a Flight run ID; exact live MCP guidance and current/previous UI bytes match
-the local artifacts. This is API qualification plus local browser qualification;
-the new panel has not yet been visibly verified inside ChatGPT or Claude.
+Capacity-blocked hosted jobs have an app view through `open_research({job_id})`.
+New guided onboarding defaults to configured monthly reservations of 18,000
+maximum-runtime Flight seconds and $10 of search/model work. Existing daily
+ledger entries count toward the monthly checks, which run within the serialized
+dispatch transaction. Explicit daily guards remain available; legacy environments
+without monthly settings retain their earlier daily default. These are app
+reservations, not measured free credit balances or an account-wide billing cap.
+
+The capacity view preserves the saved job and reports the actual resource,
+authority and reset period, with read-only status checks and explicit resume.
+Optional service-specific billing links use fixed official destinations; opening
+one starts no research, changes no account and does not raise configured limits.
+Uncertain submissions cannot resume. The operator Preview has a separately
+bounded testing allocation; adopter defaults do not inherit that override.
+
+Application checks passed 341 tests, setup/onboarding checks passed 47 and public
+resource packaging checks passed ten. Eleven browser cases through the actual
+local MCP bridge cover daily/monthly limits, provider-reported included fixture
+capacity, mobile layout, uncertain submissions and explicit SDK billing-link
+clicks. These establish UI behavior, not native free-quota enforcement. New
+capacity/billing UI qualification inside actual ChatGPT and Claude remains a
+separate check. The existing Preview serves the exact tested UI and reports the
+prepared monthly limits. Its original queued job remains undispatched and is
+now eligible for explicit resume. No new provider or Flight calls were needed
+for this qualification.
 
 ## Released fixes and runtime alignment: 0.2.2
 

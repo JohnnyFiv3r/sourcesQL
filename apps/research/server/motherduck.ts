@@ -53,6 +53,8 @@ export type MotherDuckOptions = {
   allowSubmission?: boolean;
   maxRuntimeSeconds?: number;
   dailySeconds?: number;
+  monthlySeconds?: number;
+  monthlyProviderCostMicrousd?: number;
   sourceSha256?: string;
   engineVersion?: string;
   requirementsSha256?: string;
@@ -134,7 +136,9 @@ export class MotherDuckEngine implements ResearchEngine {
   readonly namespace: string;
   readonly schema: string;
   readonly maxRuntime: number;
-  readonly dailySeconds: number;
+  readonly dailySeconds?: number;
+  readonly monthlySeconds?: number;
+  readonly monthlyProviderCostMicrousd?: number;
   private readonly connectClient?: () => SqlClient;
   private readonly pool?: SqlPool;
   constructor(readonly options: MotherDuckOptions) {
@@ -182,7 +186,18 @@ export class MotherDuckEngine implements ResearchEngine {
     this.namespace = digest(options.principal);
     this.schema = "sourcesql_" + this.namespace.slice(0, 32);
     this.maxRuntime = bounded(options.maxRuntimeSeconds ?? 120, 30, 120);
-    this.dailySeconds = bounded(options.dailySeconds ?? 600, 0, 1800);
+    this.monthlySeconds =
+      options.monthlySeconds === undefined
+        ? undefined
+        : bounded(options.monthlySeconds, 0, 2_678_400);
+    this.monthlyProviderCostMicrousd =
+      options.monthlyProviderCostMicrousd === undefined
+        ? undefined
+        : bounded(options.monthlyProviderCostMicrousd, 0, 1_000_000_000);
+    this.dailySeconds =
+      options.dailySeconds === undefined && this.monthlySeconds !== undefined
+        ? undefined
+        : bounded(options.dailySeconds ?? 600, 0, 86_400);
     this.connectClient = options.clientFactory;
     if (!this.connectClient) {
       this.pool = (
@@ -490,63 +505,106 @@ export class MotherDuckEngine implements ResearchEngine {
         : {}),
     };
   }
+  /** Existing daily rows also govern calendar-month reservations, including pre-upgrade work. */
+  private async capacityForJob(
+    client: SqlConnection,
+    job: Row,
+    now = new Date(),
+  ): Promise<ResearchCapacity | undefined> {
+    const day = now.toISOString().slice(0, 10);
+    const monthStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+    )
+      .toISOString()
+      .slice(0, 10);
+    const monthEnd = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
+    ).toISOString();
+    const dayEnd = new Date(
+      Date.parse(`${day}T00:00:00Z`) + 86400000,
+    ).toISOString();
+    const reserved = async (
+      table: string,
+      column: string,
+      period: "day" | "month",
+    ) => {
+      const row = (
+        await client.query(
+          `SELECT CAST(coalesce(sum(${column}),0) AS VARCHAR) AS used FROM ${this.table(table)} WHERE day >= $1 AND day < $2`,
+          period === "month"
+            ? [monthStart, monthEnd.slice(0, 10)]
+            : [day, dayEnd.slice(0, 10)],
+        )
+      ).rows[0];
+      return Number(row.used);
+    };
+    for (const [period, limit] of [
+      ["month", this.monthlySeconds],
+      ["day", this.dailySeconds],
+    ] as const) {
+      if (limit === undefined) continue;
+      const used = await reserved(
+        "flight_allowances",
+        "reserved_seconds",
+        period,
+      );
+      if (used + this.maxRuntime > limit)
+        return {
+          resource: "flight_compute",
+          reason: "operator_limit",
+          allowance: "configured",
+          period,
+          resets_at: period === "month" ? monthEnd : dayEnd,
+          services: ["motherduck"],
+          limit,
+          used,
+          unit: "seconds",
+        };
+    }
+    const policy = this.options.exa ?? this.options.search;
+    if (job.provider_policy_sha256 && policy) {
+      const cost = Number(
+        JSON.parse(job.request_json).budgets?.max_cost_microusd,
+      );
+      const services: NonNullable<ResearchCapacity["services"]> = this.options
+        .exa
+        ? ["exa", ...(this.options.exa.model ? ["openai" as const] : [])]
+        : [this.options.search!.provider];
+      for (const [period, limit] of [
+        ["month", this.monthlyProviderCostMicrousd],
+        ["day", policy.dailyCostMicrousd],
+      ] as const) {
+        if (limit === undefined) continue;
+        const used = await reserved(
+          "provider_allowances",
+          "reserved_microusd",
+          period,
+        );
+        if (Number.isSafeInteger(cost) && used + cost > limit)
+          return {
+            resource: "search_model_budget",
+            reason: "operator_limit",
+            allowance: "configured",
+            period,
+            resets_at: period === "month" ? monthEnd : dayEnd,
+            services,
+            limit,
+            used,
+            unit: "microusd",
+          };
+      }
+    }
+    return undefined;
+  }
+  private capacityFailureMessage(capacity: ResearchCapacity): string {
+    return `${capacity.period === "month" ? "Monthly" : "Daily"} ${capacity.resource === "flight_compute" ? "Flight execution" : "provider"} reserve is exhausted`;
+  }
   private async queuedEnvelope(job: Row): Promise<Row> {
     const result = this.envelope(job);
     if (job.status !== "queued" || job.dispatch_intent_at || job.flight_run_id)
       return result;
-    const day = new Date().toISOString().slice(0, 10);
-    const resets_at = new Date(
-      Date.parse(`${day}T00:00:00Z`) + 86400000,
-    ).toISOString();
-    const capacity = await this.transaction(
-      false,
-      async (client): Promise<ResearchCapacity | undefined> => {
-        const flight = (
-          await client.query(
-            `SELECT CAST(reserved_seconds AS VARCHAR) AS seconds FROM ${this.table("flight_allowances")} WHERE day=$1`,
-            [day],
-          )
-        ).rows[0];
-        const used = Number(flight?.seconds ?? 0);
-        if (used + this.maxRuntime > this.dailySeconds)
-          return {
-            resource: "flight_compute",
-            reason: "operator_limit",
-            period: "day",
-            allowance: "configured",
-            resets_at,
-            limit: this.dailySeconds,
-            used,
-            unit: "seconds",
-          };
-        const policy = this.options.exa ?? this.options.search;
-        if (job.provider_policy_sha256 && policy) {
-          const request = JSON.parse(job.request_json);
-          const cost = Number(request.budgets?.max_cost_microusd);
-          const provider = (
-            await client.query(
-              `SELECT CAST(reserved_microusd AS VARCHAR) AS used FROM ${this.table("provider_allowances")} WHERE day=$1`,
-              [day],
-            )
-          ).rows[0];
-          const providerUsed = Number(provider?.used ?? 0);
-          if (
-            Number.isSafeInteger(cost) &&
-            providerUsed + cost > policy.dailyCostMicrousd
-          )
-            return {
-              resource: "search_model_budget",
-              reason: "operator_limit",
-              period: "day",
-              allowance: "configured",
-              resets_at,
-              limit: policy.dailyCostMicrousd,
-              used: providerUsed,
-              unit: "microusd",
-            };
-        }
-        return undefined;
-      },
+    const capacity = await this.transaction(false, (client) =>
+      this.capacityForJob(client, job),
     );
     return {
       ...result,
@@ -556,10 +614,7 @@ export class MotherDuckEngine implements ResearchEngine {
             capacity,
             dispatch_blocked: {
               code: "budget_exhausted",
-              message:
-                capacity.resource === "flight_compute"
-                  ? "Daily Flight execution reserve is exhausted"
-                  : "Daily provider reserve is exhausted",
+              message: this.capacityFailureMessage(capacity),
               capacity,
             },
           }
@@ -931,21 +986,17 @@ export class MotherDuckEngine implements ResearchEngine {
         )
       ).rows[0];
       if (active.count) return { job, dispatch: false };
-      const day = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const day = now.toISOString().slice(0, 10);
       await client.query(
         `INSERT OR IGNORE INTO ${this.table("flight_allowances")} VALUES($1,0)`,
         [day],
       );
-      const allowance = (
-        await client.query(
-          `SELECT CAST(reserved_seconds AS VARCHAR) AS seconds FROM ${this.table("flight_allowances")} WHERE day=$1`,
-          [day],
-        )
-      ).rows[0];
-      if (Number(allowance.seconds) + this.maxRuntime > this.dailySeconds)
+      const capacity = await this.capacityForJob(client, job, now);
+      if (capacity)
         throw new BackendError(
           "budget_exhausted",
-          "Daily Flight execution reserve is exhausted",
+          this.capacityFailureMessage(capacity),
         );
       if (job.provider_policy_sha256) {
         const policy = this.options.exa ?? this.options.search;
@@ -967,17 +1018,7 @@ export class MotherDuckEngine implements ResearchEngine {
           `INSERT OR IGNORE INTO ${this.table("provider_allowances")} VALUES($1,0)`,
           [day],
         );
-        const used = (
-          await client.query(
-            `SELECT CAST(reserved_microusd AS VARCHAR) AS used FROM ${this.table("provider_allowances")} WHERE day=$1`,
-            [day],
-          )
-        ).rows[0];
-        if (Number(used.used) + cost > policy.dailyCostMicrousd)
-          throw new BackendError(
-            "budget_exhausted",
-            "Daily provider reserve is exhausted",
-          );
+
         await client.query(
           `UPDATE ${this.table("provider_allowances")} SET reserved_microusd=reserved_microusd+$1::BIGINT WHERE day=$2`,
           [cost, day],
@@ -1317,7 +1358,11 @@ export class MotherDuckEngine implements ResearchEngine {
         execution_mode: "async_jobs",
         storage: "motherduck",
         max_flight_runtime_seconds: this.maxRuntime,
-        daily_execution_reserve_seconds: this.dailySeconds,
+        daily_execution_reserve_seconds: this.dailySeconds ?? null,
+        monthly_execution_reserve_seconds: this.monthlySeconds ?? null,
+        monthly_provider_reserve_microusd:
+          this.monthlyProviderCostMicrousd ?? null,
+        reservation_period: "UTC calendar month; optional UTC day",
         flight_submission_enabled: !!this.options.allowSubmission,
         limitations: [
           this.options.exa?.policyVersion === "exa-research.v3"
@@ -1492,7 +1537,18 @@ export async function createMotherDuckBackend(
     maxRuntimeSeconds: Number(
       environment.SOURCESQL_FLIGHT_MAX_RUNTIME_SEC ?? 120,
     ),
-    dailySeconds: Number(environment.SOURCESQL_FLIGHT_DAILY_SECONDS ?? 600),
+    dailySeconds:
+      environment.SOURCESQL_FLIGHT_DAILY_SECONDS === undefined
+        ? undefined
+        : Number(environment.SOURCESQL_FLIGHT_DAILY_SECONDS),
+    monthlySeconds:
+      environment.SOURCESQL_FLIGHT_MONTHLY_SECONDS === undefined
+        ? undefined
+        : Number(environment.SOURCESQL_FLIGHT_MONTHLY_SECONDS),
+    monthlyProviderCostMicrousd:
+      environment.SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD === undefined
+        ? undefined
+        : Number(environment.SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD),
     sourceSha256: environment.SOURCESQL_FLIGHT_SOURCE_SHA256,
     engineVersion: environment.SOURCESQL_FLIGHT_ENGINE_VERSION,
     requirementsSha256: environment.SOURCESQL_FLIGHT_REQUIREMENTS_SHA256,

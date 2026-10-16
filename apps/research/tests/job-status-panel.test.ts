@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createElement } from "react";
+import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   ResearchJobStatusPanel,
@@ -249,6 +249,9 @@ test("rendering never checks, resumes or opens results automatically", () => {
     onOpenResult() {
       calls++;
     },
+    onOpenBilling() {
+      calls++;
+    },
   };
   for (const status of [
     "queued",
@@ -262,4 +265,131 @@ test("rendering never checks, resumes or opens results automatically", () => {
     render(view({ status, capacity: capacity() }), callbacks);
   }
   assert.equal(calls, 0);
+});
+
+function billingLinks(html: string) {
+  return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((item) => ({
+    attributes: item[1],
+    href: /href="([^"]+)"/.exec(item[1])?.[1],
+    label: item[2].replace(/<[^>]*>/g, "").trim(),
+  }));
+}
+test("capacity lists only the relevant provider billing accounts, with no inferred default", () => {
+  const html = render(
+    view({ capacity: capacity({ services: ["motherduck", "exa"] }) }),
+  );
+  assert.deepEqual(
+    billingLinks(html).map((link) => link.label),
+    ["MotherDuck billing", "Exa billing"],
+  );
+  assert.match(html, /aria-label="Provider billing"/);
+  assert.equal(billingLinks(render(view({ capacity: capacity() }))).length, 0);
+  assert.doesNotMatch(render(view({ capacity: capacity() })), /adding a card/);
+});
+test("all provider links use verified hardcoded HTTPS billing destinations", () => {
+  const html = render(
+    view({
+      capacity: capacity({
+        services: ["motherduck", "exa", "brave", "serper", "openai"],
+      }),
+    }),
+  );
+  const links = billingLinks(html);
+  assert.deepEqual(
+    links.map((link) => link.href),
+    [
+      "https://app.motherduck.com/settings/billing",
+      "https://dashboard.exa.ai/billing",
+      "https://api-dashboard.search.brave.com/app/settings/billing?tab=payment-method",
+      "https://serper.dev/billing",
+      "https://platform.openai.com/account/billing/overview",
+    ],
+  );
+  for (const link of links) {
+    assert.match(link.attributes, /target="_blank"/);
+    assert.match(link.attributes, /rel="noopener noreferrer"/);
+  }
+});
+test("forged service names or backend URLs cannot create links, including object-prototype keys", () => {
+  const untrusted = {
+    ...capacity(),
+    services: [
+      "exa",
+      "__proto__",
+      "constructor",
+      "https://evil.example/billing",
+      "exa",
+    ],
+    billing_url: "https://evil.example/billing",
+  } as unknown as ResearchCapacity;
+  const html = render(view({ capacity: untrusted }));
+  assert.deepEqual(
+    billingLinks(html).map((link) => link.href),
+    ["https://dashboard.exa.ai/billing"],
+  );
+  assert.doesNotMatch(html, /evil\.example|__proto__|constructor/);
+});
+test("billing remains optional and cannot bypass configured limits or explicit resume", () => {
+  const value = view({ capacity: capacity({ services: ["motherduck"] }) });
+  const html = render(value);
+  assert.match(html, /Upgrades or adding a card are optional/);
+  assert.match(html, /Configured app limits may still need adjustment/);
+  assert.match(html, /Billing changes do not resume this job/);
+  assert.match(html, /Your job is saved/);
+  assert.equal(button(html, "Resume research").disabled, true);
+  for (const status of ["submission_unknown", "running", "completed"] as const)
+    assert.equal(
+      billingLinks(render(view({ ...value.job, status }))).length,
+      0,
+    );
+});
+test("rendering billing options never opens a page, checks status, or resumes research", () => {
+  let calls = 0;
+  render(view({ capacity: capacity({ services: ["motherduck", "exa"] }) }), {
+    onOpenBilling() {
+      calls++;
+    },
+    onCheck() {
+      calls++;
+    },
+    onResume() {
+      calls++;
+    },
+  });
+  assert.equal(calls, 0);
+});
+test("an explicit billing click uses the trusted host callback without checking or resuming", () => {
+  const destinations: string[] = [];
+  let navigationPrevented = false,
+    researchCalls = 0;
+  const tree = ResearchJobStatusPanel({
+    view: view({ capacity: capacity({ services: ["exa"] }) }),
+    busy: false,
+    onCheck() {
+      researchCalls++;
+    },
+    onResume() {
+      researchCalls++;
+    },
+    onOpenBilling(url) {
+      destinations.push(url);
+    },
+  });
+  const elements = (node: unknown): ReactElement<Record<string, unknown>>[] => {
+    if (Array.isArray(node)) return node.flatMap(elements);
+    if (!node || typeof node !== "object" || !("props" in node)) return [];
+    const element = node as ReactElement<Record<string, unknown>>;
+    return [element, ...elements(element.props.children)];
+  };
+  const anchor = elements(tree).find((element) => element.type === "a")!;
+  assert.ok(anchor);
+  assert.equal(destinations.length, 0);
+  (anchor.props.onClick as (event: { preventDefault(): void }) => void)({
+    preventDefault() {
+      navigationPrevented = true;
+    },
+  });
+  assert.deepEqual(destinations, ["https://dashboard.exa.ai/billing"]);
+  assert.equal(navigationPrevented, true);
+  assert.equal(researchCalls, 0);
 });

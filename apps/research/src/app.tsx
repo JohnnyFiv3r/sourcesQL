@@ -1445,6 +1445,7 @@ function Workspace() {
         view={jobView}
         busy={busy || !ready}
         error={error}
+        onOpenBilling={(url) => void visitSource(url)}
         onCheck={() => void perform(() => readResearchJob())}
         onResume={() => void perform(() => readResearchJob(true))}
         onOpenResult={

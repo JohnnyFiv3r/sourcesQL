@@ -89,7 +89,8 @@ Create a token-free JSON configuration outside source control, for example
   "create_database": true,
   "allow_static_bootstrap": true,
   "enable_execution": false,
-  "daily_flight_seconds": 600,
+  "monthly_flight_seconds": 18000,
+  "monthly_provider_cost_microusd": 10000000,
   "oauth": {
     "issuer": "https://your-tenant.auth0.com/",
     "subject": "auth0|your-immutable-application-user-id",
@@ -141,6 +142,46 @@ The default host is `pg.us-east-1-aws.motherduck.com`. Keep credentials in an
 existing secret manager or a private shell environment; never put key values in
 this JSON, command arguments, a repository or chat.
 
+## Configure usage reservations
+
+New personal-cloud plans default to **18,000 Flight seconds (5 hours)** and
+**10,000,000 microUSD ($10) of search/model reservations** per UTC calendar month.
+These are application limits chosen by the operator. They are not measurements
+of free credits, provider bills or MotherDuck's included compute. The monthly
+provider cap applies alongside the selected provider's per-job and daily policy.
+Setup makes no live search or model calls.
+
+Flight capacity reserves the job's maximum runtime before dispatch, rather than
+charging its eventual observed runtime. Search/model capacity reserves the
+job's approved cost ceiling. Uncertain submissions keep their reservations;
+queueing alone starts no Flight. This conservative accounting can stop work
+before a vendor allowance is exhausted. A capacity notice identifies the
+configured limit; it does not make a partial sample count as completed research.
+
+Both monthly fields accept zero to prevent dispatch, or a nonnegative integer
+up to 2,678,400 Flight seconds and 1,000,000,000 microUSD ($1,000). Those upper
+bounds are configuration ceilings, not spending defaults. A complete job must
+fit within every applicable reservation.
+
+An optional `"daily_flight_seconds": 600` adds a daily guard alongside the
+monthly limit; its range is 0–86,400 seconds. Omit it for monthly-only Flight
+reservations. The setup command does not insert a daily job-count limit when
+it is omitted. Existing gateway environments with neither monthly nor daily
+settings keep the legacy 600-second daily default.
+
+MotherDuck's [Flight billing documentation](https://motherduck.com/docs/about-motherduck/billing/flight-sizes/)
+distinguishes no-card Lite's daily F4 allowance from card-backed Lite's shared
+monthly compute allocation and pay-as-you-go overage. Flight runtime and the SQL
+it sends to a Duckling are separate compute usage. These application reservations
+do not guarantee a $0 infrastructure bill or cover another application using the
+same account. Check your account's actual usage and allowances separately.
+
+The [MotherDuck billing page](https://app.motherduck.com/settings/billing) and your
+chosen provider's billing dashboard can help you review capacity. Adding a card,
+buying credits or changing a vendor plan does not raise sourcesQL's configured
+caps. Any increase needs an explicit configuration change and a newly reviewed
+setup plan; research never enables a paid top-up automatically.
+
 ## Keep credentials in one private file
 
 For a source checkout, use the ignored `local/credentials/.env` for all setup
@@ -175,7 +216,8 @@ such as `~/.config/sourcesql/cloud/preflight`.
 
 Before preparing the plan you intend to apply, choose whether to qualify one
 fixture job. If that execution is approved, keep `provider.name` as `fixture`
-and set `enable_execution` true with the agreed daily reservation. Otherwise,
+and set `enable_execution` true with the agreed monthly reservations and any
+optional daily guard. Otherwise,
 leave it false for connection checks only. Use a separate workspace when the
 configuration changes; keep the preflight receipts rather than editing its
 saved plan.
@@ -194,7 +236,7 @@ Neither path contacts your cloud accounts or runs research. An unpublished
 version requires the explicit matching wheel until that version is on PyPI.
 
 Read `plan.json`, including the destination, exact public file hashes, Flight
-fingerprints, mutations, daily reservation and manual steps. The output includes
+fingerprints, mutations, monthly reservations, any daily guard and manual steps. The output includes
 `plan_sha256`. No credential value is printed. Preparation will stop if the
 exact wheel is unavailable, Node 24 is missing or reviewed inputs differ.
 
@@ -238,6 +280,11 @@ destination, public sources, Flight or approved policy—including
 `enable_execution`—invalidate the plan. Use a separate workspace and review a new
 plan for an intentional change; inspect existing resources before authorizing
 more provisioning.
+
+Upgrading to a setup version that adds normalized configuration fields also
+changes the reviewed plan. An older saved approval is not silently migrated or
+reused. Preserve its receipts and review a new plan before applying changed
+limits; uncertain resource-creation records still require reconciliation.
 
 ```sh
 sourcesql setup personal-cloud status \

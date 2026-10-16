@@ -80,12 +80,20 @@ non-commercial users can choose their own Vercel Hobby project; the configuratio
 requires no Pro-only feature. MotherDuck, search and model usage are separate
 costs. Included capacity is not a guarantee of a free deployment.
 
-The default reviewed Flight uses F4 with a 120-second runtime limit. The gateway
-conservatively reserves up to 600 seconds of execution per owner namespace per
-UTC day by default. That reserve is an application limit, not an account-wide
-billing cap. Other applications, database compute and provider usage are outside
-it. An account with a payment method may incur overage; no-card exhaustion
-behavior has not been qualified.
+The default reviewed Flight uses F4 with a 120-second runtime limit. New guided
+personal-cloud setup defaults to 18,000 seconds of maximum-runtime reservations
+and $10 of search/model reservations per UTC calendar month. Both are configurable
+application limits for one owner namespace. An optional daily Flight guard and
+the selected provider's daily/per-job limits can apply alongside them. Existing
+environments without monthly settings retain the legacy 600-second daily guard.
+See [usage configuration](personal-cloud-setup.md#configure-usage-reservations).
+
+Monthly checks sum existing daily ledger entries inside the dispatch transaction.
+An upgrade, failed or uncertain run, or process restart does not reset or refund
+those reservations. These counters are not provider bills or account-wide
+limits; database compute, other applications and storage need separate accounting.
+A payment method can permit overage; native no-card exhaustion has not been
+qualified.
 
 A capacity-blocked job stays saved. `open_research({job_id: "<saved-job-id>"})`
 shows the limiting resource and its actual reset period in the app. **Check status**
@@ -93,7 +101,11 @@ reads the same job without starting Python; **Resume research** explicitly resum
 that job once the configured allowance permits it. The widget labels application
 reservations separately from provider-confirmed included capacity. It never
 infers a monthly free allowance from a daily reservation or starts queued work
-automatically.
+automatically. Optional billing links open only the services associated with the
+limit, using their official account pages. Adding a card does not change a
+configured app limit or start the saved job; the operator must review and update
+the configuration separately. The app uses an actual returned reset timestamp,
+not an invented provider cooldown.
 
 MotherDuck distinguishes no-card Lite's daily F4 allowance from card-enabled
 Lite's monthly compute allocation and pay-as-you-go overage. Adding a payment
