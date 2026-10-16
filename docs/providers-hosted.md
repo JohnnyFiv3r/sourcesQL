@@ -5,10 +5,19 @@ Flight. Choose one live search provider for each Flight. Fixture execution stays
 available, and no provider becomes enabled merely because an API key exists.
 Local and Docker deployments use the same Python search adapters.
 
-The new Brave and Serper paths have been checked with synthetic HTTP responses
-and policy tests. They still require a small credentialed hosted run to qualify
-an adopter's provider account and Flight configuration. They are not a claim of
-equivalent provider coverage or full-document evidence.
+Brave and Serper have synthetic response/policy tests and bounded real Vercel
+HTTP checks. On 2026-10-16 UTC, separate protected Pro Preview deployments of the
+0.2.1 gateway used the existing 0.1.0 provider Flights. Each made one query,
+returned three excerpt rows and used no page fetches, model calls or provider
+retries. Fresh HTTP sessions read and reopened the stored research. Native runs
+succeeded and settled; the stable alias was unchanged and the temporary
+protection bypass was revoked.
+
+The combined **$0.02 provider reservation and 240 reserved Flight seconds** are
+not actual charges; provider billing was unavailable. An adopter's account and
+Flight configuration still need their own bounded checks. These results do not
+qualify provider-specific host rendering, equivalent coverage, full-document
+evidence or broad research quality, and do not upgrade the provider workers.
 
 ## Choose a provider
 

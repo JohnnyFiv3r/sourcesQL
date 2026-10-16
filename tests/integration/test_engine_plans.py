@@ -157,11 +157,22 @@ def test_engine_score_norm_and_typed_scalar_actual_worker(tmp_path):
     ]
     assert normalized["receipt"]["counts"]["model_requests"] == 1
     typed = engine.query(
-        query="SELECT SEM_EXTRACT(content,'planned capacity',type := 'BIGINT') AS capacity FROM WEB_FETCH('https://aurora.example/project')"
+        query="SELECT SEM_EXTRACT(content,'planned capacity',type := 'BIGINT') AS capacity FROM WEB_FETCH('https://aurora.example/project',mode := 'live')",
+        profile="fixture",
     )
     completed(typed)
     assert typed["rows"] == [{"capacity": "500"}]
     assert typed["columns"][0]["logical_type"] == "BIGINT"
+    assert all(s["content_basis"] == "synthetic_fixture" for s in typed["source_versions"])
+    assert typed["data_classification"] == "synthetic_fixture"
+    assert typed["receipt"]["data_classification"] == typed["data_classification"]
+    assert typed["latest_receipt"]["data_classification"] == typed["data_classification"]
+    fresh = Engine(tmp_path / "engine")
+    reopened = fresh.read_result(typed["result_id"])
+    assert reopened["data_classification"] == "synthetic_fixture"
+    assert reopened["receipt"]["data_classification"] == reopened["data_classification"]
+    assert reopened["latest_receipt"]["data_classification"] == reopened["data_classification"]
+    assert fresh.run_status(typed["run_id"])["data_classification"] == "synthetic_fixture"
 
 
 def test_engine_aggregate_and_json_cte_types_survive_materialization(tmp_path):

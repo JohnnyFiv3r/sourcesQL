@@ -241,8 +241,53 @@ test("unsafe source URLs are not rendered as clickable links and stale review st
   const html = render(update);
   assert.ok(!html.includes("javascript:"));
   assert.ok(html.includes("baseline has newer corrections"));
+  assert.ok(html.includes("before accepting or publishing these proposals"));
+  assert.ok(!html.includes("Published from baseline revision"));
+  assert.ok(
+    html
+      .match(/<button[^>]*>Publish accepted update[\s\S]*?<\/button>/)?.[0]
+      .includes("disabled"),
+  );
   const accept = html.match(/<button[^>]*>Accept change<\/button>/)?.[0];
   assert.ok(accept?.includes("disabled"));
+});
+
+test("published updates retain locked review history without unfinished instructions after the parent changes", () => {
+  const update = review();
+  update.decisions.change_a = "accept";
+  update.publishedSnapshotId = "accepted_successor";
+  for (const parentRevision of [update.baseRevision, update.baseRevision + 1]) {
+    update.parentRevision = parentRevision;
+    update.stale = parentRevision !== update.baseRevision;
+    const html = render(update);
+    for (const text of [
+      "Published update",
+      "review history",
+      "Published from baseline revision 3",
+      "Review decisions and evidence are retained",
+      "Exact retained quote",
+      "2026-10-15T10:00:00Z",
+      "Original entity",
+      "Supported new entity name",
+      "Accepted",
+    ])
+      assert.ok(html.includes(text), text);
+    for (const text of [
+      "to review",
+      "Publish accepted update",
+      "baseline has newer corrections",
+      "before accepting or publishing",
+      "Review each finding before publishing",
+    ])
+      assert.ok(!html.includes(text), text);
+    for (const label of ["Accept change", "Keep current"]) {
+      const button = html.match(
+        new RegExp(`<button[^>]*>${label}</button>`),
+      )?.[0];
+      assert.ok(button?.includes("disabled"), label);
+    }
+    assert.equal(updateReviewReadiness(update).canPublish, false);
+  }
 });
 
 test("review choices remain adjustable before publication and display the current decision", () => {

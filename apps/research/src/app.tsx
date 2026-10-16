@@ -66,7 +66,7 @@ import {
 
 const MAX_PAGE_SIZE = 25;
 const app = new App(
-  { name: "sourcesQL research", version: "0.2.0" },
+  { name: "sourcesQL research", version: "0.2.2" },
   {},
   { autoResize: false },
 );

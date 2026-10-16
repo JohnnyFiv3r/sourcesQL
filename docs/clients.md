@@ -7,8 +7,8 @@ message. Fixture or saved data is enough for the first connection checks.
 
 | Client path | Connection | Current evidence |
 | --- | --- | --- |
-| ChatGPT | Personal HTTPS `/mcp` endpoint with OAuth | Direct OAuth connection and saved-table rendering on the clean Hobby workspace; tool refresh and bounded lifecycle checks remain scoped in [status](../STATUS.md) |
-| Claude | Personal HTTPS `/mcp` endpoint with OAuth; encrypted owner bearer headers are an alternative | Real OAuth and saved-table rendering on the clean Hobby workspace; earlier owner-bearer checks passed child/Back navigation, correction persistence, cross-client checkpoint continuation and manual evidence review/publication |
+| ChatGPT | Personal HTTPS `/mcp` endpoint with OAuth | Two renewal cycles on a temporary Hobby registration; replacement original connection with offline consent and fresh saved-result rendering; other checks stay scoped in [status](../STATUS.md) |
+| Claude | Personal HTTPS `/mcp` endpoint with OAuth; encrypted owner bearer headers are an alternative | OAuth, saved-table rendering and two automatic renewal cycles on the clean Hobby workspace; earlier owner-bearer checks passed child/Back navigation, correction persistence, cross-client checkpoint continuation and manual evidence review/publication |
 | Cursor | Local Docker fixture tested; remote Streamable HTTP configuration is documented below | Actual nine-row fixture rendering and paging passed; host-agent messaging was unavailable in this setup and refresh stayed disabled |
 | Other MCP clients | Supported HTTP or stdio transport | Tools can be used without an interactive renderer; host features vary |
 
@@ -17,7 +17,10 @@ message. Fixture or saved data is enough for the first connection checks.
 Create the [personal-cloud endpoint](personal-cloud-setup.md), then open
 ChatGPT's Plugins page and choose **Add custom MCP server**. Enter the stable
 HTTPS `/mcp` URL, select the configured OAuth client and request
-`sourcesql:access`. Complete login as the configured owner. This single
+`sourcesql:access`. For the Auth0 strict third-party client, set **Default scopes**
+to `sourcesql:access`, **Base scopes** to `offline_access`, and keep **OpenID
+Connect** disabled. Complete login as the configured owner, including offline
+access consent when configuring renewal. This single
 connection provides the research tools and interactive app; no plugin ZIP is
 needed.
 
@@ -69,7 +72,11 @@ MCP URL. Choose **Use your own OAuth client** when a predefined OAuth client is
 required. Register a public authorization-code/PKCE client in your own OAuth
 provider using the callback shown by Claude; Anthropic currently documents
 `https://claude.ai/api/mcp/auth_callback`. Grant `sourcesql:access` for that client
-and the existing MCP audience. Do not reuse a client whose allowed redirects are
+and the existing MCP audience. For automatic renewal, enable the API's offline
+access and the client's Refresh Token grant and rotation, then confirm Claude's
+consent explicitly includes offline access. Follow the
+[finite renewal settings](vercel.md#enable-and-qualify-oauth-renewal).
+Do not reuse a client whose allowed redirects are
 limited to another host, enable an Enterprise-only registration feature, or make
 the app anonymous to get past a login error.
 
@@ -170,7 +177,7 @@ The product's [current status](../STATUS.md) is the published evidence boundary.
 ## Clean Hobby OAuth checks on 2026-10-15
 
 ChatGPT and Claude separately completed OAuth consent and authorization-code
-exchange for the clean 0.2.1 workspace. Each used a dedicated public
+exchange for the clean 0.2.1 workspace. Each initially used a dedicated public
 strict third-party SPA client, authorization-code-only grants and its exact host
 callback. The new API granted only delegated `sourcesql:access` to those clients
 and denied machine-to-machine access. Neither host used a client secret or fixed
@@ -179,11 +186,62 @@ existing Auth0 administrator login was a separate identity.
 
 Both hosts displayed the same saved two-row fixture table, title and source links
 in their actual inline apps. Native backend records still contained one settled
-job/run and no provider reservation after both reads. These checks qualify OAuth
-and rendering with existing accounts, not new-account signup, token renewal,
-live-provider research or the full lifecycle. See
+job/run and no provider reservation after both reads. These initial checks qualify
+OAuth and rendering with existing accounts. Renewal was measured separately
+below; new-account signup, live-provider research and the full lifecycle remain
+separate checks. See
 [adoption verification](adoption-verification.md) for the clean CLI setup and
 bounded Flight evidence.
+
+## OAuth renewal checks
+
+Renewal requires the API's Allow Offline Access setting, the client's Refresh
+Token grant, rotating refresh credentials with finite lifetimes, and a host
+request for `sourcesql:access offline_access`. The recommended retained limits are
+7 days of inactivity and 30 days total, with rotation enabled; see
+[Auth0 renewal setup](vercel.md#enable-and-qualify-oauth-renewal). Initial consent
+after changing these settings may require a setup reconnection. Start the renewal
+measurement afterward and keep the connection intact.
+
+ChatGPT and Claude each passed two successive automatic renewals with a temporary
+120-second access-token lifetime. Each safe Auth0 `sertft` event matched the intended client,
+audience, owner and scopes, and each subsequent `open_research` displayed a new
+inline app with the saved two rows. No disconnect, login or manual token exchange
+occurred between cycles. This qualifies the measured renewal and rendering
+path, not long-term expiry, fresh-account signup, provider research or the full
+client lifecycle.
+
+ChatGPT's earlier registration had empty Base scopes. After expiry it requested
+reconnection and produced no successful refresh event. A corrected registration
+with **Base scopes** `offline_access`, **Default scopes** `sourcesql:access` and
+OpenID Connect disabled completed offline-access consent and the two measured
+renewal cycles. The corrected temporary registration did not automatically update
+the original connection. If saved source OAuth settings cannot be edited in the
+host UI, create a corrected registration deliberately; tool refresh alone does
+not add offline access. Reconnection and consent alone do not pass renewal.
+
+The original ChatGPT connection was later replaced deliberately with one named
+sourcesQL registration, reusing the existing Pro endpoint, audience and public
+client with the corrected offline-access settings. Consent and fresh published
+successor rendering passed. The original API retained its 86400-second access
+lifetime; saved refresh settings were reread at 7 days idle, 30 days maximum,
+rotation and a 3-second overlap. Expiry cycles were not shortened or measured on
+this replacement; the two-cycle proof remains scoped to the temporary Hobby
+registrations. Installed ChatGPT settings showed one sourcesQL entry after test
+connections were uninstalled. Claude's temporary OAuth connector was removed and
+its original bearer connection was retained.
+
+After testing, the API's access-token lifetimes were restored and both clients'
+saved rotating-refresh settings were confirmed at a 7-day idle lifetime, 30-day
+maximum and 3-second overlap. These configured lifetimes are not a measurement of
+long-term expiration. Native backend records still contained one settled job,
+one run, one engine result, a 120-second reservation and zero recorded provider cost.
+
+For each host, require a successful refresh event and a saved-data tool operation
+after access-token expiry, with actual rendering and no intervening login. Repeat
+after the next expiry to confirm the host retains the rotated replacement. Keep
+only safe log metadata and outcomes; never read or export token values or hidden
+browser storage. Restore temporary test lifetimes after the check.
 
 ## Continuation checks on 2026-10-15
 

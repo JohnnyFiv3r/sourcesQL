@@ -83,7 +83,7 @@ export function createServer(
   const server = new McpServer(
     {
       name: "sourcesql-research-app",
-      version: "0.2.1",
+      version: "0.2.2",
       title: "sourcesQL",
       websiteUrl: "https://github.com/JohnnyFiv3r/sourcesQL",
       icons: [

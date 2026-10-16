@@ -805,6 +805,15 @@ class Engine:
             with self.lock:
                 if budget.cancelled:
                     raise SourcesQLError("cancelled", "Run cancelled", "publish")
+                result_classification = (
+                    classification
+                    if classification == "private_derived"
+                    else (
+                        "synthetic_fixture"
+                        if profile.get("mode", "fixture") == "fixture"
+                        else "public_web"
+                    )
+                )
                 meta = self.store.commit(
                     table,
                     {
@@ -812,20 +821,14 @@ class Engine:
                         "run_id": run_id,
                         "parents": parents,
                         "row_ids": row_ids,
-                        "data_classification": classification
-                        if classification == "private_derived"
-                        else (
-                            "synthetic_fixture"
-                            if profile.get("mode", "fixture") == "fixture"
-                            else "public_web"
-                        ),
+                        "data_classification": result_classification,
                         "query": request["query"],
                         "parameters": request.get("parameters", {}),
                         "query_sha256": digest(request["query"]),
                         "profile_revision": pinned["profile_revision"],
                         "receipt_id": receipt["receipt_id"],
                         "receipt_revision": 1,
-                        "receipt": receipt,
+                        "receipt": {**receipt, "data_classification": result_classification},
                         "source_versions": list(sources.values()),
                         "evidence": evidence,
                         "operator_outcomes": outcomes,

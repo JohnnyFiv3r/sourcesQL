@@ -37,10 +37,38 @@ disabled. Neither host used a fixed owner bearer header.
 
 Native storage inspection after both host opens confirmed one completed job,
 one settled Flight run and one stored engine result, with zero provider
-reservation. Original app connections stayed intact. The earlier recovered
-Hobby attempt took 9.35 seconds and remains separate from this clean attempt.
-New-account signup, OAuth token renewal, live provider research and the remaining
-host lifecycle checks are not established by these fixture checks.
+reservation. Original app connections stayed intact during that Hobby check.
+The earlier recovered Hobby attempt took 9.35 seconds and remains separate from
+this clean attempt.
+
+ChatGPT and Claude subsequently each passed **two uninterrupted automatic OAuth
+renewal cycles** with a temporary 120-second access-token lifetime. Successful
+Auth0 refresh events matched the intended client, audience, owner and scopes;
+each subsequent `open_research` rendered a new inline app with the saved two rows
+after expiry. ChatGPT's original registration with empty Base scopes failed after
+expiry and required reconnection. Its successful renewal test used a corrected
+temporary registration with explicit `offline_access`; the original connection
+was not automatically updated.
+
+After testing, the API's access-token lifetimes were restored to 86400 seconds
+and 7200 seconds for implicit/hybrid flows. Offline access stayed enabled; both
+clients saved rotating-refresh settings of **7 days idle**, **30 days maximum**
+and a **3-second overlap**. Native records remained at one settled job, one run,
+one engine result, a 120-second reservation and zero recorded provider cost. These checks
+qualify the measured renewal path; new-account signup, long-term token expiration,
+provider research in that Hobby workspace and the remaining host lifecycle paths
+remain separate checks.
+
+The original ChatGPT connection was later replaced deliberately with one named
+sourcesQL registration using the existing Pro endpoint, audience and public
+client. Offline consent and saved-result rendering passed with Base scopes
+`offline_access`, Default scopes `sourcesql:access` and OpenID Connect disabled.
+The original API's 86400-second access-token lifetime stayed unchanged; saved
+rotation settings were reread at 7 days idle, 30 days maximum and a 3-second
+overlap. Two expiry cycles were measured on the temporary Hobby registrations,
+not this replacement. Installed ChatGPT settings showed one sourcesQL entry;
+temporary test connections were uninstalled, and Claude's original bearer
+connection was retained.
 
 ## Continuation and manual updates: 0.2.0
 
@@ -77,12 +105,55 @@ until both findings were reviewed, created a two-row successor, and froze review
 choices. Back navigation preserved the original one-row table and its separate
 correction. The accepted tables were then reopened from saved state.
 
-Fresh fixture observations were acquired by the local protected Python worker,
+The initial host review/publication checks used fresh fixture observations
+acquired by the local protected Python worker,
 exported normally and imported through the documented MotherDuck storage adapter
 into the existing owner workspace. Canonical rows, hashes and evidence survived
 a fresh native read. Hosted review/publication used those retained results;
-this does not qualify a new hosted acquisition Flight. No live provider calls,
+those initial checks did not exercise a hosted acquisition Flight. No live provider calls,
 Flights or allowance changes were needed for these host checks.
+
+Subsequent checks used **one fresh shared fixture acquisition through Vercel**
+for both hosts, rather than independent ChatGPT and Claude query dispatches.
+Both actual apps staged a proposal, exposed its retained quote and observation
+time, saved the review decision and published a successor. Each publication
+preserved the parent's existing revision-1 correction and created a revision-0
+successor with no amendments. Both hosts then passed expansion-tree navigation
+and explicit refresh acceptance. That acceptance appended revision 2 to the
+parent's correction history; the earlier correction and original engine rows
+remained retained.
+
+Fresh sessions in both hosts reopened the exact published successors with the
+correct one-row `proposed` result; ChatGPT used the replacement sourcesQL OAuth
+registration. A SELECT-only native audit confirmed exactly one new settled
+fixture Flight, **10.934 seconds** of runtime, **120 seconds** reserved, zero
+provider reservation, no active or queued jobs, and the original result hash
+unchanged.
+
+The measured hosted runtime reported **0.2.0**, while the released library was
+**0.2.1**. These checks qualify the shared fixture acquisition and observed host
+controls, not an upgraded worker, independent host query dispatches, live-source
+research or a complete lifecycle. Reopening showed a UI defect: published review
+history displayed a stale-baseline rejection message after parent refresh despite
+correct saved data. The local fix described below is not yet deployed.
+Claude subsequently completed an actual native full-JSON download of the
+published successor, producing a **123,492-byte** file with valid text-resource
+metadata. An earlier refresh-child attempt opened a disabled Download dialog and
+was cancelled; that remains separate history. ChatGPT still reported that its
+host did not support file export. Offline validation matched the downloaded
+bytes/SHA and confirmed the revision-0 one-row successor, retained original
+observation, separate revision-1/revision-2 amendments, canonical quotes, manual
+decision and publication. All four engine archives imported and reopened locally
+with zero network attempts, SQL execution or worker dispatch. This does not
+qualify full app-store/MCP restoration, Claude-host import or checkpoint-file
+download.
+
+**Unreleased fixes:** the published-review history copy now takes precedence
+over stale-baseline rejection text in a local UI change; 12 component tests,
+typechecking and the local production UI build pass. A local engine change aligns fixture classification between
+top-level results and receipts while preserving private-derived precedence;
+two focused tests and Ruff pass. These are prepared fixes, not released or
+deployed behavior, and the focused checks do not establish full qualification.
 
 ChatGPT also saved a selected-field checkpoint; a fresh Claude conversation
 resumed that same canonical selection/revision as `ready`. Both hosts saved,
@@ -104,11 +175,11 @@ In Claude, use **Connectors → Yours → sourcesQL → More options → Refresh
 list**, then reopen saved research. A fresh chat alone may retain cached UI
 metadata.
 
-Remaining gates are [fresh-account Hobby onboarding, bounded Vercel Brave/Serper
-dispatch and the unqualified client paths](docs/adoption-verification.md).
-Earlier provider attempts exhausted their daily reservations; resume under the
-same limits after capacity returns. A temporary test-access grant must be revoked
-after use. Application reservations do not guarantee account-wide free usage.
+Remaining gates are [fresh-account Hobby onboarding, provider-specific host
+rendering and the unqualified client paths](docs/adoption-verification.md).
+The bounded Brave/Serper Vercel HTTP checks below completed after fresh allowance
+verification under the original namespaces and limits. Their temporary test-access
+grant was revoked. Application reservations do not guarantee account-wide free usage.
 Existing Flight definitions embed their reviewed wheel; PyPI publication alone
 does not replace that runtime. Fresh hosted acquisition must be checked separately
 from stored-data interactions.
@@ -191,7 +262,7 @@ Flight-policy and secret-binding paths. Controlled checks cover provider selecti
 request affordability, durable reservations and duplicate-submission recovery.
 Credentialed checks then ran one Brave request and one Serper request in actual
 MotherDuck Flights, retaining three candidates each. Their control gateway was
-local MCP; the Vercel provider path was not exercised by those receipts.
+local MCP; the later Vercel HTTP checks are recorded below.
 
 Installed personal-cloud setup also passed repeated application against the
 existing operator account/project, fixture execution and fresh-connection
@@ -205,6 +276,20 @@ and a 500-to-501 synthetic correction that survived reload before restoration to
 Cursor passed local Docker rendering and paging; the tested host did not expose
 agent messaging, so refresh was disabled. These are bounded host checks, not full
 Claude/Cursor lifecycle qualification.
+
+## Bounded provider HTTP checks
+
+On 2026-10-16 UTC, two protected Pro Preview deployments ran the 0.2.1 gateway
+against the existing Brave and Serper 0.1.0 Flights. Each completed one query and
+returned three excerpt rows, with no page fetches, model calls or provider
+retries. Fresh HTTP sessions read the stored results and reopened saved research.
+Native records confirmed both successful runs settled; the stable alias kept its
+original deployment and the temporary protection bypass was revoked.
+
+The combined reservations were **$0.02 and 240 Flight seconds**, not measured
+charges; actual provider billing was unavailable. This qualifies the bounded
+HTTP path, without establishing provider-specific ChatGPT/Claude rendering,
+broad research quality or upgraded provider workers.
 
 ## Current limits
 
@@ -220,13 +305,13 @@ Broad discovery instructions ask for at least six diverse queries. An agent must
 report when the configured profile cannot accommodate that coverage; it must not
 silently shrink the task or bypass execution limits. Broad fanout, hosted
 semantic processing and live research quality remain unqualified. Brave/Serper
-receipts cover bounded real Flight execution through a local control gateway,
-not the equivalent Vercel path.
+receipts now include the bounded Vercel HTTP checks above; provider-specific
+ChatGPT/Claude rendering and wider coverage remain separate checks.
 
 Guided setup supports one configured owner; account creation, OAuth registration
 and the exact-domain protection exception remain manual. This is not a shared
 multi-tenant service. Fresh-account Hobby onboarding, the full Claude/Cursor
-research lifecycle, broad live research quality and Vercel provider coverage
+research lifecycle, broad live research quality and additional provider/host paths
 remain open qualification work.
 Application allowances are finite reservations, not account-wide provider billing
 hard stops or a guarantee of free hosting.

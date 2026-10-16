@@ -26,7 +26,7 @@ function download(text: string, name: string, mimeType: string) {
 }
 async function start(token = ""): Promise<void> {
   const client = new Client(
-    { name: "sourcesQL local preview host", version: "0.1.0" },
+    { name: "sourcesQL local preview host", version: "0.2.2" },
     {
       capabilities: {
         extensions: {
@@ -70,7 +70,7 @@ async function start(token = ""): Promise<void> {
       throw new Error("The server did not return its HTML resource.");
     const bridge = new AppBridge(
       client,
-      { name: "sourcesQL local host", version: "0.1.0" },
+      { name: "sourcesQL local host", version: "0.2.2" },
       { serverTools: {}, openLinks: {}, downloadFile: {} },
       {
         hostContext: {

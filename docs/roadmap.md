@@ -2,7 +2,7 @@
 
 **0.2.0** includes compact checkpoints and bounded manual evidence-backed
 updates. Installed distributions, controlled engine/app/Docker paths, and actual
-ChatGPT/Claude manual review and publication have been exercised. Fresh-adopter
+ChatGPT/Claude manual review and publication have been exercised. Fresh-account
 and remaining client checks stay separate.
 
 Implementation, release and actual host qualification are separate milestones.
@@ -18,9 +18,11 @@ See [current status](../STATUS.md) for recorded evidence and
   The installed 0.2.1 CLI passed clean setup/resume from an empty workspace
   in an existing eligible Hobby account, one bounded fixture Flight and saved
   reopening. Separate ChatGPT and Claude OAuth connections rendered that result.
+  Both hosts also passed two renewal cycles on temporary Hobby connections.
 - **Search adapters:** Exa, Brave and Serper work locally; hosted gateway,
   Flight-policy and secret-binding paths are implemented. Bounded Brave and Serper
-  searches passed in real Flights through a local control gateway.
+  searches passed through protected Vercel HTTP using existing reviewed Flights.
+  Their provider-specific host rendering and wider research remain separate.
 - **MCP clients:** saved-table checks have passed in ChatGPT and Claude, and local
   Docker rendering and paging have passed in Cursor. Client lifecycle coverage
   remains scoped to the observations in the [client guide](clients.md).
@@ -42,16 +44,19 @@ packaged plugin is not needed. Local Docker remains an alternative adoption path
 Qualify account signup and consent with an eligible adopter's fresh personal
 accounts. Clean installed-CLI setup, the static-first deployment path, one bounded
 fixture Flight and separate ChatGPT/Claude OAuth rendering have passed in an
-existing eligible Hobby workspace. Token renewal, live-provider research and the
-full client lifecycle remain separate checks. Keep account creation, consent,
+existing eligible Hobby workspace. Both hosts passed two automatic renewal
+cycles; long-term token expiration, live-provider research in that Hobby
+workspace and the full client lifecycle remain separate checks. Keep account
+creation, consent,
 OAuth registration and any exact-domain protection exception visible to the
 adopter. Release artifacts receive their own archive and installed-package checks.
 
-Complete the bounded Brave and Serper checks through Vercel HTTP. Record the
-provider policy, results, provenance, usage reservations and lost-response
-recovery. Wait for existing capacity rather than resetting the ledger or creating
-another namespace to bypass its limits. A temporary test-access grant must be
-revoked after the check.
+The capped Brave and Serper Vercel HTTP checks completed with stored-result
+reopening and recorded application reservations; the temporary test-access grant
+was revoked. These checks do not establish provider-specific ChatGPT/Claude
+rendering, wider research quality or lost-response recovery in this phase.
+Future checks must wait for existing capacity rather than resetting the ledger
+or creating another namespace to bypass its limits.
 
 Continue to distinguish included service allowances, application reservations
 and actual provider billing. No setup path promises free hosting.
@@ -63,13 +68,24 @@ current table rendering, update-request read/cancellation, evidence inspection,
 revised review choices and saved successor publication in both hosts.
 Claude prepares a composer draft that requires Send before its agent continues.
 
-Use saved data and controlled fixtures for remaining checkpoint stale-revision
-and file-download checks. Preserve canonical IDs and original revisions in each
+One shared hosted fixture acquisition subsequently supported staging, evidence
+review, publication, expansion-tree navigation, refresh acceptance and fresh
+successor reopening in both hosts. This exercised controlled shared data, not
+independent query dispatch from each host. Claude also completed a native
+full-JSON download; ChatGPT reported that file export was unsupported.
+The actual Claude download also passed offline engine-archive import and fresh
+local reopening without network, SQL execution or worker dispatch; this does not
+establish full app-store/MCP restoration or Claude-host import.
+
+Use saved data and controlled fixtures for remaining checkpoint stale-revision,
+checkpoint-file download and full app-store/MCP restoration checks. Preserve canonical IDs and original
+revisions in each
 host receipt. Successful tool responses and local browser tests remain separate
 from actual host rendering.
 
-Complete the remaining tracked expansion and refresh-review checks in Claude.
-For Cursor, qualify hosted authentication and the supported lifecycle separately
+Qualify independent host dispatch and the remaining research lifecycle paths
+separately from the shared-fixture controls. For Cursor, qualify hosted
+authentication and the supported lifecycle separately
 from local Docker rendering. Keep actions that require unavailable app messaging
 disabled and describe that limitation explicitly. Use a small approved provider
 run only when fixture or saved-data checks cannot establish the behavior.
@@ -77,7 +93,11 @@ run only when fixture or saved-data checks cannot establish the behavior.
 ## 3. Keep released artifacts and hosted runtimes aligned
 
 Keep released source, installed artifacts, Docker and deployed resources in
-agreement. Publish only artifacts covered by release checks and identify
+agreement. The shared-fixture hosted runtime reported 0.2.0 against the released
+0.2.1 library; publishing a package does not upgrade existing workers. Qualify
+that runtime alignment explicitly. Prepared local history-copy and receipt
+classification fixes still need release and deployment checks.
+Publish only artifacts covered by release checks and identify
 any remaining host or adopter gates in the release notes. Refresh client tool
 definitions after a server update; reopen saved results rather than repeating
 research to repair a display failure.

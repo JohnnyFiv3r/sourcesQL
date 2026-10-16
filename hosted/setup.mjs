@@ -226,6 +226,9 @@ export function outputSettings(options, receipt) {
     MOTHERDUCK_HOST: options.host,
     SOURCESQL_PRINCIPAL: options.principal,
     SOURCESQL_FLIGHT_ID: receipt.flight_id,
+    ...(receipt.engine_version
+      ? { SOURCESQL_FLIGHT_ENGINE_VERSION: receipt.engine_version }
+      : {}),
     SOURCESQL_FLIGHT_SOURCE_SHA256: receipt.flight_source_sha256,
     SOURCESQL_FLIGHT_REQUIREMENTS_SHA256: receipt.requirements_sha256,
     SOURCESQL_ALLOW_FLIGHT_SUBMISSION: "0",
@@ -325,6 +328,9 @@ export async function main(arguments_ = process.argv.slice(2)) {
       flight_source_sha256: manifest.flight_source_sha256,
       requirements_sha256: manifest.requirements_sha256,
       wheel_sha256: manifest.wheel_sha256,
+      ...(manifest.runtime?.version
+        ? { engine_version: manifest.runtime.version }
+        : {}),
       instance_type: "F4",
       max_runtime_sec: 120,
       scheduled: false,

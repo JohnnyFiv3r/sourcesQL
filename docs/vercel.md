@@ -146,7 +146,9 @@ obtain the allowed subject from an actual application login.
 
 In [ChatGPT's Plugins page](https://chatgpt.com/plugins), choose **Add custom MCP
 server**, enter the stable `/mcp` URL, select OAuth and the predefined client,
-and request `sourcesql:access`. Complete login and installation, then use a new
+set **Default scopes** to `sourcesql:access`, **Base scopes** to `offline_access`,
+and keep **OpenID Connect** disabled for an Auth0 strict third-party client.
+Complete login and installation, then use a new
 chat and reopen saved research. Refresh the plugin's tool definitions after
 metadata changes. The endpoint and discovery must be reachable by ChatGPT's
 backend; adjusting Vercel protection is a separate operator access decision.
@@ -168,9 +170,60 @@ Auth0's strict third-party client requires a domain-level login connection.
 Promoting a connection makes it available to all third-party clients in that
 Auth0 tenant; API scope grants remain separate and must stay limited to the
 selected client. The owner must deliberately approve that login availability.
-Use OAuth-only ChatGPT settings with `sourcesql:access` and no OpenID base scopes
-for this strict client, which does not support OIDC ID tokens. An actual
-authorization-code exchange remains the qualification gate.
+The strict client does not support `openid`, `email`, `profile` or OIDC ID tokens.
+Its `offline_access` permission enables refresh without requesting those OpenID
+scopes. An actual authorization-code exchange establishes initial access;
+automatic renewal requires its own check.
+
+### Enable and qualify OAuth renewal
+
+On the intended Auth0 API, enable **Allow Offline Access**. On each intended
+public client, enable the **Refresh Token** grant alongside **Authorization
+Code**, keep rotation enabled, and configure finite idle and maximum lifetimes.
+Request `sourcesql:access offline_access` from the host. The API's delegated
+permission remains `sourcesql:access`; keep machine-to-machine access disabled.
+The gateway verifies access-token expiry; the host stores and exchanges refresh
+tokens. A successful initial login does not establish renewal.
+
+A recommended retained policy is a **7-day idle lifetime** (604800 seconds), a
+**30-day maximum lifetime** (2592000 seconds), rotation and a small overlap such
+as 3 seconds. Choose these retention limits deliberately: offline access lets the
+host renew while the user is away. Keep access-token expiration separate from
+refresh-token expiration. See Auth0's [refresh-token issuance](https://auth0.com/docs/secure/tokens/refresh-tokens/get-refresh-tokens),
+[rotation](https://auth0.com/docs/secure/tokens/refresh-tokens/configure-refresh-token-rotation)
+and [finite expiration](https://auth0.com/docs/secure/tokens/refresh-tokens/configure-refresh-token-expiration)
+instructions.
+
+After enabling refresh, complete consent that explicitly includes offline access.
+Existing connections authorized without it may need one setup reconnection;
+that reconnection does not qualify renewal. If ChatGPT's saved source OAuth
+settings are immutable in its UI, create a corrected temporary registration with
+the intended client, callback and scopes. Tool refresh or server changes do not
+automatically update the original registration's offline-access setting.
+To test, retain the same connection
+past access-token expiry, reopen saved research, and confirm both a successful
+Auth0 refresh exchange (`sertft`) for the intended client/audience and actual app
+rendering. Repeat after the next expiry to check that the host retains the
+replacement refresh credential.
+Record only safe event metadata and outcomes, with no tokens, headers or browser
+storage. A temporary short expiry belongs only to the dedicated test destination
+and must be restored after the check.
+
+ChatGPT and Claude each passed two uninterrupted refresh exchanges followed by
+new inline apps displaying the saved two rows. ChatGPT's earlier connection with
+empty Base scopes failed after expiry and required reconnection; the successful
+renewal check used a corrected temporary registration, preserving that failure
+as separate history. Test access-token lifetimes were restored afterward, and
+both clients saved the 7-day idle/30-day maximum rotating-refresh policy with a
+3-second overlap. The checks establish the measured renewal path, not those
+long-term expiration boundaries. See the
+[client qualification record](clients.md#oauth-renewal-checks) for scope.
+
+The original ChatGPT connection was subsequently recreated deliberately with its
+existing endpoint, audience and public client. Offline consent and fresh
+saved-result rendering passed while its API access-token lifetime remained
+unchanged. This replacement's expiry cycles were not measured; the two-cycle
+renewal evidence belongs to the temporary Hobby registrations.
 
 Google login using Auth0's developer keys is suitable for the initial test only.
 For continued adoption, configure an adopter-owned Google OAuth client or an
@@ -215,8 +268,10 @@ authenticated initialization, scoped-tool discovery and saved-result reads.
 ChatGPT completed OAuth and rendered saved research with `open_research`,
 including after reload with custom-app CSP enforcement enabled. Later bounded
 checks covered durable corrections, tree/Back navigation, a small live Exa
-expansion and fixture refresh acceptance. These do not establish live semantic
-quality, fresh-adopter onboarding, Claude rendering or an adversarial CSP audit.
+expansion and fixture refresh acceptance. Separate clean Hobby checks qualified
+setup, both hosts' saved-table OAuth rendering and two automatic renewal cycles
+per host. These do not establish live semantic quality, fresh-account signup,
+long-term token expiration, the full client lifecycle or an adversarial CSP audit.
 See [current status](../STATUS.md) for the qualification boundaries.
 
 The qualified hosted live policy is currently `exa-search.v1`: Exa Auto and

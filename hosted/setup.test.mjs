@@ -558,3 +558,22 @@ test("an existing setup lock refuses a concurrent retry without opening a connec
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("setup emits a worker-version pin only when the reviewed bundle receipt contains it", () => {
+  const options = parseArguments(base, {});
+  const legacy = outputSettings(options, receipt);
+  assert.equal(legacy.SOURCESQL_FLIGHT_ENGINE_VERSION, undefined);
+  const pinned = outputSettings(options, {
+    ...receipt,
+    engine_version: "0.2.2",
+  });
+  assert.equal(pinned.SOURCESQL_FLIGHT_ENGINE_VERSION, "0.2.2");
+  assert.equal(
+    pinned.SOURCESQL_FLIGHT_SOURCE_SHA256,
+    receipt.flight_source_sha256,
+  );
+  assert.equal(
+    pinned.SOURCESQL_FLIGHT_REQUIREMENTS_SHA256,
+    receipt.requirements_sha256,
+  );
+});

@@ -2157,3 +2157,36 @@ test("a budget error after a dispatch marker or reservation is never described a
     await h.close();
   }
 });
+
+test("hosted worker version stays unknown without an explicit reviewed version pin", async () => {
+  const base = {
+    database: "synthetic",
+    host: "pg.us-east-1-aws.motherduck.com",
+    token: "synthetic-unused-token",
+    flightId,
+    principal: "owner-a",
+    clientFactory: () => {
+      throw new Error("Capabilities must not connect");
+    },
+  };
+  const unknown = await new MotherDuckEngine(base).call<Row>("capabilities");
+  assert.equal(unknown.engine_version, null);
+  assert.equal(unknown.engine_version_source, "unknown");
+  const pinned = {
+    ...base,
+    engineVersion: "0.2.2",
+    sourceSha256: reviewedSourceHash,
+    requirementsSha256: reviewedRequirementsHash,
+  };
+  const caps = await new MotherDuckEngine(pinned).call<Row>("capabilities");
+  assert.equal(caps.engine_version, "0.2.2");
+  assert.equal(caps.engine_version_source, "configured_flight_pin");
+  for (const override of [
+    { engineVersion: "unmeasured" },
+    { sourceSha256: undefined },
+    { requirementsSha256: undefined },
+  ])
+    assert.throws(() => new MotherDuckEngine({ ...pinned, ...override }), {
+      code: "invalid_request",
+    });
+});

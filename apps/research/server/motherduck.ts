@@ -49,6 +49,7 @@ export type MotherDuckOptions = {
   maxRuntimeSeconds?: number;
   dailySeconds?: number;
   sourceSha256?: string;
+  engineVersion?: string;
   requirementsSha256?: string;
   exa?: HostedExaPolicy;
   search?: HostedSearchPolicy;
@@ -155,6 +156,16 @@ export class MotherDuckEngine implements ResearchEngine {
       throw new BackendError(
         "invalid_request",
         "Flight submission requires the reviewed source and requirements fingerprints",
+      );
+    if (
+      options.engineVersion !== undefined &&
+      (!/^\d+\.\d+\.\d+$/.test(options.engineVersion) ||
+        !/^[a-f0-9]{64}$/.test(options.sourceSha256 ?? "") ||
+        !/^[a-f0-9]{64}$/.test(options.requirementsSha256 ?? ""))
+    )
+      throw new BackendError(
+        "invalid_request",
+        "A configured worker version requires its reviewed source and requirements fingerprints",
       );
     if (options.exa && options.search)
       throw new BackendError(
@@ -1117,7 +1128,10 @@ export class MotherDuckEngine implements ResearchEngine {
     let result: unknown;
     if (method === "capabilities")
       result = {
-        engine_version: "0.1.0",
+        engine_version: this.options.engineVersion ?? null,
+        engine_version_source: this.options.engineVersion
+          ? "configured_flight_pin"
+          : "unknown",
         dialect: "duckdb",
         sqlglot_version: "30.19.0",
         operators: [
@@ -1372,6 +1386,7 @@ export async function createMotherDuckBackend(
     ),
     dailySeconds: Number(environment.SOURCESQL_FLIGHT_DAILY_SECONDS ?? 600),
     sourceSha256: environment.SOURCESQL_FLIGHT_SOURCE_SHA256,
+    engineVersion: environment.SOURCESQL_FLIGHT_ENGINE_VERSION,
     requirementsSha256: environment.SOURCESQL_FLIGHT_REQUIREMENTS_SHA256,
     search,
     exa:

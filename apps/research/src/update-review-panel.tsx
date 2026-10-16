@@ -204,6 +204,7 @@ export function UpdateReviewPanel({
   onOpenPublished(snapshotId: string): void;
 }) {
   const { unreviewed, canPublish } = updateReviewReadiness(update);
+  const published = Boolean(update.publishedSnapshotId);
   const [page, setPage] = useState(0);
   useEffect(() => setPage(0), [update.requestId]);
   const pageCount = Math.max(1, Math.ceil(update.changes.length / 10));
@@ -215,13 +216,18 @@ export function UpdateReviewPanel({
   return (
     <section
       className="update-review"
-      aria-label="Review evidence-backed updates"
+      aria-label={
+        published
+          ? "Published update review history"
+          : "Review evidence-backed updates"
+      }
     >
       <div className="update-review-heading">
         <div>
-          <strong>Review updates</strong>
+          <strong>{published ? "Published update" : "Review updates"}</strong>
           <p>
-            {update.parentTitle} · {unreviewed} to review
+            {update.parentTitle} ·{" "}
+            {published ? "review history" : `${unreviewed} to review`}
           </p>
         </div>
         {update.publishedSnapshotId ? (
@@ -242,7 +248,12 @@ export function UpdateReviewPanel({
           </Button>
         )}
       </div>
-      {update.stale ? (
+      {published ? (
+        <p className="update-review-note">
+          Published from baseline revision {update.baseRevision}. Review
+          decisions and evidence are retained.
+        </p>
+      ) : update.stale ? (
         <p className="update-stale" role="status">
           The baseline has newer corrections. Start a new check from that table
           before accepting or publishing these proposals.
