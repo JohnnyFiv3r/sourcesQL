@@ -96,3 +96,5 @@ rendering. See [current status](../STATUS.md), [provider setup](providers.md) an
 [runtime qualification](python-linux-qualification.md) for the current boundaries.
 
 UI bundles use content-derived resource identifiers. When a retired bundle is unavailable, reopen the saved snapshot with `open_research` to render it with the current UI; the saved research itself is unchanged.
+
+Manual update proposals use the existing table controls. The table opens without an inline review panel. Its updates icon opens the full review and publication dialog; selecting a proposed cell reveals Accept proposal and Keep current in the correction panel, with evidence collapsed until requested. Choices remain adjustable until explicit publication creates a successor. Published decisions remain available as history. Ordinary corrections and earlier observations stay separate.

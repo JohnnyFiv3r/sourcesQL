@@ -64,7 +64,7 @@ import {
   SOURCESQL_QUERY_DESCRIPTION,
   SOURCESQL_CAPABILITIES_DESCRIPTION,
   SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS,
-  SOURCESQL_PRESENTATION_GUIDANCE,
+  SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
 } from "./agent-guidance.js";
 
 export function createServer(
@@ -327,7 +327,7 @@ export function createServer(
                   ? "This job is queued. Poll sourcesql_job_status for state; when capacity is available, call sourcesql_start_job with this same job_id to resume. A new request ID starts different work. No result is available yet."
                   : "Poll sourcesql_job_status with this job_id. Reuse the same request_id to recover this job; a new ID starts different work. No result is available yet."
             : completed
-              ? `Query execution completed; the stored result can be reused by further SQL without rendering. ${SOURCESQL_PRESENTATION_GUIDANCE}`
+              ? "Query execution completed and the result is stored. Further SQL can reuse its result_id; open_research displays the final table. This response does not render a component."
               : "This job is terminal. No result was published; inspect this job before deciding whether to start new work.";
     return {
       content: [
@@ -344,7 +344,7 @@ export function createServer(
     "open_research",
     {
       title: "Open research",
-      description: `Render the final curated research table, or reopen saved research when the user requests it. ${SOURCESQL_PRESENTATION_GUIDANCE} Pass result_ref:{result_id,snapshot_id (new research ID),title} for the final engine result, snapshot_id to reopen, or one bounded v1/v2 snapshot for import and display. Only one is allowed. The server resolves and authorizes full engine data and returns an honest bounded preview with total count; research_page reads other windows. Preserve original values, nulls, types, capture precision and evidence. v1 sourceResultSetId remains the actual legacy source ID; v2 uses tagged origin and preserves source identifiers. Omit all arguments to open the first active project (synthetic sample in a fresh store). This server resolves only its configured engine results.`,
+      description: SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
       inputSchema: z
         .object({
           snapshot_id: id.optional(),
@@ -399,7 +399,8 @@ export function createServer(
     "import_research",
     {
       title: "Save research results",
-      description: `Save a research result without rendering a new app component. Pass exactly one result_ref:{result_id,snapshot_id,title} for a canonical engine result or a bounded immutable v1/v2 snapshot. Use this to retain intermediate discovery or staging results; continue SQL transformations before presentation. ${SOURCESQL_PRESENTATION_GUIDANCE} v1 retains its legacy date and source ID; v2 carries tagged origin, declared logical types, nullable/multiple sources and explicit capture precision. Preserve exact source observations; corrections remain separate. Import a complete exported research tree using import_research_bundle.`,
+      description:
+        "Save an intermediate or final research result without rendering an app component. Accepts exactly one canonical result_ref:{result_id,snapshot_id,title} or bounded immutable v1/v2 snapshot. Retains source observations, types, nullable fields and capture precision; corrections are separate records. Returns the saved snapshot_id. open_research displays a saved table. import_research_bundle restores an exported research tree.",
       inputSchema: z
         .object({
           snapshot: snapshotSchema.optional(),
@@ -428,7 +429,7 @@ export function createServer(
         result.content = [
           {
             type: "text",
-            text: `Research saved as snapshot_id: ${saved.id}. This save does not render a new component. ${SOURCESQL_PRESENTATION_GUIDANCE}`,
+            text: `Research saved as snapshot_id: ${saved.id}. This save does not render a new component. open_research displays the saved table.`,
           },
         ];
         return result;

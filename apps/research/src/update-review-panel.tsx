@@ -10,6 +10,220 @@ import type {
 } from "../server/updates.js";
 
 type UpdateReview = NonNullable<ResearchView["update"]>;
+
+/** Proposal attachment follows saved identities, never visible table positions. */
+export function cellUpdateProposals(
+  view: ResearchView,
+  rowId: string,
+  field: string,
+): UpdateChange[] {
+  const update = view.update;
+  if (
+    !update ||
+    !view.snapshot.columns.some((column) => column.key === field) ||
+    !view.snapshot.rows.some(
+      (row) => row.id === rowId && Object.hasOwn(row.values, field),
+    )
+  )
+    return [];
+  return update.changes.filter((change) => {
+    if (change.rowId !== rowId) return false;
+    if (change.scope === "discovery") {
+      // Published additions have a different snapshot identity. Keep their full
+      // history available rather than guessing a per-cell provenance mapping.
+      return (
+        view.snapshot.id !== update.publishedSnapshotId &&
+        change.kind === "addition" &&
+        change.proposalSnapshotId === view.snapshot.id &&
+        change.proposed !== null &&
+        typeof change.proposed === "object" &&
+        !Array.isArray(change.proposed) &&
+        Object.hasOwn(change.proposed, field)
+      );
+    }
+    return (
+      change.kind !== "addition" &&
+      change.field === field &&
+      (change.proposalSnapshotId === view.snapshot.id ||
+        view.snapshot.id === update.publishedSnapshotId)
+    );
+  });
+}
+
+export function CellUpdateProposal({
+  update,
+  change,
+  field,
+  busy,
+  onReview,
+  onSource,
+}: {
+  update: UpdateReview;
+  change: UpdateChange;
+  field?: string;
+  busy: boolean;
+  onReview(changeId: string, decision: "accept" | "keep"): void;
+  onSource(url: string): void;
+}) {
+  const published = Boolean(update.publishedSnapshotId);
+  const locked = busy || update.stale || published;
+  const decision = update.decisions[change.id];
+  const added = change.kind === "addition";
+  const addedValues =
+    added &&
+    change.proposed &&
+    typeof change.proposed === "object" &&
+    !Array.isArray(change.proposed)
+      ? change.proposed
+      : undefined;
+  const validAddition =
+    addedValues &&
+    Object.keys(addedValues).length > 0 &&
+    (!field || Object.hasOwn(addedValues, field));
+  const proposed =
+    field && added
+      ? addedValues && Object.hasOwn(addedValues, field)
+        ? addedValues[field]
+        : undefined
+      : change.proposed;
+  const hasEvidence = change.evidence.some(
+    (evidence) =>
+      safeSource(evidence.url) &&
+      (Boolean(evidence.quote?.trim()) ||
+        evidence.valueBasis === "source_url" ||
+        evidence.valueBasis === "source_title"),
+  );
+  const acceptDisabled =
+    locked ||
+    !change.canAccept ||
+    !hasEvidence ||
+    (added && !validAddition) ||
+    !["changed_claim", "addition"].includes(change.kind);
+  return (
+    <section className="cell-update-proposal" aria-label="Cell update proposal">
+      <div className="cell-update-heading">
+        <strong>{changeLabels[change.kind]}</strong>
+        {decision && (
+          <span className="update-decision">
+            <Check size={12} />
+            {decision === "accept" ? "Accepted" : "Kept"}
+          </span>
+        )}
+      </div>
+      <div className="review-values">
+        <div>
+          <small>Current</small>
+          <p>{added ? "Not in baseline" : displayValue(change.previous)}</p>
+        </div>
+        <div>
+          <small>Proposed</small>
+          <p>{displayValue(proposed)}</p>
+        </div>
+      </div>
+      <p className="review-note">{change.note}</p>
+      {added && (
+        <p className="review-note">
+          Accepting this proposal adds the entire entity when you publish.
+        </p>
+      )}
+      {change.kind === "contradiction" && (
+        <p className="review-note" role="status">
+          Conflicting evidence cannot replace the current value. Keep it or
+          resolve the evidence separately.
+        </p>
+      )}
+      {change.kind === "not_observed" && (
+        <p className="review-note" role="status">
+          Not observed during this check does not establish deletion or
+          cancellation.
+        </p>
+      )}
+      {published ? (
+        <p className="review-note" role="status">
+          Published review history. Decisions are fixed.
+        </p>
+      ) : (
+        update.stale && (
+          <p className="update-stale" role="status">
+            The baseline has newer corrections. Start a new check before
+            accepting this proposal.
+          </p>
+        )
+      )}
+      <details className="cell-update-evidence">
+        <summary>Evidence ({change.evidence.length})</summary>
+        <p className="update-observed">
+          Observed{" "}
+          <time dateTime={change.observedAt}>
+            {new Date(change.observedAt).toLocaleString()}
+          </time>
+        </p>
+        <div className="update-evidence">
+          {groupUpdateEvidence(change.evidence).map((group, index) => (
+            <div key={`${group.sourceVersionId}:${index}`}>
+              {group.quote && <blockquote>{group.quote}</blockquote>}
+              {group.links.map((evidence, linkIndex) => (
+                <div key={`${evidence.url}:${linkIndex}`}>
+                  {safeSource(evidence.url) && (
+                    <a
+                      href={evidence.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        onSource(evidence.url);
+                      }}
+                    >
+                      {new URL(evidence.url).hostname}
+                      <ExternalLink size={12} />
+                    </a>
+                  )}
+                  <small>
+                    <time dateTime={evidence.observedAt}>
+                      {new Date(evidence.observedAt).toLocaleString()}
+                    </time>{" "}
+                    ·{" "}
+                    {evidence.contentBasis === "excerpt" ||
+                    evidence.contentBasis === "search_excerpt"
+                      ? "Excerpt evidence"
+                      : "Retained source evidence"}
+                  </small>
+                </div>
+              ))}
+            </div>
+          ))}
+          {!change.evidence.length && (
+            <p className="review-note">
+              No returned source evidence for this proposal.
+            </p>
+          )}
+        </div>
+      </details>
+      <div className="review-actions">
+        <Button
+          variant={decision === "accept" ? "primary" : "default"}
+          aria-pressed={decision === "accept"}
+          disabled={acceptDisabled}
+          onClick={() => {
+            if (!acceptDisabled) onReview(change.id, "accept");
+          }}
+        >
+          Accept proposal
+        </Button>
+        <Button
+          variant={decision === "keep" ? "primary" : "default"}
+          aria-pressed={decision === "keep"}
+          disabled={locked}
+          onClick={() => {
+            if (!locked) onReview(change.id, "keep");
+          }}
+        >
+          Keep current
+        </Button>
+      </div>
+    </section>
+  );
+}
 export function manualUpdateAvailability(
   view: ResearchView,
   canAskAgent: boolean,

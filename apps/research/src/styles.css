@@ -1646,3 +1646,76 @@ label .input {
   padding: 4px 8px;
   font-size: 11px;
 }
+
+/* Proposals stay behind the existing selection controls and an explicit dialog. */
+.cell-proposals {
+  display: grid;
+  gap: 12px;
+}
+.cell-update-proposal {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.cell-update-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.cell-update-proposal .review-values {
+  margin: 12px 0;
+}
+.cell-update-evidence {
+  margin: 12px 0;
+  font-size: 12px;
+}
+.cell-update-evidence > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.cell-update-evidence .update-evidence {
+  margin-top: 12px;
+}
+.cell-proposal-options {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cell-proposal-options .button {
+  font-size: 11px;
+}
+.updates-dialog .update-review {
+  padding: 0;
+  border: 0;
+}
+.updates-dialog .update-review-heading > strong {
+  display: none;
+}
+.updates-dialog .update-change-list {
+  max-height: min(48vh, 360px);
+}
+.update-review-trigger {
+  position: relative;
+}
+
+.action-label-compact {
+  display: none;
+}
+@media (max-width: 400px) {
+  .action-bar .action-label-full {
+    display: none;
+  }
+  .action-bar .action-label-compact {
+    display: inline;
+  }
+  .action-bar .button {
+    flex: none;
+    white-space: nowrap;
+    padding-inline: 7px;
+  }
+  .action-bar .dismiss-selection {
+    padding-inline: 6px;
+  }
+}

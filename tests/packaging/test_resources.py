@@ -83,15 +83,19 @@ def test_materialization_does_not_follow_existing_symlinks(tmp_path, monkeypatch
     assert list(outside.iterdir()) == []
 
 
-def test_previous_deployed_widget_is_an_exact_materializable_public_template(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("filename", "size", "sha256"),
+    [
+        ("research-2511fe6d0adf4f69.html", 676875, "2511fe6d0adf4f693803ff5bd8e4760f3de0cae78593150ddb827c7d521c6475"),
+        ("research-9fa11ff58ed34fd6.html", 676864, "9fa11ff58ed34fd69608d172b43004a532aa9ef09ff9d481a3a883d39c28e462"),
+    ],
+)
+def test_previous_deployed_widget_is_an_exact_materializable_public_template(tmp_path, monkeypatch, filename, size, sha256):
     root = Path(__file__).resolve().parents[2]
-    name = "apps/research/ui-history/research-2511fe6d0adf4f69.html"
+    name = "apps/research/ui-history/" + filename
     body = (root / name).read_bytes()
-    assert len(body) == 676875
-    assert (
-        hashlib.sha256(body).hexdigest()
-        == "2511fe6d0adf4f693803ff5bd8e4760f3de0cae78593150ddb827c7d521c6475"
-    )
+    assert len(body) == size
+    assert hashlib.sha256(body).hexdigest() == sha256
     configuration = tomllib.loads((root / "pyproject.toml").read_text())
     assert name in configuration["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
     installed_archive(tmp_path, monkeypatch, archive_for({name: body}))

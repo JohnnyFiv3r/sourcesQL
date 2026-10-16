@@ -10,6 +10,8 @@ import {
   updateReviewReadiness,
   additionFields,
   groupUpdateEvidence,
+  CellUpdateProposal,
+  cellUpdateProposals,
 } from "../src/update-review-panel.js";
 import { snapshotSchema, type ResearchView } from "../src/schema.js";
 import type { UpdateChange } from "../server/updates.js";
@@ -384,4 +386,243 @@ test("repeated quote evidence is shown once while distinct provenance links surv
   assert.ok(html.includes("https://other.example.com/retained-source"));
   const anotherVersion = { ...base, sourceVersionId: "source_new_version" };
   assert.equal(groupUpdateEvidence([base, anotherVersion]).length, 2);
+});
+
+function proposalView(changes = [change()]) {
+  const current = view();
+  current.snapshot.id = "proposal";
+  current.update = review(changes);
+  return current;
+}
+function renderCell(
+  update = review(),
+  entry = update.changes[0],
+  field?: string,
+  busy = false,
+) {
+  return renderToStaticMarkup(
+    createElement(CellUpdateProposal, {
+      update,
+      change: entry,
+      field,
+      busy,
+      onReview() {},
+      onSource() {},
+    }),
+  );
+}
+function cellButton(html: string, label: string) {
+  const button = html.match(new RegExp(`<button[^>]*>${label}</button>`))?.[0];
+  assert.ok(button, label);
+  return button;
+}
+
+test("cell proposals require the exact saved proposal, canonical row and declared field", () => {
+  const entry = change(),
+    current = proposalView([entry]);
+  assert.equal(cellUpdateProposals(current, "record-1", "issuer")[0], entry);
+  current.snapshot.rows.reverse();
+  assert.equal(cellUpdateProposals(current, "record-1", "issuer")[0], entry);
+  assert.deepEqual(cellUpdateProposals(current, "1", "issuer"), []);
+  assert.deepEqual(cellUpdateProposals(current, "record-1", "missing"), []);
+  assert.deepEqual(cellUpdateProposals(current, "record-1", "closes_at"), []);
+  current.update!.changes = [change({ field: undefined })];
+  assert.deepEqual(cellUpdateProposals(current, "record-1", "issuer"), []);
+  current.update!.changes = [
+    change({ proposalSnapshotId: "another_proposal" }),
+  ];
+  assert.deepEqual(cellUpdateProposals(current, "record-1", "issuer"), []);
+  current.snapshot.id = current.update!.parentSnapshotId;
+  current.update!.changes = [entry];
+  assert.deepEqual(
+    cellUpdateProposals(current, "record-1", "issuer"),
+    [],
+    "A shared baseline row ID does not attach a different proposal table",
+  );
+});
+
+test("cell additions use explicit proposal identity and own fields without mapping published additions by position", () => {
+  const addition = change({
+    id: "addition_a",
+    kind: "addition",
+    scope: "discovery",
+    field: undefined,
+    proposed: { issuer: "New entity", closes_at: null },
+  });
+  const current = proposalView([addition]);
+  assert.equal(cellUpdateProposals(current, "record-1", "issuer")[0], addition);
+  assert.equal(
+    cellUpdateProposals(current, "record-1", "closes_at")[0],
+    addition,
+  );
+  assert.deepEqual(cellUpdateProposals(current, "record-1", "disposition"), []);
+  current.update!.changes = [change({ ...addition, proposed: [] })];
+  assert.deepEqual(cellUpdateProposals(current, "record-1", "issuer"), []);
+  current.update!.changes = [change(), addition];
+  current.update!.publishedSnapshotId = "published_successor";
+  current.update!.decisions[addition.id] = "accept";
+  current.snapshot.id = "published_successor";
+  assert.deepEqual(
+    cellUpdateProposals(current, "record-1", "issuer"),
+    [current.update!.changes[0]],
+    "Published existing findings retain canonical row IDs; additions require separate history",
+  );
+  addition.proposalSnapshotId = "published_successor";
+  assert.deepEqual(
+    cellUpdateProposals(current, "record-1", "issuer"),
+    [current.update!.changes[0]],
+    "Published additions stay in full history even if snapshot identifiers overlap",
+  );
+});
+
+test("compact cell review keeps typed current and proposed values with evidence collapsed", () => {
+  const entry = change({ previous: null, proposed: "9007199254740993" });
+  const html = renderCell(review([entry]), entry);
+  for (const text of [
+    "Current",
+    "Proposed",
+    "Not stated",
+    "9007199254740993",
+    "Accept proposal",
+    "Keep current",
+    "2026-10-15T10:00:00Z",
+    "Exact retained quote",
+  ])
+    assert.ok(html.includes(text), text);
+  assert.match(html, /<details[^>]*class="cell-update-evidence"[^>]*>/);
+  assert.ok(!/<details[^>]*\bopen(?:=|\s|>)/.test(html));
+  assert.ok(!/<input|<textarea|contenteditable/i.test(html));
+  assert.ok(!cellButton(html, "Accept proposal").includes("disabled"));
+  const booleans = renderCell(
+    review(),
+    change({ previous: false, proposed: 0 }),
+  );
+  assert.ok(booleans.includes(">false</p>") && booleans.includes(">0</p>"));
+  const addition = change({
+    kind: "addition",
+    scope: "discovery",
+    field: undefined,
+    proposed: { issuer: "New entity", capacity: "500 MW" },
+  });
+  const added = renderCell(review([addition]), addition, "capacity");
+  assert.ok(added.includes("500 MW"));
+  assert.ok(!added.includes("&quot;issuer&quot;"));
+  assert.ok(added.includes("adds the entire entity when you publish"));
+  const invalidAdditions: UpdateChange["proposed"][] = [
+    null,
+    [],
+    {},
+    { issuer: "Entity" },
+  ];
+  for (const proposed of invalidAdditions) {
+    const invalid = change({ kind: "addition", scope: "discovery", proposed });
+    assert.ok(
+      cellButton(
+        renderCell(review([invalid]), invalid, "capacity"),
+        "Accept proposal",
+      ).includes("disabled"),
+    );
+  }
+});
+
+test("cell review decisions stay adjustable while stale, unsupported and published acceptance stays disabled", () => {
+  const entry = change(),
+    update = review([entry]);
+  update.decisions[entry.id] = "accept";
+  let html = renderCell(update, entry);
+  assert.ok(
+    cellButton(html, "Accept proposal").includes('aria-pressed="true"'),
+  );
+  assert.ok(!cellButton(html, "Keep current").includes("disabled"));
+  update.decisions[entry.id] = "keep";
+  html = renderCell(update, entry);
+  assert.ok(cellButton(html, "Keep current").includes('aria-pressed="true"'));
+  assert.ok(!cellButton(html, "Accept proposal").includes("disabled"));
+  for (const state of [
+    { ...update, stale: true },
+    { ...update, publishedSnapshotId: "successor" },
+  ])
+    for (const label of ["Accept proposal", "Keep current"])
+      assert.ok(
+        cellButton(renderCell(state, entry), label).includes("disabled"),
+      );
+  for (const altered of [
+    change({ canAccept: false }),
+    change({ evidence: [] }),
+    change({ kind: "contradiction", canAccept: true }),
+    change({ kind: "not_observed", canAccept: true }),
+  ]) {
+    html = renderCell(review([altered]), altered);
+    assert.ok(cellButton(html, "Accept proposal").includes("disabled"));
+    assert.ok(!cellButton(html, "Keep current").includes("disabled"));
+  }
+  html = renderCell(
+    { ...update, stale: true, publishedSnapshotId: "successor" },
+    entry,
+  );
+  assert.ok(html.includes("Published review history. Decisions are fixed."));
+  assert.ok(!html.includes("baseline has newer corrections"));
+});
+
+test("cell findings explain contradictions and absence, and unsafe links cannot enable acceptance", () => {
+  assert.ok(
+    renderCell(
+      review(),
+      change({ kind: "contradiction", canAccept: false }),
+    ).includes("Conflicting evidence cannot replace the current value"),
+  );
+  assert.ok(
+    renderCell(
+      review(),
+      change({ kind: "not_observed", canAccept: false }),
+    ).includes("does not establish deletion or cancellation"),
+  );
+  const entry = change();
+  entry.evidence[0].url = "javascript:alert(1)";
+  const html = renderCell(review([entry]), entry);
+  assert.ok(!html.includes("javascript:"));
+  assert.ok(cellButton(html, "Accept proposal").includes("disabled"));
+});
+
+test("cell actions send only the explicit review choice and cannot apply a disabled proposal", () => {
+  const entry = change(),
+    update = review([entry]),
+    decisions: [string, string][] = [];
+  type Node = {
+    props?: { children?: unknown; onClick?: () => void; disabled?: boolean };
+  };
+  const actions = (node: unknown): Node[] => {
+    if (Array.isArray(node)) return node.flatMap(actions);
+    if (!node || typeof node !== "object") return [];
+    const value = node as Node;
+    return value.props?.onClick && typeof value.props.children === "string"
+      ? [value]
+      : actions(value.props?.children);
+  };
+  const renderActions = (busy = false) =>
+    actions(
+      CellUpdateProposal({
+        update,
+        change: entry,
+        busy,
+        onReview: (id, decision) => decisions.push([id, decision]),
+        onSource() {},
+      }),
+    );
+  const [accept, keep] = renderActions();
+  accept.props!.onClick!();
+  update.decisions[entry.id] = "accept";
+  keep.props!.onClick!();
+  assert.deepEqual(decisions, [
+    [entry.id, "accept"],
+    [entry.id, "keep"],
+  ]);
+  update.stale = true;
+  for (const action of renderActions()) action.props!.onClick!();
+  update.stale = false;
+  update.publishedSnapshotId = "successor";
+  for (const action of renderActions()) action.props!.onClick!();
+  update.publishedSnapshotId = undefined;
+  for (const action of renderActions(true)) action.props!.onClick!();
+  assert.equal(decisions.length, 2);
 });

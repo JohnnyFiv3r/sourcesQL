@@ -321,11 +321,11 @@ test("completed job polling authorizes the stored result before exposing its han
     assert.equal(ready.isError, undefined);
     assert.match(
       JSON.stringify(ready.content),
-      /Presentation is the final step/,
+      /Query execution completed and the result is stored/,
     );
     assert.match(
       JSON.stringify(ready.content),
-      /not after each query, poll, import or transformation/,
+      /This response does not render a component/,
     );
     assert.doesNotMatch(
       JSON.stringify(ready.content),

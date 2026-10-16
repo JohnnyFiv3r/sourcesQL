@@ -28,6 +28,7 @@ import {
   ArrowLeft,
   LoaderCircle,
   ListTree,
+  ListChecks,
 } from "lucide-react";
 import { Button, Input, Textarea, GrowingTextarea, Select } from "./ui.js";
 import {
@@ -53,6 +54,9 @@ import { HostedViewReconciliation } from "./view-reconciliation.js";
 import { readNavigation } from "./navigation-read.js";
 import {
   UpdateReviewPanel,
+  CellUpdateProposal,
+  cellUpdateProposals,
+  updateReviewReadiness,
   manualUpdateAvailability,
   manualUpdateArguments,
 } from "./update-review-panel.js";
@@ -139,6 +143,9 @@ function Workspace() {
   const importDialog = useRef<HTMLDialogElement>(null);
   const sourceDialog = useRef<HTMLDialogElement>(null);
   const updateDialog = useRef<HTMLDialogElement>(null);
+  const proposalReviewDialog = useRef<HTMLDialogElement>(null);
+  const [proposalsOpen, setProposalsOpen] = useState(false);
+  const [manualCorrection, setManualCorrection] = useState(false);
   const checkpointDialog = useRef<HTMLDialogElement>(null);
   const [updateQuestion, setUpdateQuestion] = useState("");
   const [updateExisting, setUpdateExisting] = useState(true);
@@ -214,7 +221,7 @@ function Workspace() {
   const [connectionIssue, setConnectionIssue] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [dismissedRequestStatus, setDismissedRequestStatus] = useState("");
-  cellEditActive.current = tab === "correct" || reviewOpen;
+  cellEditActive.current = tab === "correct" || reviewOpen || proposalsOpen;
 
   function reportError(cause: unknown) {
     if (missingHostTool(cause)) {
@@ -308,6 +315,9 @@ function Workspace() {
       setSort(saved?.sort);
       setTab("actions");
       setReviewOpen(false);
+      setManualCorrection(false);
+      proposalReviewDialog.current?.close();
+      setProposalsOpen(false);
       setError("");
       setNotice("");
       scrollToRestore.current = {
@@ -1107,9 +1117,7 @@ function Workspace() {
         (viewport.querySelector<HTMLElement>(".research-status")
           ?.offsetHeight ?? 0) -
         (viewport.querySelector<HTMLElement>(".refresh-context")
-          ?.offsetHeight ?? 0) -
-        (viewport.querySelector<HTMLElement>(".update-review")?.offsetHeight ??
-          0);
+          ?.offsetHeight ?? 0);
       const rowHeight = firstRow.offsetHeight;
       const size = Math.max(
         2,
@@ -1263,6 +1271,7 @@ function Workspace() {
         !importDialog.current?.open &&
         !sourceDialog.current?.open &&
         !updateDialog.current?.open &&
+        !proposalReviewDialog.current?.open &&
         !checkpointDialog.current?.open &&
         !treeOpen
       ) {
@@ -1288,6 +1297,7 @@ function Workspace() {
     setField(key);
     setTab("actions");
     setReviewOpen(false);
+    setManualCorrection(false);
     setError("");
     setNotice("");
   }
@@ -1416,6 +1426,17 @@ function Workspace() {
   const refreshChange = view.refresh?.changes.find(
     (c) => c.rowId === selectedId && c.field === field,
   );
+  const cellProposals = cellUpdateProposals(view, selectedId, field);
+  const updateReadiness = view.update
+    ? updateReviewReadiness(view.update)
+    : undefined;
+  const showProposalReview = () => {
+    reconciliation.current?.invalidate();
+    setHeaderPanel(null);
+    if (menu.current) menu.current.open = false;
+    setProposalsOpen(true);
+    proposalReviewDialog.current?.showModal();
+  };
   const updateAvailability = manualUpdateAvailability(view, canAskAgent);
   const refreshLabel = selectedId
     ? field
@@ -1432,7 +1453,12 @@ function Workspace() {
     year: "numeric",
   });
   const feedback = (error || notice) &&
-    !(error && tab === "correct" && row) && (
+    !(
+      error &&
+      tab === "correct" &&
+      row &&
+      (!cellProposals.length || manualCorrection)
+    ) && (
       <div
         className={`feedback ${error ? "error" : ""}`}
         role={error ? "alert" : "status"}
@@ -1545,6 +1571,32 @@ function Workspace() {
             )}
           </div>
           <div className="header-tools">
+            {view.update && (
+              <Button
+                variant="ghost"
+                className={`header-icon update-review-trigger ${updateReadiness?.unreviewed ? "is-active" : ""}`}
+                aria-label={
+                  view.update.publishedSnapshotId
+                    ? "View update history"
+                    : "Review updates"
+                }
+                title={
+                  view.update.publishedSnapshotId
+                    ? "View update history"
+                    : `Review updates${updateReadiness?.unreviewed ? ` (${updateReadiness.unreviewed})` : ""}`
+                }
+                aria-haspopup="dialog"
+                aria-expanded={proposalsOpen}
+                aria-controls="proposal-review-dialog"
+                onClick={showProposalReview}
+              >
+                <ListChecks />
+                {Boolean(updateReadiness?.unreviewed) &&
+                  !view.update.publishedSnapshotId && (
+                    <span className="active-dot" />
+                  )}
+              </Button>
+            )}
             <Button
               variant="ghost"
               className={`header-icon ${search ? "is-active" : ""}`}
@@ -1854,19 +1906,6 @@ function Workspace() {
                 )}
               </div>
             )}
-            {view.update && (
-              <UpdateReviewPanel
-                update={view.update}
-                columns={columns}
-                busy={busy || connectionIssue}
-                onReview={(changeId, decision) =>
-                  void perform(() => reviewManualUpdate(changeId, decision))
-                }
-                onPublish={() => void perform(publishManualUpdate)}
-                onSource={(url) => void visitSource(url)}
-                onOpenPublished={(snapshotId) => navigate(snapshotId)}
-              />
-            )}
             {view.refresh && (
               <div className="refresh-context">
                 <span>
@@ -1978,6 +2017,16 @@ function Workspace() {
                           (change) =>
                             change.rowId === r.id && change.field === c.key,
                         );
+                        const proposals = cellUpdateProposals(
+                          view,
+                          r.id,
+                          c.key,
+                        );
+                        const pendingProposal =
+                          !view.update?.publishedSnapshotId &&
+                          proposals.some(
+                            (proposal) => !view.update?.decisions[proposal.id],
+                          );
                         const rawValue = effectiveValue(view, r, c.key);
                         const missing =
                           rawValue == null ||
@@ -2013,7 +2062,7 @@ function Workspace() {
                             <button
                               className={`cell-button ${markerCount ? "has-indicators" : ""} ${markerCount === 2 ? "has-two-indicators" : ""}`}
                               data-cell={`${i}-${ci}`}
-                              aria-label={`${c.label}: ${value}. Result ${pageStart + i + 1}${amended ? (amended.sourceSnapshotId ? ". Updated" : ". Edited") : ""}${cellResearch.length ? `. ${researchLabel} available` : ""}${change ? `. ${change.decision ? "Reviewed" : change.status}` : ""}`}
+                              aria-label={`${c.label}: ${value}. Result ${pageStart + i + 1}${amended ? (amended.sourceSnapshotId ? ". Updated" : ". Edited") : ""}${cellResearch.length ? `. ${researchLabel} available` : ""}${change ? `. ${change.decision ? "Reviewed" : change.status}` : ""}${pendingProposal ? ". Update proposal available" : ""}`}
                               aria-controls="cell-actions"
                               aria-pressed={row?.id === r.id && field === c.key}
                               disabled={busy}
@@ -2064,6 +2113,13 @@ function Workspace() {
                                   title={
                                     change.decision ? "Reviewed" : change.status
                                   }
+                                  aria-hidden="true"
+                                />
+                              )}
+                              {pendingProposal && !change && (
+                                <span
+                                  className="change-dot"
+                                  title="Update proposal available"
                                   aria-hidden="true"
                                 />
                               )}
@@ -2251,7 +2307,7 @@ function Workspace() {
                 <div className="action-panel-heading">
                   <h2 id="action-title">
                     {tab === "correct"
-                      ? `Correct ${fieldLabel}`
+                      ? `${cellProposals.length && !manualCorrection ? "Review" : "Correct"} ${fieldLabel}`
                       : tab === "research"
                         ? "Research for this selection"
                         : "What would you like to know?"}
@@ -2309,81 +2365,118 @@ function Workspace() {
                     </span>
                   </div>
                 )}
-                {tab === "correct" && (
-                  <form
-                    className="detail-form correction-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void perform(saveCorrection);
-                    }}
-                  >
-                    {valueKind === "boolean" ? (
-                      <Select
-                        autoFocus
-                        aria-label={fieldLabel}
-                        value={draft}
-                        disabled={busy}
-                        onChange={(e) => {
-                          setDraft(e.target.value);
-                          setError("");
-                        }}
-                      >
-                        <option value="">Not stated</option>
-                        <option value="true">True</option>
-                        <option value="false">False</option>
-                      </Select>
-                    ) : (
-                      <GrowingTextarea
-                        autoFocus
-                        aria-label={fieldLabel}
-                        value={draft}
-                        maxLength={8000}
-                        disabled={busy}
-                        inputMode={
-                          valueKind === "number" ? "decimal" : undefined
-                        }
-                        placeholder={
-                          valueKind === "date"
-                            ? "YYYY-MM-DD"
-                            : valueKind === "datetime"
-                              ? "YYYY-MM-DD HH:mm:ss"
-                              : "Not stated"
-                        }
-                        aria-invalid={Boolean(correction.error || error)}
-                        aria-describedby={
-                          correction.error || error
-                            ? "correction-error"
-                            : undefined
-                        }
-                        onChange={(e) => {
-                          setDraft(e.target.value);
-                          setError("");
-                        }}
-                      />
-                    )}
-                    {(correction.error || error) && (
-                      <p
-                        className="field-error"
-                        id="correction-error"
-                        role="alert"
-                      >
-                        {correction.error || error}
-                      </p>
-                    )}
-                    <Button
-                      variant="primary"
-                      type="submit"
-                      className="save-correction"
-                      disabled={
-                        busy ||
-                        Boolean(correction.error) ||
-                        Object.is(correction.value, currentValue)
-                      }
+                {tab === "correct" &&
+                  cellProposals.length > 0 &&
+                  !manualCorrection &&
+                  view.update && (
+                    <div className="cell-proposals">
+                      {cellProposals.map((change) => (
+                        <CellUpdateProposal
+                          key={change.id}
+                          update={view.update!}
+                          change={change}
+                          field={field}
+                          busy={busy || connectionIssue}
+                          onReview={(changeId, decision) =>
+                            void perform(() =>
+                              reviewManualUpdate(changeId, decision),
+                            )
+                          }
+                          onSource={(url) => void visitSource(url)}
+                        />
+                      ))}
+                      <div className="cell-proposal-options">
+                        <Button variant="ghost" onClick={showProposalReview}>
+                          Review all updates
+                        </Button>
+                        {valueKind !== "structured" && (
+                          <Button
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => setManualCorrection(true)}
+                          >
+                            Enter a different value
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                {tab === "correct" &&
+                  (!cellProposals.length || manualCorrection) && (
+                    <form
+                      className="detail-form correction-form"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void perform(saveCorrection);
+                      }}
                     >
-                      {busy ? "Saving…" : "Save"}
-                    </Button>
-                  </form>
-                )}
+                      {valueKind === "boolean" ? (
+                        <Select
+                          autoFocus
+                          aria-label={fieldLabel}
+                          value={draft}
+                          disabled={busy}
+                          onChange={(e) => {
+                            setDraft(e.target.value);
+                            setError("");
+                          }}
+                        >
+                          <option value="">Not stated</option>
+                          <option value="true">True</option>
+                          <option value="false">False</option>
+                        </Select>
+                      ) : (
+                        <GrowingTextarea
+                          autoFocus
+                          aria-label={fieldLabel}
+                          value={draft}
+                          maxLength={8000}
+                          disabled={busy}
+                          inputMode={
+                            valueKind === "number" ? "decimal" : undefined
+                          }
+                          placeholder={
+                            valueKind === "date"
+                              ? "YYYY-MM-DD"
+                              : valueKind === "datetime"
+                                ? "YYYY-MM-DD HH:mm:ss"
+                                : "Not stated"
+                          }
+                          aria-invalid={Boolean(correction.error || error)}
+                          aria-describedby={
+                            correction.error || error
+                              ? "correction-error"
+                              : undefined
+                          }
+                          onChange={(e) => {
+                            setDraft(e.target.value);
+                            setError("");
+                          }}
+                        />
+                      )}
+                      {(correction.error || error) && (
+                        <p
+                          className="field-error"
+                          id="correction-error"
+                          role="alert"
+                        >
+                          {correction.error || error}
+                        </p>
+                      )}
+                      <Button
+                        variant="primary"
+                        type="submit"
+                        className="save-correction"
+                        disabled={
+                          busy ||
+                          Boolean(correction.error) ||
+                          Object.is(correction.value, currentValue)
+                        }
+                      >
+                        {busy ? "Saving…" : "Save"}
+                      </Button>
+                    </form>
+                  )}
                 {tab === "expand" && (
                   <div className="detail-form">
                     <GrowingTextarea
@@ -2428,6 +2521,11 @@ function Workspace() {
                 variant={
                   tab === "expand" || tab === "research" ? "primary" : "ghost"
                 }
+                aria-label={
+                  selectionResearch.length
+                    ? researchActionLabel
+                    : "Expand search"
+                }
                 aria-expanded={
                   selectionResearch.length === 1
                     ? undefined
@@ -2453,30 +2551,44 @@ function Workspace() {
                 }}
               >
                 <Expand />
-                {selectionResearch.length
-                  ? researchActionLabel
-                  : "Expand search"}
+                <span className="action-label-full" aria-hidden="true">
+                  {selectionResearch.length
+                    ? researchActionLabel
+                    : "Expand search"}
+                </span>
+                <span className="action-label-compact" aria-hidden="true">
+                  {selectionResearch.length ? "Research" : "Expand"}
+                </span>
               </Button>
               <Button
                 variant={tab === "correct" ? "primary" : "ghost"}
+                aria-label={
+                  cellProposals.length
+                    ? "Review proposal"
+                    : view.refresh
+                      ? "Review"
+                      : "Correct"
+                }
                 aria-expanded={tab === "correct"}
                 aria-controls="cell-action-panel"
                 disabled={
                   busy ||
                   wholeRow ||
-                  valueKind === "structured" ||
-                  (Boolean(view.refresh) && !refreshChange)
+                  (valueKind === "structured" && !cellProposals.length) ||
+                  (Boolean(view.refresh) &&
+                    !refreshChange &&
+                    !cellProposals.length)
                 }
                 title={
                   wholeRow
                     ? "Select a cell to review or correct"
-                    : view.refresh
+                    : view.refresh || cellProposals.length
                       ? "Review update"
                       : "Correct"
                 }
                 onClick={(e) => {
                   actionTrigger.current = e.currentTarget;
-                  if (view.refresh) {
+                  if (view.refresh && !cellProposals.length) {
                     reconciliation.current?.invalidate();
                     setReviewOpen(!reviewOpen);
                     setTab("actions");
@@ -2486,25 +2598,45 @@ function Workspace() {
                   }
                 }}
               >
-                {view.refresh ? <Check /> : <PencilLine />}
-                {view.refresh ? "Review" : "Correct"}
+                {view.refresh || cellProposals.length ? (
+                  <Check />
+                ) : (
+                  <PencilLine />
+                )}
+                <span className="action-label-full" aria-hidden="true">
+                  {cellProposals.length
+                    ? "Review proposal"
+                    : view.refresh
+                      ? "Review"
+                      : "Correct"}
+                </span>
+                <span className="action-label-compact" aria-hidden="true">
+                  {cellProposals.length || view.refresh ? "Review" : "Correct"}
+                </span>
               </Button>
               {sources.length > 1 ? (
                 <Button
                   variant="ghost"
                   className="source-action"
+                  aria-label="Visit source"
                   disabled={busy}
                   onClick={() => {
                     setError("");
                     sourceDialog.current?.showModal();
                   }}
                 >
-                  Visit source
+                  <span className="action-label-full" aria-hidden="true">
+                    Visit source
+                  </span>
+                  <span className="action-label-compact" aria-hidden="true">
+                    Source
+                  </span>
                   <ExternalLink />
                 </Button>
               ) : (
                 <a
                   className="button ghost source-action"
+                  aria-label="Visit source"
                   href={sources[0]?.url}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -2514,7 +2646,12 @@ function Workspace() {
                     if (!busy && sources[0]) void visitSource(sources[0].url);
                   }}
                 >
-                  Visit source
+                  <span className="action-label-full" aria-hidden="true">
+                    Visit source
+                  </span>
+                  <span className="action-label-compact" aria-hidden="true">
+                    Source
+                  </span>
                   <ExternalLink size={14} />
                 </a>
               )}
@@ -2531,6 +2668,41 @@ function Workspace() {
           </div>
         )}
       </div>
+      <dialog
+        ref={proposalReviewDialog}
+        id="proposal-review-dialog"
+        className="continuation-dialog updates-dialog"
+        aria-labelledby="proposal-review-title"
+        onClose={() => setProposalsOpen(false)}
+      >
+        <div className="dialog-heading">
+          <h2 id="proposal-review-title">
+            {view.update?.publishedSnapshotId
+              ? "Update history"
+              : "Review updates"}
+          </h2>
+          <Button
+            variant="ghost"
+            aria-label="Close update review"
+            onClick={() => proposalReviewDialog.current?.close()}
+          >
+            <X />
+          </Button>
+        </div>
+        {view.update && proposalsOpen && (
+          <UpdateReviewPanel
+            update={view.update}
+            columns={columns}
+            busy={busy || connectionIssue}
+            onReview={(changeId, decision) =>
+              void perform(() => reviewManualUpdate(changeId, decision))
+            }
+            onPublish={() => void perform(publishManualUpdate)}
+            onSource={(url) => void visitSource(url)}
+            onOpenPublished={(snapshotId) => navigate(snapshotId)}
+          />
+        )}
+      </dialog>
       <dialog
         ref={updateDialog}
         className="continuation-dialog"
