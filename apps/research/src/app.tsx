@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { version } from "../package.json";
 import { flushSync } from "react-dom";
 import {
   App,
@@ -77,7 +78,7 @@ import {
 
 const MAX_PAGE_SIZE = 25;
 const app = new App(
-  { name: "sourcesQL research", version: "0.2.2" },
+  { name: "sourcesQL research", version },
   {},
   { autoResize: false },
 );
@@ -1528,7 +1529,10 @@ function Workspace() {
   const showProposalReview = () => {
     reconciliation.current?.invalidate();
     setHeaderPanel(null);
-    if (menu.current) menu.current.open = false;
+    if (menu.current?.open) {
+      menu.current.open = false;
+      menu.current.querySelector("summary")?.focus();
+    }
     setProposalsOpen(true);
     proposalReviewDialog.current?.showModal();
   };
@@ -1666,32 +1670,6 @@ function Workspace() {
             )}
           </div>
           <div className="header-tools">
-            {view.update && (
-              <Button
-                variant="ghost"
-                className={`header-icon update-review-trigger ${updateReadiness?.unreviewed ? "is-active" : ""}`}
-                aria-label={
-                  view.update.publishedSnapshotId
-                    ? "View update history"
-                    : "Review updates"
-                }
-                title={
-                  view.update.publishedSnapshotId
-                    ? "View update history"
-                    : `Review updates${updateReadiness?.unreviewed ? ` (${updateReadiness.unreviewed})` : ""}`
-                }
-                aria-haspopup="dialog"
-                aria-expanded={proposalsOpen}
-                aria-controls="proposal-review-dialog"
-                onClick={showProposalReview}
-              >
-                <ListChecks />
-                {Boolean(updateReadiness?.unreviewed) &&
-                  !view.update.publishedSnapshotId && (
-                    <span className="active-dot" />
-                  )}
-              </Button>
-            )}
             <Button
               variant="ghost"
               className={`header-icon ${search ? "is-active" : ""}`}
@@ -1785,22 +1763,6 @@ function Workspace() {
                 ))}
               </div>
             )}
-            <Button
-              variant="ghost"
-              className="header-icon"
-              aria-label={refreshLabel}
-              title={
-                canAskAgent
-                  ? refreshLabel
-                  : "Open in a host with agent messaging to refresh"
-              }
-              disabled={
-                !canAskAgent || busy || pending.length > 0 || connectionIssue
-              }
-              onClick={() => void perform(() => askAgent("refresh"))}
-            >
-              <RefreshCw />
-            </Button>
             <details className="more-menu" ref={menu}>
               <summary
                 aria-label="Table options"
@@ -1810,6 +1772,46 @@ function Workspace() {
                 <MoreHorizontal size={20} />
               </summary>
               <div className="menu-items">
+                <Button
+                  variant="ghost"
+                  disabled={
+                    !canAskAgent ||
+                    busy ||
+                    pending.length > 0 ||
+                    connectionIssue
+                  }
+                  title={
+                    canAskAgent
+                      ? refreshLabel
+                      : "Open in a host with agent messaging to refresh"
+                  }
+                  onClick={() => {
+                    if (menu.current) menu.current.open = false;
+                    void perform(() => askAgent("refresh"));
+                  }}
+                >
+                  <RefreshCw />
+                  {refreshLabel}
+                </Button>
+                {view.update && (
+                  <Button
+                    variant="ghost"
+                    aria-label={
+                      view.update.publishedSnapshotId
+                        ? "View update history"
+                        : "Review updates"
+                    }
+                    aria-haspopup="dialog"
+                    aria-expanded={proposalsOpen}
+                    aria-controls="proposal-review-dialog"
+                    onClick={showProposalReview}
+                  >
+                    <ListChecks />
+                    {view.update.publishedSnapshotId
+                      ? "View update history"
+                      : `Review updates${updateReadiness?.unreviewed ? ` (${updateReadiness.unreviewed})` : ""}`}
+                  </Button>
+                )}
                 <span
                   className="menu-option-hint"
                   title={updateAvailability.reason}

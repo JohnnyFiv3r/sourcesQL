@@ -434,7 +434,9 @@ h1 {
   right: 0;
   top: 38px;
   z-index: 3;
-  width: 185px;
+  width: min(230px, calc(100vw - 24px));
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
   border: 1px solid var(--border);
   background: var(--background);
   padding: 5px;
@@ -1696,10 +1698,6 @@ label .input {
 .updates-dialog .update-change-list {
   max-height: min(48vh, 360px);
 }
-.update-review-trigger {
-  position: relative;
-}
-
 .action-label-compact {
   display: none;
 }

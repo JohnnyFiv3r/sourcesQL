@@ -638,6 +638,10 @@ const historicalBundles = [
     sha256: "2511fe6d0adf4f693803ff5bd8e4760f3de0cae78593150ddb827c7d521c6475",
   },
   {
+    filename: "research-614374db1156bf54.html",
+    sha256: "614374db1156bf54787825ad91714412e33337252b069113374b93a7e9313d81",
+  },
+  {
     filename: "research-a19abdd86f97fd03.html",
     sha256: "a19abdd86f97fd039aebb8d08162ef060f17adeef2443b14c7dac6e13d14ebf8",
   },
