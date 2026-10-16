@@ -26,6 +26,8 @@ import {
   type HostedSearchPolicy,
 } from "./hosted-search.js";
 
+import type { ResearchCapacity } from "../src/job-view.js";
+
 type Row = Record<string, any>;
 export interface SqlClient {
   connect(): Promise<void>;
@@ -488,6 +490,83 @@ export class MotherDuckEngine implements ResearchEngine {
         : {}),
     };
   }
+  private async queuedEnvelope(job: Row): Promise<Row> {
+    const result = this.envelope(job);
+    if (job.status !== "queued" || job.dispatch_intent_at || job.flight_run_id)
+      return result;
+    const day = new Date().toISOString().slice(0, 10);
+    const resets_at = new Date(
+      Date.parse(`${day}T00:00:00Z`) + 86400000,
+    ).toISOString();
+    const capacity = await this.transaction(
+      false,
+      async (client): Promise<ResearchCapacity | undefined> => {
+        const flight = (
+          await client.query(
+            `SELECT CAST(reserved_seconds AS VARCHAR) AS seconds FROM ${this.table("flight_allowances")} WHERE day=$1`,
+            [day],
+          )
+        ).rows[0];
+        const used = Number(flight?.seconds ?? 0);
+        if (used + this.maxRuntime > this.dailySeconds)
+          return {
+            resource: "flight_compute",
+            reason: "operator_limit",
+            period: "day",
+            allowance: "configured",
+            resets_at,
+            limit: this.dailySeconds,
+            used,
+            unit: "seconds",
+          };
+        const policy = this.options.exa ?? this.options.search;
+        if (job.provider_policy_sha256 && policy) {
+          const request = JSON.parse(job.request_json);
+          const cost = Number(request.budgets?.max_cost_microusd);
+          const provider = (
+            await client.query(
+              `SELECT CAST(reserved_microusd AS VARCHAR) AS used FROM ${this.table("provider_allowances")} WHERE day=$1`,
+              [day],
+            )
+          ).rows[0];
+          const providerUsed = Number(provider?.used ?? 0);
+          if (
+            Number.isSafeInteger(cost) &&
+            providerUsed + cost > policy.dailyCostMicrousd
+          )
+            return {
+              resource: "search_model_budget",
+              reason: "operator_limit",
+              period: "day",
+              allowance: "configured",
+              resets_at,
+              limit: policy.dailyCostMicrousd,
+              used: providerUsed,
+              unit: "microusd",
+            };
+        }
+        return undefined;
+      },
+    );
+    return {
+      ...result,
+      can_resume: !!this.options.allowSubmission && !capacity,
+      ...(capacity
+        ? {
+            capacity,
+            dispatch_blocked: {
+              code: "budget_exhausted",
+              message:
+                capacity.resource === "flight_compute"
+                  ? "Daily Flight execution reserve is exhausted"
+                  : "Daily provider reserve is exhausted",
+              capacity,
+            },
+          }
+        : {}),
+    };
+  }
+
   private request(
     params: Row,
     operation: string,
@@ -716,9 +795,12 @@ export class MotherDuckEngine implements ResearchEngine {
       );
     if (job.status === "completed")
       await this.readResult({ result_id: job.result_id, limit: 0 });
+    const envelope = await this.queuedEnvelope(job);
     return {
-      ...this.envelope(job),
-      ...(dispatchBlocked ? { dispatch_blocked: dispatchBlocked } : {}),
+      ...envelope,
+      ...(dispatchBlocked && !envelope.dispatch_blocked
+        ? { dispatch_blocked: dispatchBlocked }
+        : {}),
     };
   }
   async startJob(id: string): Promise<Row> {
@@ -1059,7 +1141,7 @@ export class MotherDuckEngine implements ResearchEngine {
     }
     if (job.status === "completed")
       await this.readResult({ result_id: job.result_id, limit: 0 });
-    return this.envelope(job);
+    return this.queuedEnvelope(job);
   }
   async cancelJob(id: string): Promise<Row> {
     id = identity(id);

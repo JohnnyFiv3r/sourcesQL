@@ -36,6 +36,22 @@ from canonical engine data after immutable-value validation; caller-supplied
 imports retain full evidence checks. This does not establish population coverage,
 current status beyond the cited dates, or general research-quality parity.
 
+Capacity-blocked hosted jobs now have an app view through
+`open_research({job_id})`. It preserves the saved request, displays the configured
+resource reservation and UTC-day reset in local time, and offers read-only
+status checks plus explicit resume. It does not reduce search coverage, dispatch
+queued work automatically or claim to measure a provider's included allowance.
+The existing Preview keeps its 1,200-second daily Flight reservation and unchanged
+provider limits. Nine browser cases through the actual local MCP bridge cover
+configured daily capacity, provider-confirmed monthly fixture capacity and
+uncertain submission at desktop and mobile widths; they establish UI behavior,
+not live provider-quota enforcement. Application checks passed 332 tests and the
+updated packaging resource checks passed nine. The existing Preview endpoint
+returns the new capacity view for the saved queued job without dispatch intent
+or a Flight run ID; exact live MCP guidance and current/previous UI bytes match
+the local artifacts. This is API qualification plus local browser qualification;
+the new panel has not yet been visibly verified inside ChatGPT or Claude.
+
 ## Released fixes and runtime alignment: 0.2.2
 
 [Release v0.2.2](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.2)

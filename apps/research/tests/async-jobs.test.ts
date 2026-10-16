@@ -664,3 +664,82 @@ test("pending bundle materialization preserves app state until the same original
     await session.close();
   }
 });
+
+test("open_research renders a saved capacity notice without searching, resuming, or importing a table", async () => {
+  class CapacityEngine extends JobEngine {
+    receipt(jobId: string, requestId: string) {
+      return {
+        ...super.receipt(jobId, requestId),
+        can_resume: false,
+        capacity: {
+          resource: "flight_compute",
+          reason: "operator_limit",
+          period: "day",
+          allowance: "configured",
+          resets_at: "2026-10-17T00:00:00Z",
+          limit: 1200,
+          used: 1200,
+          unit: "seconds",
+        },
+        dispatch_blocked: {
+          code: "budget_exhausted",
+          message: "Configured application capacity is exhausted",
+        },
+        request_json: "private query text must remain absent from the widget",
+      };
+    }
+  }
+  const engine = new CapacityEngine();
+  const session = await connect(engine, {
+    mode: "protected",
+    principal: "owner-a",
+    allowPrivateDisclosure: false,
+  });
+  try {
+    const submitted = await session.client.callTool({
+      name: "sourcesql_query",
+      arguments: args(),
+    });
+    const receipt = submitted.structuredContent as Record<string, unknown>;
+    const before = engine.calls.length;
+    const opened = await session.client.callTool({
+      name: "open_research",
+      arguments: { job_id: receipt.job_id },
+    });
+    assert.equal(opened.isError, undefined);
+    const view = opened.structuredContent as {
+      kind: string;
+      job: Record<string, unknown>;
+    };
+    assert.equal(view.kind, "research_job_status");
+    assert.equal(view.job.job_id, receipt.job_id);
+    assert.equal(view.job.request_id, receipt.request_id);
+    assert.deepEqual(view.job.capacity, receipt.capacity);
+    assert.equal(view.job.can_resume, false);
+    assert.equal(view.job.result_id, undefined);
+    assert.equal(view.job.pending, true);
+    assert.deepEqual(
+      engine.calls.slice(before).map((call) => call.method),
+      ["job_status"],
+    );
+    assert.equal(engine.queryCalls, 1);
+    assert.equal(engine.dispatches, 1);
+    assert.doesNotMatch(JSON.stringify(opened), /private query text/);
+    const invalid = await session.client.callTool({
+      name: "open_research",
+      arguments: { job_id: receipt.job_id, snapshot_id: "unrelated-table" },
+    });
+    assert.equal(invalid.isError, true);
+    engine.state = "completed";
+    engine.privateResult = true;
+    const hidden = await session.client.callTool({
+      name: "open_research",
+      arguments: { job_id: receipt.job_id },
+    });
+    assert.equal(hidden.isError, true);
+    assert.equal(hidden.structuredContent, undefined);
+    assert.doesNotMatch(JSON.stringify(hidden), /wq_job_result|synthetic/);
+  } finally {
+    await session.close();
+  }
+});

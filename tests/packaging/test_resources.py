@@ -88,6 +88,7 @@ def test_materialization_does_not_follow_existing_symlinks(tmp_path, monkeypatch
     [
         ("research-2511fe6d0adf4f69.html", 676875, "2511fe6d0adf4f693803ff5bd8e4760f3de0cae78593150ddb827c7d521c6475"),
         ("research-9fa11ff58ed34fd6.html", 676864, "9fa11ff58ed34fd69608d172b43004a532aa9ef09ff9d481a3a883d39c28e462"),
+        ("research-048e54fb9a70888e.html", 685308, "048e54fb9a70888eef16c2694fe4a24a7d7a7ccadb7b6b29592933276721e598"),
     ],
 )
 def test_previous_deployed_widget_is_an_exact_materializable_public_template(tmp_path, monkeypatch, filename, size, sha256):

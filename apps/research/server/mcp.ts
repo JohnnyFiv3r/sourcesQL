@@ -59,6 +59,7 @@ import {
   type CheckpointPendingState,
   type ResearchCheckpoint,
 } from "./checkpoints.js";
+import { researchJobView } from "../src/job-view.js";
 import {
   SOURCESQL_SERVER_INSTRUCTIONS,
   SOURCESQL_QUERY_DESCRIPTION,
@@ -305,6 +306,8 @@ export function createServer(
       "finished_at",
       "error_code",
       "dispatch_blocked",
+      "capacity",
+      "can_resume",
       ...(completed ? ["result_id", "run_id"] : []),
     ];
     const result = Object.fromEntries(
@@ -320,7 +323,7 @@ export function createServer(
           ? "Cancellation is durably recorded and result publication is blocked. Platform stop is not confirmed yet; poll sourcesql_job_status with this same job_id."
           : pending
             ? receipt.status === "queued" && receipt.dispatch_blocked
-              ? `This saved job is queued: ${(receipt.dispatch_blocked as { message: string }).message}. No Flight was submitted for this attempt. Keep the same job_id and request_id; wait for the allowance to become available, then explicitly resume with sourcesql_start_job using this same job_id. Do not bypass the cap or create another request to retry. No result is available yet.`
+              ? `Research is saved and waiting for capacity. Keep the same job_id and request_id. Open the capacity widget with open_research({job_id:"${receipt.job_id}"}). No Flight was submitted for this attempt; no result is available. Resume uses this same saved job.`
               : continuation
                 ? "Poll sourcesql_job_status with this job_id. If queued, use sourcesql_start_job with the same job_id when capacity is available. This dependency job must complete before the original operation can resume. No result is available yet."
                 : receipt.status === "queued"
@@ -348,6 +351,7 @@ export function createServer(
       inputSchema: z
         .object({
           snapshot_id: id.optional(),
+          job_id: id.optional(),
           snapshot: snapshotSchema.optional(),
           result_ref: referenceSchema.optional(),
           offset: z.number().int().nonnegative().optional(),
@@ -356,10 +360,13 @@ export function createServer(
         .strict()
         .refine(
           (input) =>
-            [input.snapshot_id, input.snapshot, input.result_ref].filter(
-              Boolean,
-            ).length <= 1,
-          "Pass snapshot for fresh results or snapshot_id for saved research, not both.",
+            [
+              input.snapshot_id,
+              input.snapshot,
+              input.result_ref,
+              input.job_id,
+            ].filter(Boolean).length <= 1,
+          "Pass one snapshot, result_ref, snapshot_id or job_id.",
         )
         .refine(
           (input) => input.offset === undefined || input.row_id === undefined,
@@ -379,8 +386,26 @@ export function createServer(
       },
       _meta: { ui: { resourceUri } },
     },
-    ({ snapshot_id, snapshot, result_ref, offset, row_id }) =>
+    ({ snapshot_id, snapshot, result_ref, offset, row_id, job_id }) =>
       safe(async () => {
+        if (job_id) {
+          if (!options.engine)
+            throw new Error(
+              "This backend does not support hosted research jobs.",
+            );
+          const receipt = await options.engine.call<Record<string, unknown>>(
+            "job_status",
+            { job_id },
+          );
+          const checked = await jobResult(receipt);
+          const view = researchJobView(
+            checked.structuredContent as Record<string, unknown>,
+          );
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(view) }],
+            structuredContent: view,
+          };
+        }
         const full = result_ref
           ? await store.import(await referenceSnapshot(result_ref))
           : snapshot

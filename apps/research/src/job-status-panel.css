@@ -1,0 +1,102 @@
+.job-status-panel {
+  display: grid;
+  gap: 15px;
+  width: 100%;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border, #dddddd);
+  border-radius: 12px;
+  background: var(--background, #ffffff);
+  color: var(--foreground, #202020);
+}
+.job-status-announcement {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+.job-status-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--foreground, #202020);
+  background: color-mix(in srgb, var(--primary, #2cd8b6) 18%, transparent);
+}
+.job-status-icon svg {
+  color: var(--link, #17654b);
+}
+.job-status-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.job-status-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.2px;
+}
+.job-status-description,
+.job-status-reset,
+.job-status-usage {
+  margin: 7px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted, #666666);
+}
+.job-status-usage {
+  color: var(--foreground, #202020);
+  font-variant-numeric: tabular-nums;
+}
+.job-status-reset time {
+  color: var(--foreground, #202020);
+}
+.job-status-error {
+  max-height: 90px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border, #dddddd);
+  border-radius: 7px;
+  color: var(--foreground, #202020);
+  background: var(--subtle, #f6f6f6);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.job-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.job-status-actions .button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 360px) {
+  .job-status-panel {
+    padding: 15px;
+  }
+  .job-status-announcement {
+    grid-template-columns: 29px minmax(0, 1fr);
+    gap: 9px;
+  }
+  .job-status-icon {
+    width: 29px;
+    height: 29px;
+    border-radius: 8px;
+  }
+  .job-status-title {
+    font-size: 16px;
+  }
+  .job-status-actions .button {
+    padding-inline: 10px;
+  }
+}

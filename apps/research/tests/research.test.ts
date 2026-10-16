@@ -502,7 +502,10 @@ test("MCP stdio handshake, UI resource, correction, import and follow-up round t
       arguments: { snapshot_id: seed.id, snapshot: freshSnapshot },
     });
     assert.equal(ambiguous.isError, true);
-    assert.match(JSON.stringify(ambiguous.content), /not both/);
+    assert.match(
+      JSON.stringify(ambiguous.content),
+      /Pass one snapshot, result_ref, snapshot_id or job_id/,
+    );
     const saved = await client.callTool({
       name: "amend_observation",
       arguments: amendment(),

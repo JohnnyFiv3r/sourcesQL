@@ -50,6 +50,13 @@ import {
 } from "./research-links.js";
 import "./styles.css";
 import { ResearchTreePanel } from "./research-tree-panel.js";
+import { ResearchJobStatusPanel } from "./job-status-panel.js";
+import {
+  researchJobViewSchema,
+  researchJobView as parseJobReceipt,
+  type ResearchJobView,
+} from "./job-view.js";
+import "./job-status-panel.css";
 import { HostedViewReconciliation } from "./view-reconciliation.js";
 import { readNavigation } from "./navigation-read.js";
 import {
@@ -107,6 +114,7 @@ function isSourceUrl(value: unknown): value is string {
 
 function Workspace() {
   const [view, setView] = useState<ResearchView>();
+  const [jobView, setJobView] = useState<ResearchJobView>();
   const [ready, setReady] = useState(false);
   const [inlineHeightLimit, setInlineHeightLimit] = useState<number | null>(
     null,
@@ -234,6 +242,7 @@ function Workspace() {
   }
 
   function accept(next: ResearchView, preserveWindow = true) {
+    setJobView(undefined);
     const previous = viewRef.current;
     if (
       previous?.snapshot.id === next.snapshot.id &&
@@ -376,6 +385,20 @@ function Workspace() {
     reconciliation.current = reconciler;
     app.ontoolresult = (result) => {
       try {
+        if (
+          result.structuredContent &&
+          typeof result.structuredContent === "object" &&
+          "kind" in result.structuredContent &&
+          result.structuredContent.kind === "research_job_status"
+        ) {
+          if (result.isError)
+            throw new Error("Unable to read the saved research job.");
+          const job = researchJobViewSchema.parse(result.structuredContent);
+          reconciler.invalidate();
+          setJobView(job);
+          setError("");
+          return;
+        }
         if (reconciler.hostResult(extractView(result))) setError("");
       } catch (e) {
         reportError(e);
@@ -413,6 +436,62 @@ function Workspace() {
       window.removeEventListener("focus", updateAgentMessaging);
     };
   }, []);
+
+  useEffect(() => {
+    if (!ready || !jobView) return;
+    const panel = document.querySelector<HTMLElement>(".job-status-panel");
+    if (!panel) return;
+    const measure = () => {
+      const height = Math.min(
+        inlineHeightLimit ?? 560,
+        Math.ceil(panel.getBoundingClientRect().height),
+      );
+      if (height === reportedHeight.current) return;
+      reportedHeight.current = height;
+      void app.sendSizeChanged({ height }).catch(() => {
+        reportedHeight.current = null;
+      });
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(panel);
+    measure();
+    return () => observer.disconnect();
+  }, [ready, Boolean(jobView), inlineHeightLimit]);
+
+  async function readResearchJob(resume = false) {
+    if (!jobView) return;
+    const result = await app.callServerTool({
+      name: resume ? "sourcesql_start_job" : "sourcesql_job_status",
+      arguments: { job_id: jobView.job.job_id },
+    });
+    if (result.isError) {
+      if (resume) {
+        await readResearchJob(false);
+        return;
+      }
+      throw new Error(
+        "Unable to read the saved job. Check its status before trying again.",
+      );
+    }
+    if (!result.structuredContent)
+      throw new Error("The job response was not confirmed.");
+    setJobView(parseJobReceipt(result.structuredContent));
+  }
+
+  async function openJobResult() {
+    if (!jobView?.job.result_id || jobView.job.status !== "completed") return;
+    const result = await app.callServerTool({
+      name: "open_research",
+      arguments: {
+        result_ref: {
+          result_id: jobView.job.result_id,
+          snapshot_id: `job-${jobView.job.job_id}`,
+          title: "Saved research result",
+        },
+      },
+    });
+    accept(extractView(result));
+  }
 
   async function perform(work: () => Promise<void>) {
     reconciliation.current?.invalidate();
@@ -1360,6 +1439,21 @@ function Workspace() {
       "Export sent to your host. It contains original evidence and separate corrections.",
     );
   }
+  if (jobView)
+    return (
+      <ResearchJobStatusPanel
+        view={jobView}
+        busy={busy || !ready}
+        error={error}
+        onCheck={() => void perform(() => readResearchJob())}
+        onResume={() => void perform(() => readResearchJob(true))}
+        onOpenResult={
+          jobView.job.status === "completed" && jobView.job.result_id
+            ? () => void perform(openJobResult)
+            : undefined
+        }
+      />
+    );
   if (!view)
     return (
       <main className="loading">

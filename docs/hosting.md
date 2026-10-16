@@ -87,6 +87,22 @@ billing cap. Other applications, database compute and provider usage are outside
 it. An account with a payment method may incur overage; no-card exhaustion
 behavior has not been qualified.
 
+A capacity-blocked job stays saved. `open_research({job_id: "<saved-job-id>"})`
+shows the limiting resource and its actual reset period in the app. **Check status**
+reads the same job without starting Python; **Resume research** explicitly resumes
+that job once the configured allowance permits it. The widget labels application
+reservations separately from provider-confirmed included capacity. It never
+infers a monthly free allowance from a daily reservation or starts queued work
+automatically.
+
+MotherDuck distinguishes no-card Lite's daily F4 allowance from card-enabled
+Lite's monthly compute allocation and pay-as-you-go overage. Adding a payment
+method does not establish a free-only hard stop. The reviewed public interfaces
+do not supply a remaining-allocation meter or an enforceable zero-dollar stop
+for card-enabled Lite, so sourcesQL retains explicit application limits.
+Keep F4 selected explicitly; adding a card also changes MotherDuck's default
+Flight size. See [Flight sizes and plan behavior](https://motherduck.com/docs/about-motherduck/billing/flight-sizes/).
+
 Measure complete research jobs before predicting capacity. Distinguish HTTP
 latency, Flight run intervals, billed compute, database usage and provider charges.
 A synthetic test or provider estimate does not establish final billing or the

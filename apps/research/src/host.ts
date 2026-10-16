@@ -54,13 +54,15 @@ async function start(token = ""): Promise<void> {
       throw new Error("The server did not declare its UI resource.");
     const result = await client.callTool({
       name: "open_research",
-      arguments: new URLSearchParams(location.search).has("snapshot_id")
-        ? {
-            snapshot_id: new URLSearchParams(location.search).get(
-              "snapshot_id",
-            ),
-          }
-        : {},
+      arguments: new URLSearchParams(location.search).has("job_id")
+        ? { job_id: new URLSearchParams(location.search).get("job_id") }
+        : new URLSearchParams(location.search).has("snapshot_id")
+          ? {
+              snapshot_id: new URLSearchParams(location.search).get(
+                "snapshot_id",
+              ),
+            }
+          : {},
     });
     const resource = await client.readResource({
       uri: resourceUri,

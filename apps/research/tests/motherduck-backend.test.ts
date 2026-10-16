@@ -2162,10 +2162,30 @@ test("an exhausted automatic start preserves one queued handle across replay and
     assert.equal(first.status, "queued");
     assert.equal(first.pending, true);
     assert.equal(first.request_id, request.request_id);
+    assert.deepEqual(first.capacity, {
+      resource: "flight_compute",
+      reason: "operator_limit",
+      period: "day",
+      allowance: "configured",
+      resets_at: new Date(
+        Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z") +
+          86400000,
+      ).toISOString(),
+      limit: 600,
+      used: 600,
+      unit: "seconds",
+    });
+    assert.equal(first.can_resume, false);
     assert.deepEqual(first.dispatch_blocked, {
       code: "budget_exhausted",
       message: "Daily Flight execution reserve is exhausted",
+      capacity: first.capacity,
     });
+    const status = await engine.call<Row>("job_status", {
+      job_id: first.job_id,
+    });
+    assert.deepEqual(status.capacity, first.capacity);
+    assert.equal(status.can_resume, false);
     const replay = await engine.call<Row>("query", request);
     assert.equal(replay.job_id, first.job_id);
     assert.deepEqual(replay.dispatch_blocked, first.dispatch_blocked);
@@ -2228,9 +2248,13 @@ test("an exhausted provider allowance returns the queued handle and rolls back e
     const request = { ...liveQuery(), profile: "brave" };
     const first = await engine.call<Row>("query", request);
     assert.equal(first.status, "queued");
+    assert.equal(first.capacity.resource, "search_model_budget");
+    assert.equal(first.capacity.allowance, "configured");
+    assert.equal(first.can_resume, false);
     assert.deepEqual(first.dispatch_blocked, {
       code: "budget_exhausted",
       message: "Daily provider reserve is exhausted",
+      capacity: first.capacity,
     });
     assert.equal(
       (await engine.call<Row>("query", request)).job_id,
@@ -2367,8 +2391,8 @@ test("MCP returns the blocked queued receipt and same-ID resume guidance rather 
     assert.match(guidance, /No Flight was submitted for this attempt/);
     assert.match(guidance, /same job_id and request_id/);
     assert.match(guidance, /allowance/);
-    assert.match(guidance, /explicitly resume with sourcesql_start_job/);
-    assert.match(guidance, /Do not bypass the cap/);
+    assert.match(guidance, /open_research\(\{job_id:/);
+    assert.match(guidance, /no result is available/);
     const replay = await client.callTool({
       name: "sourcesql_query",
       arguments: request,
