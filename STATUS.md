@@ -1,14 +1,43 @@
 # Project status
 
 sourcesQL includes a research SQL engine, an MCP App, local Docker packaging
-and optional Vercel/MotherDuck hosting. **0.2.2** corrects fixture receipt
-classification and published review-history messages, and reports configured
-hosted worker versions. See the [0.2.2 release notes](docs/releases/0.2.2.md).
-The earlier 0.2.1 hosting and 0.2.0 continuation checks remain scoped below.
+and optional Vercel/MotherDuck hosting. **0.2.3** is published on PyPI and GHCR,
+with the release pinned to its reviewed package hashes and tested container.
+See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
+and [release notes](docs/releases/0.2.3.md).
 
-## Research candidate: 0.2.3 (unreleased)
+## Release qualification: 0.2.3
 
-The source candidate adds opt-in wider Exa retrieval, bounded parallel search,
+The final tag pipeline qualified both Python distributions on Linux Python
+3.12–3.14 and published the same Linux AMD64 image it tested. Public PyPI
+installation and anonymous container pull matched the recorded artifacts.
+The fresh public install passed on a retry; the first probe failed before
+product execution and its cause was not established. The local ARM64 container
+also passed its lifecycle checks.
+
+A fresh Hobby project completed onboarding on its first public installed-CLI
+attempt, then executed one bounded fixture and reopened its stored result in a
+new process. This used existing accounts; new-account signup and OAuth setup on
+that new alias were not qualified.
+
+The existing ChatGPT and Claude connections rendered actual MCP Apps for saved
+research, row expansion, corrections, refresh review and manual update
+publication. Both hosts adjusted Accept/Keep decisions before publishing frozen
+successors. Fresh conversations reopened each other's compact checkpoints.
+Both rendered a configured monthly-capacity notice with disabled resume and a
+billing link. Temporary limits and deployments were restored or removed;
+queued user jobs remained unchanged. These lifecycle checks used synthetic data
+and made no external search or model calls.
+
+Current ChatGPT access uses OAuth; the existing Claude owner-bearer connection
+was used for these functional checks. Earlier separate OAuth renewal checks are
+recorded below. Host acceptance retained an initial invalid request and recovered
+saved views after transient opening issues; it does not establish failure-free
+host behavior or exhaustive research quality.
+
+## Research capabilities: 0.2.3
+
+The release adds opt-in wider Exa retrieval, bounded parallel search,
 source fetching and configured OpenAI extraction to personal-cloud hosting.
 Small defaults and older hosted policies remain unchanged. Native OpenAI uses
 Responses; supporting quotes acquire exact coordinates in code. Invalid evidence
@@ -18,15 +47,16 @@ Admission includes typed URL-part splitting and two-argument regular-expression
 matching. Hosted failures retain safe application error codes through MCP.
 See [the research configuration](docs/exa-research.md).
 
-The existing personal-cloud Preview now runs the reviewed source candidate.
+The existing personal-cloud Preview runs the qualified 0.2.3 runtime.
 A capped live pipeline and a separate saved-result projection completed through
 Vercel and the versioned Flight; the projection made no provider or model calls.
 This is bounded integration qualification, not complete research coverage or
 factual-accuracy certification. Personal-cloud onboarding defaults retain their
-older search policy unless explicitly reconfigured. No 0.2.3 package has been
-published. Operator evidence and quality experiments remain private.
+older search policy unless explicitly reconfigured. The published distributions
+and hosted runtime share the qualified source inputs. Operator evidence and
+quality experiments remain private.
 
-The candidate now retains partial research by default. Missing facts remain NULL;
+The release retains partial research by default. Missing facts remain NULL;
 named extraction fields with invalid support become unavailable without discarding
 independently cited siblings. Explicit strict execution remains available.
 Field diagnostics and partial status survive semantic-cache reuse. Multi-entity
@@ -47,10 +77,10 @@ Public personal-cloud setup now uploads the reviewed files by content digest
 before creating a deployment. Saved upload acknowledgments survive interruption;
 an incomplete upload never crosses the deployment-creation barrier. Controlled
 tests cover the compact manifest, account/team binding and ordinary recovery.
-A fresh installed-CLI first attempt remains a separate release gate.
+The fresh Hobby installed-CLI first attempt passed as recorded above.
 
 
-The candidate now supports authorized reuse of retained source documents and
+The release supports authorized reuse of retained source documents and
 canonical cell evidence through supported projections and joins. A bounded live
 three-document extraction preserved source dates and exact support; subsequent
 SQL combined reviewed announcement and progress sources without new provider
@@ -75,16 +105,16 @@ one starts no research, changes no account and does not raise configured limits.
 Uncertain submissions cannot resume. The operator Preview has a separately
 bounded testing allocation; adopter defaults do not inherit that override.
 
-Application checks passed 341 tests, setup/onboarding checks passed 47 and public
+Earlier application checks passed 341 tests, setup/onboarding checks passed 47 and public
 resource packaging checks passed ten. Eleven browser cases through the actual
 local MCP bridge cover daily/monthly limits, provider-reported included fixture
 capacity, mobile layout, uncertain submissions and explicit SDK billing-link
 clicks. These establish UI behavior, not native free-quota enforcement. New
-capacity/billing UI qualification inside actual ChatGPT and Claude remains a
-separate check. The existing Preview serves the exact tested UI and reports the
-prepared monthly limits. Its original queued job remains undispatched and is
-now eligible for explicit resume. No new provider or Flight calls were needed
-for this qualification.
+capacity/billing UI qualification inside actual ChatGPT and Claude was a
+separate check. The 0.2.3 host checks above now qualify the configured monthly
+notice, restoration and saved-job behavior; native free-quota enforcement remains
+separate. Existing queued jobs remained undispatched throughout these checks.
+No new provider or Flight calls were needed for capacity qualification.
 
 ## Released fixes and runtime alignment: 0.2.2
 
@@ -101,7 +131,8 @@ verified version 0.2.2, actual two-row fixture execution, consistent
 plus retained UI resources. These checks made no provider calls; the focused
 Docker smoke did not repeat the full suite or qualify restart persistence.
 
-All four active hosted Flight definitions now use the reviewed 0.2.2 bundle.
+At the 0.2.2 rollout, all four active hosted Flight definitions used its reviewed
+bundle.
 Independent fixture query dispatch from ChatGPT and Claude produced two fresh
 Pro jobs that succeeded in **10.402** and **10.267 seconds**, reporting
 engine 0.2.2 and the exact execution-wheel digest, with consistent result, receipt
@@ -294,8 +325,9 @@ In Claude, use **Connectors → Yours → sourcesQL → More options → Refresh
 list**, then reopen saved research. A fresh chat alone may retain cached UI
 metadata.
 
-Remaining gates are [fresh 0.2.2 provisioning, fresh-account Hobby onboarding, provider-specific host
-rendering and the unqualified client paths](docs/adoption-verification.md).
+Remaining adoption checks include [fresh-account signup and OAuth enrollment,
+provider-specific host rendering and the unqualified client paths](docs/adoption-verification.md).
+Fresh 0.2.3 provisioning and the current core host lifecycle passed as recorded above.
 The bounded Brave/Serper Vercel HTTP checks below completed after fresh allowance
 verification under the original namespaces and limits. Their temporary test-access
 grant was revoked. Application reservations do not guarantee account-wide free usage.
@@ -427,9 +459,10 @@ package publication.
 
 Guided setup supports one configured owner; account creation, OAuth registration
 and the exact-domain protection exception remain manual. This is not a shared
-multi-tenant service. Fresh-account Hobby onboarding, the full Claude/Cursor
-research lifecycle, broad live research quality and additional provider/host paths
-remain open qualification work.
+multi-tenant service. Fresh-account signup and OAuth enrollment, the full Cursor research lifecycle,
+broad live research quality and additional provider/host paths remain open
+qualification work. The current ChatGPT/Claude core lifecycle checks passed as
+recorded above.
 Application allowances are finite reservations, not account-wide provider billing
 hard stops or a guarantee of free hosting.
 

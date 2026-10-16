@@ -1,10 +1,11 @@
 # Adoption and product roadmap
 
-**0.2.2** corrects fixture classification and published review-history messages,
-and reports configured hosted worker versions. Installed artifacts, restricted
-Docker execution, two Pro fixture jobs and actual ChatGPT/Claude rendering pass.
-The earlier 0.2.0 checkpoint/manual-update and 0.2.1 clean Hobby evidence remain
-scoped separately from fresh provisioning and remaining client checks.
+**0.2.3** is pinned to qualified Python distributions and a tested Docker image.
+Fresh Hobby provisioning passed through the public installed CLI. Existing
+ChatGPT and Claude connections passed the core research, expansion, correction,
+refresh, update publication, checkpoint and configured-capacity workflows.
+Fresh-account signup, new-adopter OAuth enrollment and broad research quality
+remain separate work.
 
 Implementation, release and actual host qualification are separate milestones.
 See [current status](../STATUS.md) for recorded evidence and
@@ -42,11 +43,12 @@ packaged plugin is not needed. Local Docker remains an alternative adoption path
 
 ## 1. Finish adoption verification
 
-Qualify the new public content-addressed uploader with a fresh installed-CLI
-first attempt. Upload acknowledgments and compact manifests now replace the
-large inline app payload; controlled tests cover interruption, exact plan/team
-binding and deployment recovery. Use an empty setup workspace and the normal
-plan/apply/resume path, with no private upload helper or reused receipts.
+The public content-addressed uploader passed a fresh installed-CLI first attempt
+in an eligible Hobby workspace. It used an empty setup workspace and ordinary
+plan/apply/resume commands, without a private upload helper or reused receipts.
+A bounded fixture completed and a new process reopened its stored result.
+Controlled tests also cover interruption, exact plan/team binding and deployment
+recovery.
 
 Qualify account signup and consent with an eligible adopter's fresh personal
 accounts. Clean installed-CLI setup, the static-first deployment path, one bounded
@@ -70,6 +72,13 @@ and actual provider billing. No setup path promises free hosting.
 
 ## 2. Qualify continuation and updates in actual MCP hosts
 
+The 0.2.3 core lifecycle passed in existing ChatGPT and Claude connections,
+including cell corrections, saved row expansion, refresh acceptance, adjustable
+update decisions and immutable publication. Each host saved a compact checkpoint;
+fresh conversations in the other host reopened its pinned successor. Both showed
+a real configured-monthly capacity notice. These checks used synthetic evidence
+and preserved existing queued user jobs; no provider calls were needed.
+
 ChatGPT checkpoint saving and fresh-Claude continuation have passed, as have
 current table rendering, update-request read/cancellation, evidence inspection,
 revised review choices and saved successor publication in both hosts.
@@ -84,7 +93,7 @@ The actual Claude download also passed offline engine-archive import and fresh
 local reopening without network, SQL execution or worker dispatch; this does not
 establish full app-store/MCP restoration or Claude-host import.
 
-The deployed 0.2.2 UI now also passes actual published-history rendering after
+The 0.2.2 rollout also passed actual published-history rendering after
 parent refresh in both hosts, retaining baseline revision 1 and review evidence
 without the earlier stale-baseline rejection message. Independent fixture query
 dispatch from each host also passed query submission, polling, result reading
@@ -106,20 +115,35 @@ run only when fixture or saved-data checks cannot establish the behavior.
 ## 3. Keep released artifacts and hosted runtimes aligned
 
 Keep released source, installed artifacts, Docker and deployed resources in
-agreement. The earlier shared-fixture run reported 0.2.0 against the then-released
-0.2.1 library. All four active definitions are now aligned to the reviewed 0.2.2
-bundle; two fresh Pro fixture runs verified its execution wheel and consistent
-classification. Provider and Hobby limits stayed unchanged without new execution.
-The release passed six installed-artifact checks across Python 3.12–3.14, a fresh
-public-PyPI install, a restricted Docker smoke and actual host rendering checks.
-Remaining workers still need their own executed qualification. Publishing a
-package alone does not upgrade a Flight or establish that it ran.
+agreement. All four existing hosted definitions are aligned to the qualified
+0.2.3 execution bundle and have executed bounded final-runtime checks. The fresh
+Hobby environment separately consumed the same execution wheel. Temporary limits
+and protection bypasses were restored or revoked without resetting ledgers.
+
+The final tag pipeline verified exact wheel/source-archive hashes, qualified both
+artifacts on Python 3.12–3.14, and published the same Linux image it tested.
+Public PyPI installation and anonymous container pulling were checked against
+those artifacts. Publishing a package alone does not upgrade a Flight or
+establish that it ran.
 Publish only artifacts covered by release checks and identify
 any remaining host or adopter gates in the release notes. Refresh client tool
 definitions after a server update; reopen saved results rather than repeating
 research to repair a display failure.
 
-## 4. Support larger manual updates
+## 4. Improve research completion and cell evidence
+
+Add guided setup for a model-capable personal-cloud profile while keeping the
+current search-only default explicit. Qualify bounded follow-ups for unanswered
+cells in actual hosts, reusing saved sources before further discovery and
+preserving completed evidence and budget limits.
+
+Extend direct cell attribution through supported multi-entity expansions.
+Until a transformation has a proven mapping, retain input-set evidence instead
+of assigning a quotation to an unsupported cell. Add durable reservation
+settlement for failures proven to occur before dispatch; unknown submissions
+must retain their holds.
+
+## 5. Support larger manual updates
 
 Extend publication beyond complete inline tables of 100 rows and 200 KB using
 engine-backed successors. Preserve canonical row IDs, source versions, observation
