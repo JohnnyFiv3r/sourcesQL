@@ -10,15 +10,56 @@ trap 'rm -rf -- "$sentinel_dir"' EXIT
 printf '%s\n' 'SAFE-SYNTHETIC-DOCKER-SENTINEL' > "$sentinel_dir/sentinel.txt"
 chmod 755 "$sentinel_dir"
 chmod 644 "$sentinel_dir/sentinel.txt"
-python3 - "$receipt_dir" <<'PY'
-import hashlib, json, sys
+# Mirror the allowlisted Docker context without depending on Git or reading
+# operator/generated directories. Use the same complete snapshot at both ends.
+capture_source_hashes() {
+  python3 - "$1" <<'PY'
+import fnmatch, hashlib, json, os, sys
 from pathlib import Path
 root = Path.cwd()
-paths = [root / name for name in ("README.md", "hatch_build.py", "pyproject.toml", "uv.lock", "apps/research/package.json", "apps/research/package-lock.json", "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html", "apps/research/vercel.json", "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh", "hosted/flight/runner.py", "hosted/flight/exa_profile.py", "hosted/flight/tests/test_exa_profile.py")]
-for subtree in ("src/sourcesql", "tests", "apps/research/server", "apps/research/src", "apps/research/api", "apps/research/scripts", "apps/research/tests", "apps/research/fixtures"):
-    paths.extend(path for path in (root / subtree).rglob("*") if path.is_file() and path.suffix in {".py", ".ts", ".tsx", ".css", ".json"})
-(Path(sys.argv[1]) / "source-hashes-before.json").write_text(json.dumps({str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(paths)}, indent=2) + "\n")
+skip = {"__pycache__", "local", "artifacts", "node_modules", "dist", "compiled",
+        ".data", ".ui-builds", ".tunnel", ".vercel", ".vercel-assets"}
+def excluded(name):
+    return (name in skip or name.startswith((".env", ".dev.vars"))
+            or fnmatch.fnmatchcase(name, "*.pyc"))
+paths = set()
+def add(path):
+    if path.is_symlink():
+        raise AssertionError("Symlink in Docker input: " + str(path.relative_to(root)))
+    if not path.is_file():
+        raise AssertionError("Missing Docker input: " + str(path.relative_to(root)))
+    paths.add(path)
+for name in ("README.md", "LICENSE", "NOTICE", "hatch_build.py", "pyproject.toml", "uv.lock",
+             "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh",
+             "apps/research/package.json", "apps/research/package-lock.json",
+             "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html",
+             "apps/research/vercel.json", "apps/research/.vercelignore", "hosted/setup.mjs",
+             "hosted/personal-cloud.mjs", "hosted/flight/build.py", "hosted/flight/runner.py",
+             "hosted/flight/exa_profile.py"):
+    add(root / name)
+for name in ("src", "tests", "examples", "apps/research/server", "apps/research/src",
+             "apps/research/api", "apps/research/scripts", "apps/research/tests",
+             "apps/research/fixtures"):
+    base = root / name
+    assert base.is_dir() and not base.is_symlink(), "Missing/unsafe Docker subtree: " + name
+    for current, directories, filenames in os.walk(base, followlinks=False):
+        directories[:] = sorted(value for value in directories if not excluded(value))
+        for value in directories:
+            assert not (Path(current) / value).is_symlink(), "Symlink in Docker subtree"
+        for value in filenames:
+            if not excluded(value):
+                add(Path(current) / value)
+for pattern in ("apps/research/ui-history/*.html", "hosted/flight/tests/*.py"):
+    matches = sorted(root.glob(pattern))
+    assert matches, "Missing Docker glob: " + pattern
+    for path in matches:
+        if not excluded(path.name):
+            add(path)
+Path(sys.argv[1]).write_text(json.dumps({str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                      for path in sorted(paths)}, indent=2) + "\n")
 PY
+}
+capture_source_hashes "$receipt_dir/source-hashes-before.json"
 docker build --target qualification --tag sourcesql:qualification-py312 . 2>&1 | tee "$receipt_dir/build-python-qualification.log"
 docker build --target app-qualification --tag sourcesql:app-qualification . 2>&1 | tee "$receipt_dir/build-qualification.log"
 docker build --target app-runtime --tag sourcesql:app . 2>&1 | tee "$receipt_dir/build-runtime.log"
@@ -236,12 +277,6 @@ try:
     stdio.wait(timeout=10)
     assert stdio.returncode == 0
     stderr.close()
-    paths = [root / name for name in ("README.md", "hatch_build.py", "pyproject.toml", "uv.lock", "apps/research/package.json", "apps/research/package-lock.json", "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html", "apps/research/vercel.json", "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh", "hosted/flight/runner.py", "hosted/flight/exa_profile.py", "hosted/flight/tests/test_exa_profile.py")]
-    for subtree in ("src/sourcesql", "tests", "apps/research/server", "apps/research/src", "apps/research/api", "apps/research/scripts", "apps/research/tests", "apps/research/fixtures"):
-        paths.extend(path for path in (root / subtree).rglob("*") if path.is_file() and path.suffix in {".py", ".ts", ".tsx", ".css", ".json"})
-    final_hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(paths)}
-    (receipts / "source-hashes.json").write_text(json.dumps(final_hashes, indent=2) + "\n")
-    assert final_hashes == json.loads((receipts / "source-hashes-before.json").read_text()), "Source changed during Docker qualification; repeat after the source freeze"
     print(json.dumps({"http_query": True, "resource": True, "correction": True, "export": True, "restart_persistence": True, "stdio_query": True, "host_origin_guards": True, "provider_calls": 0}))
 finally:
     if stdio is not None and stdio.poll() is None:
@@ -255,5 +290,14 @@ finally:
         (receipts / name).write_text(diagnostics.stdout + diagnostics.stderr)
     # This unique project owns only its synthetic test containers, network and volume.
     subprocess.run(compose + ["down", "--volumes", "--remove-orphans"], cwd=root, env=environment, capture_output=True, text=True, timeout=30)
+PY
+capture_source_hashes "$receipt_dir/source-hashes.json"
+python3 - "$receipt_dir" <<'PY'
+import json, sys
+from pathlib import Path
+receipts = Path(sys.argv[1])
+assert json.loads((receipts / "source-hashes.json").read_text()) == json.loads(
+    (receipts / "source-hashes-before.json").read_text()
+), "Source changed during Docker qualification; repeat after the source freeze"
 PY
 printf 'Docker App qualification receipts: %s\n' "$receipt_dir"
