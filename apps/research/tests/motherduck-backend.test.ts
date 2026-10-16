@@ -2244,6 +2244,83 @@ test("an exhausted provider allowance returns the queued handle and rolls back e
   }
 });
 
+test("MCP reopens an admission-failed job with its safe code and no result or extra dispatch", async () => {
+  const h = await harness();
+  const client = new Client({ name: "admission-failure-test", version: "1" });
+  let server: ReturnType<typeof createServer> | undefined;
+  try {
+    const original = h.engine("owner-a", { allowSubmission: true });
+    await original.initialize();
+    const submitted = await original.call<Row>("query", {
+      ...query(),
+      query: "SELECT random() AS private_column_marker",
+    });
+    assert.equal(h.submissions, 1);
+    // A Flight can fail admission in explain before any engine run is created.
+    await original.connection((connection) =>
+      connection.query(
+        `UPDATE ${original.table("jobs")} SET status='failed',error_code='unsupported_query',error_message=$1 WHERE id=$2::UUID`,
+        ["PRIVATE-RAW-EXCEPTION-MUST-NOT-REACH-THE-HOST", submitted.job_id],
+      ),
+    );
+    h.runs[0].status = "RUN_STATUS_FAILED";
+    h.runs[0].exit_code = 1;
+    const reopened = h.engine("owner-a", { allowSubmission: true });
+    const store = new ResearchStore(h.directory, seed, undefined, 3000, {
+      backend: new MotherDuckStateBackend(reopened),
+    });
+    server = createServer(
+      store,
+      join(root, "apps/research/dist/research.html"),
+      {
+        engine: reopened,
+        access: {
+          mode: "protected",
+          principal: "owner-a",
+          allowPrivateDisclosure: false,
+        },
+      },
+    );
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(a), client.connect(b)]);
+    for (let inspection = 0; inspection < 2; inspection++) {
+      const result = await client.callTool({
+        name: "sourcesql_job_status",
+        arguments: { job_id: submitted.job_id },
+      });
+      assert.notEqual(result.isError, true);
+      const receipt = result.structuredContent as Row;
+      assert.equal(receipt.status, "failed");
+      assert.equal(receipt.pending, false);
+      assert.equal(receipt.error_code, "unsupported_query");
+      assert.equal(receipt.job_id, submitted.job_id);
+      assert.equal(receipt.result_id, undefined);
+      assert.equal(receipt.run_id, undefined);
+      assert.ok(!JSON.stringify(result).includes("PRIVATE-RAW-EXCEPTION"));
+    }
+    const direct = await reopened.call<Row>("job_status", {
+      job_id: submitted.job_id,
+    });
+    assert.equal(direct.error.code, "unsupported_query");
+    assert.equal(direct.error.message, "Research execution failed safely");
+    assert.equal(h.submissions, 1);
+    for (const table of ["results", "runs"]) {
+      const rows = (
+        await reopened.connection((connection) =>
+          connection.query(
+            `SELECT CAST(count(*) AS VARCHAR) AS count FROM ${reopened.table(table)}`,
+          ),
+        )
+      ).rows;
+      assert.equal(rows[0].count, "0");
+    }
+  } finally {
+    await client.close();
+    await server?.close();
+    await h.close();
+  }
+});
+
 test("MCP returns the blocked queued receipt and same-ID resume guidance rather than an error", async () => {
   const h = await harness();
   const client = new Client({ name: "budget-boundary-test", version: "1" });

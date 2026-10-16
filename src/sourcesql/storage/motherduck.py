@@ -487,6 +487,7 @@ class MotherDuckStore(Store):
             if str(job["claim_token"]) != claim_token:
                 raise SourcesQLError("unauthorized", "Job execution ownership unavailable", "jobs")
             allowed = {
+                "unsupported_query",
                 "invalid_query",
                 "invalid_request",
                 "budget_exhausted",

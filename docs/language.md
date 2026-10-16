@@ -10,7 +10,8 @@ Pure SQL includes INNER/LEFT/CROSS joins, DISTINCT, GROUP BY/HAVING, set operati
 ORDER BY/LIMIT/OFFSET, approved arithmetic/string/JSON functions, scalar casts,
 projected UNNEST, list/struct access, and the tested ROW_NUMBER/RANK/DENSE_RANK/LAG/
 LEAD windows. Pure correlated EXISTS and scalar subqueries are implemented. This
-is an allowlist, not a claim of all DuckDB syntax.
+is an allowlist, not a claim of all DuckDB syntax. String helpers include typed `split_part(text, delimiter, integer_index)` and
+two-argument `regexp_matches(text, pattern)`; regex options are not admitted.
 
 The installed signatures are:
 

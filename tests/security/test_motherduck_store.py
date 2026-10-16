@@ -262,6 +262,30 @@ def test_quota_failure_keeps_no_result_and_records_safe_failed_job(make_store, t
     assert "SECRET" not in failed["error_message"]
 
 
+def test_admission_failure_retains_its_code_without_a_run_result_or_private_message(
+    make_store, tmp_path
+):
+    store = make_store()
+    request = {"query": "SELECT random() AS private_column_marker", "profile": "fixture"}
+    job_id, context = seed_job(store, request=request)
+    token, claimed = claim(store, job_id, context)
+    with pytest.raises(SourcesQLError) as error:
+        engine(store, tmp_path).explain(**claimed["request"])
+    assert error.value.code == "unsupported_query"
+    assert counts(store) == (0, 0)
+    store.fail_job(job_id, token, error.value.code, "PRIVATE-RAW-EXCEPTION-MUST-NOT-BE-RETAINED")
+    reopened = make_store()
+    failed = job(reopened, job_id)
+    assert failed["status"] == "failed"
+    assert failed["error_code"] == "unsupported_query"
+    assert failed["error_message"] == "Research execution failed safely"
+    assert failed["engine_run_id"] is None and failed["result_id"] is None
+    assert "PRIVATE" not in failed["error_message"]
+    assert counts(reopened) == (0, 0)
+    reopened.fail_job(job_id, token, "provider_unavailable", "A later error cannot replace it")
+    assert job(reopened, job_id)["error_code"] == "unsupported_query"
+
+
 def test_identical_import_completes_second_job_without_duplicate_result(make_store, tmp_path):
     first = make_store()
     request = import_request()

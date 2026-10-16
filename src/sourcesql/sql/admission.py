@@ -174,6 +174,8 @@ _ARGS: dict[str, set[str]] = {
     "Length": {"this", "binary"},
     "Trim": {"this", "expression", "position", "collation"},
     "Substring": {"this", "start", "length"},
+    "SplitPart": {"this", "delimiter", "part_index"},
+    "RegexpLike": {"this", "expression"},
     "Replace": {"this", "expression", "replacement"},
     "Concat": {"expressions", "safe", "coalesce"},
     "ConcatWs": {"expressions", "safe", "coalesce"},
@@ -555,6 +557,33 @@ class _Binder:
         if isinstance(node, exp.Literal):
             return "VARCHAR" if node.is_string else "DOUBLE" if "." in node.this else "BIGINT"
         if isinstance(node, exp.Boolean):
+            return "BOOLEAN"
+        if isinstance(node, exp.SplitPart):
+            if any(node.args.get(key) is None for key in ("this", "delimiter", "part_index")):
+                refuse(
+                    "SPLIT_PART requires a string, delimiter, and integer index", "invalid_query"
+                )
+            if any(
+                self.infer(node.args[key], sources, outer) != "VARCHAR"
+                for key in ("this", "delimiter")
+            ) or self.infer(node.args["part_index"], sources, outer) not in {
+                "TINYINT",
+                "SMALLINT",
+                "INTEGER",
+                "BIGINT",
+                "HUGEINT",
+                "UBIGINT",
+                "UHUGEINT",
+                "UINTEGER",
+            }:
+                refuse("SPLIT_PART requires string operands and an integer index", "invalid_query")
+            return "VARCHAR"
+        if isinstance(node, exp.RegexpLike):
+            if any(
+                self.infer(node.args[key], sources, outer) != "VARCHAR"
+                for key in ("this", "expression")
+            ):
+                refuse("REGEXP_MATCHES requires string operands", "invalid_query")
             return "BOOLEAN"
         if isinstance(node, exp.Case):
             if node.this:

@@ -120,6 +120,61 @@ def execute(query, inputs=None, fixture=None, parameters=None, worker=reference_
     return table, fixture
 
 
+def test_fragment_normalization_and_bound_regex_filters_compose_with_grouping_and_ranking():
+    discovered = Table(
+        [Column("url"), Column("title")],
+        [
+            {"url": "https://preferred.example/alpha/#first", "title": "Alpha notice"},
+            {"url": "https://preferred.example/alpha/#second", "title": "Alpha release"},
+            {"url": "https://preferred.example/other", "title": "Unrelated page"},
+            {"url": "https://secondary.example/beta#fragment", "title": "Beta report"},
+            {"url": "https://blocked.example/alpha.pdf#page=2", "title": "Alpha PDF"},
+            {"url": "", "title": "Alpha missing URL"},
+            {"url": None, "title": "Beta missing URL"},
+        ],
+    )
+    query = """WITH normalized AS (
+      SELECT rtrim(split_part(url, '#', 1), '/') AS url, min(title) AS title
+      FROM input.discovered
+      WHERE url IS NOT NULL AND url <> ''
+      GROUP BY rtrim(split_part(url, '#', 1), '/')
+    ), candidates AS (
+      SELECT url, title,
+        CASE WHEN regexp_matches(lower(url), $preferred) THEN 0 ELSE 1 END AS priority
+      FROM normalized
+      WHERE regexp_matches(lower(coalesce(title, '') || ' ' || url), $topic)
+        AND NOT regexp_matches(lower(url), $excluded)
+    ), ranked AS (
+      SELECT url, title, row_number() OVER (
+        PARTITION BY split_part(split_part(url, '://', 2), '/', 1)
+        ORDER BY priority, title, url
+      ) AS source_rank
+      FROM candidates
+    )
+    SELECT url, title, source_rank FROM ranked WHERE source_rank = 1 ORDER BY url"""
+    parameters = {
+        "preferred": r"^https://preferred[.]example/",
+        "topic": "alpha|beta",
+        "excluded": r"[.]pdf($|[?])",
+    }
+    table, fixture = execute(query, {"discovered": discovered}, parameters=parameters)
+    assert table.rows == [
+        {"url": "https://preferred.example/alpha", "title": "Alpha notice", "source_rank": 1},
+        {"url": "https://secondary.example/beta", "title": "Beta report", "source_rank": 1},
+    ]
+    assert fixture.calls == []
+
+
+def test_regex_pattern_stays_bound_data_and_cannot_execute_sql():
+    table, fixture = execute(
+        "SELECT regexp_matches(url, $pattern) AS matches FROM input.sources",
+        {"sources": Table([Column("url")], [{"url": "ordinary source"}])},
+        parameters={"pattern": "x'; ATTACH 'private.db'; --"},
+    )
+    assert table.rows == [{"matches": False}]
+    assert fixture.calls == []
+
+
 def test_discovery_stages_match_before_extract_and_retains_context():
     query = """SELECT url,SEM_EXTRACT(content,'project name explicitly stated') AS project
     FROM WEB_SEARCH('campuses') WHERE SEM_MATCH(content,'specific campus') ORDER BY project"""

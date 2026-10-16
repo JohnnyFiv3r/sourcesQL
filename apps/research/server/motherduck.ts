@@ -479,6 +479,7 @@ export class MotherDuckEngine implements ResearchEngine {
         : {}),
       ...(job.status === "failed"
         ? {
+            error_code: job.error_code ?? "execution_failed",
             error: {
               code: job.error_code ?? "execution_failed",
               message: "Research execution failed safely",

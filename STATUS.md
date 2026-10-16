@@ -14,6 +14,8 @@ Small defaults and older hosted policies remain unchanged. Native OpenAI uses
 Responses; supporting quotes acquire exact coordinates in code. Invalid evidence
 is excluded from semantic cache reuse, and incomplete fetched text cannot satisfy
 `require_document`. Optional reasoning effort is part of the reviewed policy.
+Admission includes typed URL-part splitting and two-argument regular-expression
+matching. Hosted failures retain safe application error codes through MCP.
 See [the research configuration](docs/exa-research.md).
 
 The existing personal-cloud Preview now runs the reviewed source candidate.

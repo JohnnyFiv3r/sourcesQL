@@ -218,3 +218,35 @@ def test_broad_source_arguments_accept_32_and_refuse_33_before_dispatch(operator
     with pytest.raises(SourcesQLError) as error:
         admit(f"SELECT url FROM {operator}({','.join([*args, args[0]])})")
     assert error.value.code == "invalid_query"
+
+
+def test_split_part_and_regex_filters_have_closed_scalar_types():
+    plan = admit(
+        "SELECT split_part(label, '#', $part) AS normalized, "
+        "regexp_matches(content, $pattern) AS matches FROM input.a",
+        {"part": 1, "pattern": "release|notice"},
+        input_schemas=SCHEMAS,
+    )
+    assert plan.columns == [Column("normalized"), Column("matches", "BOOLEAN")]
+    assert plan.custom_operators == ()
+    assert plan.explain["external_dispatch_during_explain"] is False
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "split_part(id, '#', 1)",
+        "split_part(label, 1, 1)",
+        "split_part(label, '#', '1')",
+        "split_part(label, '#', 1.5)",
+        "split_part(label, '#')",
+        "regexp_matches(id, 'x')",
+        "regexp_matches(label, 1)",
+        "regexp_matches(label, 'x', 'i')",  # Flags are outside the installed two-argument shape.
+        "split_part(getenv('SECRET'), '#', 1)",
+        "regexp_matches(label, read_text('/etc/passwd'))",
+    ],
+)
+def test_string_filter_admission_does_not_widen_types_functions_or_options(expression):
+    with pytest.raises(SourcesQLError):
+        admit(f"SELECT {expression} AS value FROM input.a", input_schemas=SCHEMAS)
