@@ -24,6 +24,11 @@ access consent when configuring renewal. This single
 connection provides the research tools and interactive app; no plugin ZIP is
 needed.
 
+The current ChatGPT icon form requires a PNG within its 10 KB size limit. Use
+the supplied [256-pixel upload icon](https://raw.githubusercontent.com/JohnnyFiv3r/sourcesQL/v0.2.3/assets/brand/sourcesql-mcp-icon-small.png).
+If ChatGPT reports that the name already exists, choose a distinct connection
+name such as **sourcesQL Research**.
+
 To update sourcesQL, deploy the server to the same stable endpoint and use
 **Refresh tools** in the existing connection's settings. Reopen a saved result
 to load the current interactive app. Keep the existing registration rather than
