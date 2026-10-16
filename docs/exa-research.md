@@ -201,3 +201,16 @@ remain estimates, not a provider billing hard stop. Use finite request/token
 limits and a separate total experiment budget. Broader ceilings do not extend a
 Flight's runtime or its daily application reservation. Local qualification and
 hosted deployment must be recorded separately.
+
+## Evidence and coverage
+
+Retained exact quotes establish support in the inspected provider text. Final
+projections currently carry input-set lineage; they do not establish direct cell
+attribution. Inspect the retained field-named support and source dates, and keep
+historical plans distinct from current status.
+
+A document can establish one requirement while leaving another unknown. For
+entity research, reconcile identity across complementary announcement and progress
+sources before making the final eligibility decision. A missing date in one
+source is unresolved evidence, not proof that the entity is ineligible. Explicit
+shortlists limit coverage and may require a separately authorized follow-up.

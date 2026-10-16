@@ -24,7 +24,10 @@ Vercel and the versioned Flight; the projection made no provider or model calls.
 This is bounded integration qualification, not complete research coverage or
 factual-accuracy certification. Personal-cloud onboarding defaults retain their
 older search policy unless explicitly reconfigured. No 0.2.3 package has been
-published. Operator evidence and quality experiments remain private.
+published. Operator evidence and quality experiments remain private. Final projections
+currently retain input-set evidence rather than direct cell attribution. Combining
+complementary sources for one entity and verifying current status remain research
+quality work.
 
 ## Released fixes and runtime alignment: 0.2.2
 
