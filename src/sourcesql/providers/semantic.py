@@ -171,7 +171,14 @@ def validate_outcome(
                 "invalid_output", "Null semantic output needs an unresolved status", "semantic"
             )
         return SemanticOutcome(None, status, support, usage)
-    null_fields = isinstance(value, dict) and all(v is None for v in value.values())
+    null_fields = (isinstance(value, dict) and all(v is None for v in value.values())) or (
+        operator == "SEM_EXTRACT_ALL"
+        and isinstance(value, list)
+        and all(
+            item is None or isinstance(item, dict) and all(v is None for v in item.values())
+            for item in value
+        )
+    )
     if status not in {"supported_text", "processed", "no_match"} and not (
         status == "not_stated" and null_fields
     ):
@@ -266,6 +273,80 @@ def validate_named_outcome(
     return validate_outcome(
         "SEM_EXTRACT", text, values, output["status"], valid_support, fields, options, usage
     )
+
+
+def validate_all_outcome(
+    text: str, output: dict, fields: dict[str, str], options: dict, usage: dict
+) -> SemanticOutcome:
+    """Retain parsed item positions; support can belong only to its exact item/field."""
+    values = output["value"]
+    if not isinstance(values, list) or len(values) > extraction_item_limit(options):
+        raise SourcesQLError("invalid_output", "Extraction item limit exceeded", "semantic")
+    values = [dict(item) if fields else item for item in values]
+    valid_support, errors = [], []
+    supported_cells = 0
+    for index, item in enumerate(values):
+        cells = item.items() if fields else [("value", item)]
+        for field, value in cells:
+            if value is None:
+                continue
+            try:
+                support = align_model_quotes(
+                    text,
+                    [
+                        span
+                        for span in output["support"]
+                        if span["field"] == field and span["item"] == index
+                    ],
+                    options,
+                )
+                checked = validate_outcome(
+                    "SEM_EXTRACT",
+                    text,
+                    {field: value} if fields else value,
+                    output["status"],
+                    support,
+                    {field: fields[field]} if fields else {},
+                    options,
+                    {},
+                )
+                if fields:
+                    item[field] = checked.value[field]
+                else:
+                    values[index] = checked.value
+                valid_support.extend(support)
+                supported_cells += 1
+            except SourcesQLError as error:
+                if error.code not in {"evidence_invalid", "invalid_output"}:
+                    raise
+                if fields:
+                    item[field] = None
+                else:
+                    values[index] = None
+                errors.append(
+                    {
+                        "item": index,
+                        "field": field,
+                        "code": error.code,
+                        "message": error.safe_message,
+                    }
+                )
+    if errors:
+        usage["field_errors"] = errors
+    outcome = validate_outcome(
+        "SEM_EXTRACT_ALL",
+        text,
+        values,
+        "processed" if errors else output["status"],
+        valid_support,
+        fields,
+        options,
+        usage,
+    )
+    if errors and not supported_cells:
+        outcome.status = errors[0]["code"]
+        usage["validation_error"] = {"code": errors[0]["code"], "message": errors[0]["message"]}
+    return outcome
 
 
 def extraction_item_limit(options: dict) -> int:
@@ -617,6 +698,8 @@ class PydanticSemanticProvider:
                     stable_global_ids=False,
                 )
                 return SemanticOutcome([mapping[v] for v in collection], "processed", usage=usage)
+            if operator == "SEM_EXTRACT_ALL" and isinstance(output["value"], list):
+                return validate_all_outcome(text, output, fields, options, usage)
             if operator == "SEM_EXTRACT" and fields and isinstance(output["value"], dict):
                 return validate_named_outcome(text, output, fields, options, usage)
             return validate_outcome(

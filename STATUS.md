@@ -29,7 +29,10 @@ published. Operator evidence and quality experiments remain private.
 The candidate now retains partial research by default. Missing facts remain NULL;
 named extraction fields with invalid support become unavailable without discarding
 independently cited siblings. Explicit strict execution remains available.
-Field diagnostics and partial status survive semantic-cache reuse. Bounded batches
+Field diagnostics and partial status survive semantic-cache reuse. Multi-entity
+extraction also retains item positions and supported sibling fields; an invalid
+quotation cannot discard every other entity from that parsed source response.
+Invalid-only results are not cached as usable evidence. Bounded batches
 and targeted follow-up instructions preserve completed work without repeating
 discovery or replaying uncertain submissions.
 

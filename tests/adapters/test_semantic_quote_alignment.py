@@ -176,7 +176,14 @@ def test_exact_quote_cannot_substitute_for_missing_field_or_item_support(change)
         operator="SEM_EXTRACT_ALL",
         fields={"name": "campus name", "capacity": "planned MW"},
     )
-    assert outcome.value is None and outcome.status == "evidence_invalid"
+    assert outcome.value == [
+        {"name": "Aurora", "capacity": "500"},
+        {"name": "Birch", "capacity": None},
+    ]
+    assert outcome.status == "processed"
+    assert outcome.usage["field_errors"][0]["item"] == 1
+    assert outcome.usage["field_errors"][0]["field"] == "capacity"
+    assert not any(span["item"] == 1 and span["field"] == "capacity" for span in outcome.support)
 
 
 def test_fixture_and_public_span_validation_still_require_exact_supplied_coordinates():

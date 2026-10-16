@@ -49,9 +49,12 @@ They do not establish live semantic quality or a hosted ChatGPT qualification.
 
 
 Research requests default to `partial_policy: "retain_partial"`. Missing facts
-remain NULL. For named `SEM_EXTRACT` fields, invalid evidence makes that field
-unavailable while independently supported siblings retain their values and
-citations; the receipt remains partial. Set `partial_policy: "strict"` explicitly
+remain NULL. For named `SEM_EXTRACT` fields and `SEM_EXTRACT_ALL` items, invalid evidence
+makes only the affected cell unavailable while independently supported siblings
+retain their values and source quotations; the receipt remains partial.
+Multi-entity extraction preserves item order and evidence indices, including NULL
+slots for unavailable values. Unsupported later transformations still retain
+input-set evidence rather than claiming direct cell citations. Set `partial_policy: "strict"` explicitly
 when the whole result must be rejected if required semantic processing fails.
 A failed field is distinct from an ordinarily absent fact.
 

@@ -369,3 +369,92 @@ def test_named_field_failure_defaults_to_partial_with_citations_and_strict_still
     assert error.value.code == "evidence_invalid"
     assert error.value.safe_message == "Required semantic field is unavailable"
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("case", ["mixed", "all_invalid", "not_stated", "scalar"])
+def test_all_keeps_original_entities_null_slots_and_partial_cache_contract(
+    tmp_path, monkeypatch, case
+):
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+    from sourcesql.providers import ProviderRegistry
+    from sourcesql.providers.semantic import PydanticSemanticProvider
+
+    text = "Aurora Campus is proposed; Birch Campus is operating. proposed remains tentative."
+    values = [
+        {"name": "Aurora Campus", "status": "proposed"},
+        {"name": "Birch Campus", "status": "operating"},
+    ]
+    support = [
+        {"item": 0, "field": "name", "quote": "Aurora Campus"},
+        {"item": 0, "field": "status", "quote": "proposed"},
+        {"item": 1, "field": "name", "quote": "Birch Campus"},
+        {"item": 1, "field": "status", "quote": "is operating"},
+    ]
+    status = "supported_text"
+    expected = [
+        {"name": "Aurora Campus", "status": None},
+        {"name": "Birch Campus", "status": "operating"},
+    ]
+    query = "SELECT UNNEST(SEM_EXTRACT_ALL(content,'entities',name := 'name',status := 'status'),recursive := true) FROM input.saved"
+    if case == "all_invalid":
+        support = []
+        expected = [{"name": None, "status": None}, {"name": None, "status": None}]
+    elif case == "not_stated":
+        values = [{"name": None, "status": None}, {"name": None, "status": None}]
+        support = []
+        status = "not_stated"
+        expected = values
+    elif case == "scalar":
+        values = ["Aurora Campus", "Birch Campus"]
+        support = [{"item": 1, "quote": "Birch Campus"}]
+        expected = [{"name": None}, {"name": "Birch Campus"}]
+        query = "SELECT UNNEST(SEM_EXTRACT_ALL(content,'names')) AS name FROM input.saved"
+    calls = []
+
+    def model(_messages, info):
+        calls.append(1)
+        return ModelResponse(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "value": values,
+                        "status": status,
+                        "support": support,
+                    },
+                )
+            ]
+        )
+
+    provider = PydanticSemanticProvider(FunctionModel(model))
+    monkeypatch.setattr(ProviderRegistry, "semantic", lambda self, *args: provider.semantic(*args))
+    engine = Engine(tmp_path / "engine")
+    source = imported(engine, [("content", "VARCHAR")], [{"content": text}])
+    arguments = {"query": query, "inputs": {"saved": binding(source)}}
+    result = engine.query(**arguments)
+    assert result["rows"] == expected
+    assert all(column["logical_type"] == "VARCHAR" for column in result["columns"])
+    assert result["receipt"]["status"] == ("completed" if case == "not_stated" else "partial")
+    assert result["receipt"]["plan_complete"] is (case == "not_stated")
+    outcome = result["operator_outcomes"][0]
+    assert bool(outcome["field_errors"]) is (case != "not_stated")
+    if case == "mixed":
+        assert {s["item"] for s in outcome["support"]} == {0, 1}
+        assert not any(s["item"] == 0 and s["field"] == "status" for s in outcome["support"])
+    elif case == "scalar":
+        assert [s["item"] for s in outcome["support"]] == [1]
+    elif case == "all_invalid":
+        assert outcome["status"] == "evidence_invalid" and outcome["support"] == []
+    assert len(calls) == 1
+    replay = engine.query(**arguments)
+    assert replay["rows"] == expected and replay["receipt"]["status"] == result["receipt"]["status"]
+    assert len(calls) == (2 if case == "all_invalid" else 1)
+    if case != "not_stated":
+        with pytest.raises(SourcesQLError) as error:
+            engine.query(**arguments, partial_policy="strict")
+        assert error.value.code == "evidence_invalid"
+        assert len(calls) == (3 if case == "all_invalid" else 1)
+    else:
+        assert engine.query(**arguments, partial_policy="strict")["rows"] == expected
+        assert len(calls) == 1

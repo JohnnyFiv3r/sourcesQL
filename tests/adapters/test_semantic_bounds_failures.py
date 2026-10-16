@@ -255,3 +255,174 @@ def test_named_extraction_all_invalid_stays_unavailable_instead_of_claiming_not_
     assert outcome.value is None and outcome.status == "evidence_invalid"
     assert {e["field"] for e in outcome.usage["field_errors"]} == {"name", "status"}
     assert not outcome.support and len(provider.events) == 1
+
+
+def all_fixture(value, support, *, fields=None, status="supported_text", options=None, text=None):
+    calls = []
+
+    def model(_messages, info):
+        calls.append(1)
+        return ModelResponse(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "value": value,
+                        "status": status,
+                        "support": support,
+                    },
+                )
+            ],
+            usage=RequestUsage(input_tokens=20, output_tokens=10),
+        )
+
+    provider = PydanticSemanticProvider(FunctionModel(model))
+    budget = Budget()
+    outcome = provider.semantic(
+        "SEM_EXTRACT_ALL",
+        text or "Aurora Campus is proposed; Birch Campus is operating. proposed remains tentative.",
+        "stated entities",
+        fields or {},
+        options or {},
+        budget,
+    )
+    assert len(calls) == budget.counts["model_requests"] == 1
+    return outcome, provider
+
+
+@pytest.mark.parametrize(
+    "bad_support",
+    [
+        [],
+        [{"item": 0, "field": "status", "quote": "Invented status"}],
+        [{"item": 0, "field": "status", "quote": "proposed"}],
+    ],
+)
+def test_all_preserves_two_entities_and_independent_fields_when_one_quote_fails(bad_support):
+    fields = {"name": "campus name", "status": "grid status"}
+    outcome, _ = all_fixture(
+        [
+            {"name": "Aurora Campus", "status": "proposed"},
+            {"name": "Birch Campus", "status": "operating"},
+        ],
+        [
+            {"item": 0, "field": "name", "quote": "Aurora Campus"},
+            {"item": 1, "field": "name", "quote": "Birch Campus"},
+            {"item": 1, "field": "status", "quote": "is operating"},
+            *bad_support,
+        ],
+        fields=fields,
+    )
+    assert outcome.value == [
+        {"name": "Aurora Campus", "status": None},
+        {"name": "Birch Campus", "status": "operating"},
+    ]
+    assert outcome.status == "processed"
+    assert [(span["item"], span["field"]) for span in outcome.support] == [
+        (0, "name"),
+        (1, "name"),
+        (1, "status"),
+    ]
+    assert outcome.usage["field_errors"] == [
+        {
+            "item": 0,
+            "field": "status",
+            "code": "evidence_invalid",
+            "message": outcome.usage["field_errors"][0]["message"],
+        }
+    ]
+    assert outcome.usage["requests"] == 1
+
+
+@pytest.mark.parametrize("item", [None, -1, 0, 8])
+def test_all_quotes_with_missing_or_other_item_index_cannot_support_the_second_entity(item):
+    outcome, _ = all_fixture(
+        [{"name": None}, {"name": "Birch Campus"}],
+        [
+            {
+                "field": "name",
+                "quote": "Birch Campus",
+                **({"item": item} if item is not None else {}),
+            }
+        ],
+        fields={"name": "campus name"},
+    )
+    assert outcome.value == [{"name": None}, {"name": None}]
+    assert outcome.status == "evidence_invalid" and outcome.support == []
+    assert outcome.usage["field_errors"][0]["item"] == 1
+
+
+def test_all_legitimate_null_cell_does_not_borrow_another_field_or_create_an_error():
+    outcome, _ = all_fixture(
+        [
+            {"name": "Aurora Campus", "status": None},
+            {"name": "Birch Campus", "status": "operating"},
+        ],
+        [
+            {"item": 0, "field": "name", "quote": "Aurora Campus"},
+            {"item": 1, "field": "name", "quote": "Birch Campus"},
+            {"item": 1, "field": "status", "quote": "is operating"},
+        ],
+        fields={"name": "campus name", "status": "grid status"},
+    )
+    assert outcome.value[0]["status"] is None and "field_errors" not in outcome.usage
+    assert outcome.status == "supported_text"
+    assert [(s["item"], s["field"]) for s in outcome.support] == [
+        (0, "name"),
+        (1, "name"),
+        (1, "status"),
+    ]
+
+
+@pytest.mark.parametrize("status", ["not_stated", "no_match"])
+def test_all_declared_null_items_preserve_unstated_semantics_without_errors(status):
+    values = [{"name": None}, {"name": None}]
+    outcome, _ = all_fixture(values, [], fields={"name": "campus name"}, status=status)
+    assert outcome.value == values and outcome.status == status
+    assert "field_errors" not in outcome.usage and not outcome.support
+
+
+def test_all_invalid_named_items_keep_null_shape_and_unavailable_noncached_status():
+    outcome, _ = all_fixture(
+        [{"name": "Aurora", "status": "invented"}, {"name": "Birch", "status": "invented"}],
+        [],
+        fields={"name": "name", "status": "status"},
+    )
+    assert outcome.value == [{"name": None, "status": None}, {"name": None, "status": None}]
+    assert outcome.status == "evidence_invalid"
+    assert len(outcome.usage["field_errors"]) == 4 and not outcome.support
+    assert outcome.status not in {
+        "supported_text",
+        "processed",
+        "not_stated",
+        "unknown",
+        "no_match",
+    }
+
+
+def test_scalar_all_null_slots_keep_item_positions_and_the_typed_array_contract():
+    from sourcesql.engine import validate_table
+
+    outcome, _ = all_fixture(
+        ["Aurora", "Birch", "Cedar"],
+        [{"item": 1, "quote": "Birch"}, {"item": 2, "quote": "Cedar"}],
+        text="Aurora Birch Cedar",
+    )
+    assert outcome.value == [None, "Birch", "Cedar"] and outcome.status == "processed"
+    assert [span["item"] for span in outcome.support] == [1, 2]
+    assert outcome.usage["field_errors"][0]["item"] == 0
+    table = validate_table(
+        [{"key": "names", "logical_type": "VARCHAR[]"}], [{"names": outcome.value}]
+    )
+    assert table.rows == [{"names": [None, "Birch", "Cedar"]}]
+
+
+def test_all_bound_or_global_schema_failure_never_becomes_recovered_placeholder_rows():
+    for values in [["name"] * 9, [5]]:
+        outcome, _ = all_fixture(values, [])
+        assert outcome.value is None and outcome.status == "invalid_output"
+        assert "field_errors" not in outcome.usage
+    unknown, _ = all_fixture(None, [], status="unknown")
+    assert unknown.value is None and unknown.status == "unknown"
+    empty, _ = all_fixture([], [], status="no_match")
+    assert empty.value == [] and empty.status == "no_match" and "field_errors" not in empty.usage
