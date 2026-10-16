@@ -34,6 +34,30 @@ jobs:
       - run: python -m pip install build twine
       - run: python -m build
       - run: python -m twine check dist/*
+      - name: Verify reviewed release artifact hashes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, tomllib
+          # Add each release only after its immutable artifacts are qualified.
+          reviewed = {
+              "0.2.3": {
+                  "sourcesql-0.2.3-py3-none-any.whl": "13e2f14c46f60602b47651a9a6b175a79598f9afcd02db4cb9836ebec762e17a",
+                  "sourcesql-0.2.3.tar.gz": "adfb5292fb6cf98e0fdbef2bd929687d28ef40dc637fe66d60efb8119deca84c",
+              },
+          }
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          if version not in reviewed:
+              raise SystemExit("Release requires reviewed immutable artifact hashes")
+          expected = reviewed[version]
+          if {path.name for path in Path("dist").iterdir()} != set(expected):
+              raise SystemExit("Unexpected release artifact set")
+          for filename, digest in expected.items():
+              actual = hashlib.sha256((Path("dist") / filename).read_bytes()).hexdigest()
+              if actual != digest:
+                  raise SystemExit("Artifact hash mismatch: " + filename)
+          print("Exact reviewed release hashes verified")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: python-distributions
