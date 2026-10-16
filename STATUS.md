@@ -1,10 +1,50 @@
 # Project status
 
 sourcesQL includes a research SQL engine, an MCP App, local Docker packaging
-and optional Vercel/MotherDuck hosting. **0.2.1** corrects fresh personal-cloud
-setup; **0.2.0** adds compact checkpoints and manual evidence-backed updates. See
-the [0.2.1 release notes](docs/releases/0.2.1.md) for the hosting changes and the
-[0.2.0 notes](docs/releases/0.2.0.md) for continuation and update boundaries.
+and optional Vercel/MotherDuck hosting. **0.2.2** corrects fixture receipt
+classification and published review-history messages, and reports configured
+hosted worker versions. See the [0.2.2 release notes](docs/releases/0.2.2.md).
+The earlier 0.2.1 hosting and 0.2.0 continuation checks remain scoped below.
+
+## Released fixes and runtime alignment: 0.2.2
+
+[Release v0.2.2](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.2)
+was published from commit `7e5fb9c834969d87633db2ae8ded779ff27553dc`.
+The [release workflow](https://github.com/JohnnyFiv3r/sourcesQL/actions/runs/38846282859)
+passed all six installed-artifact checks: wheel and source distribution on Python
+3.12, 3.13 and 3.14. Tagged distribution digests matched the qualified candidate
+bytes. A fresh public-PyPI install outside the checkout on Python 3.13 matched
+the published wheel digest and passed fixture execution, saved reopening and
+offline bundle import. A network-disabled, read-only, nonroot Docker smoke
+verified version 0.2.2, actual two-row fixture execution, consistent
+`synthetic_fixture` metadata and receipts, saved reopening/export, and current
+plus retained UI resources. These checks made no provider calls; the focused
+Docker smoke did not repeat the full suite or qualify restart persistence.
+
+All four active hosted Flight definitions now use the reviewed 0.2.2 bundle.
+Independent fixture query dispatch from ChatGPT and Claude produced two fresh
+Pro jobs that succeeded in **10.402** and **10.267 seconds**, reporting
+engine 0.2.2 and the exact execution-wheel digest, with consistent result, receipt
+and `latest_receipt` fixture classification. Native inspection preserved the
+original result and confirmed the Pro reservation at **360 of 600 seconds**,
+including an earlier 120 seconds. Provider and Hobby limits stayed unchanged;
+neither received new execution. Actual ChatGPT and Claude apps rendered the saved
+one-row `proposed` successor
+and its published review history after parent refresh. Both displayed the
+publication baseline at revision 1 with retained decisions and evidence, without
+the earlier stale-baseline rejection message. The current deployed resource is
+`ui://sourcesql/research-2511fe6d0adf4f69.html`; the former a19 resource remains
+served for older components. The deployment contains 15 static assets, including
+the current and 11 historical UI resources. Definition alignment does not qualify
+execution of all four workers or broader live research from each MCP host.
+
+Fresh **0.2.2 personal-cloud onboarding remains unqualified**. The packaged setup
+still sends inline files; the measured rollout payload was 10.79 MB. Its initial
+inline attempt lost status without a deployment ID, while the successful
+existing-project rollout used an operator-only content-reference helper. This
+does not establish a numeric service limit or qualify the public setup path.
+Content-addressed public uploads and fresh provisioning are the next adoption
+work; the earlier clean 0.2.1 Hobby result remains historical evidence.
 
 ## Fresh hosting: 0.2.1
 
@@ -130,12 +170,13 @@ fixture Flight, **10.934 seconds** of runtime, **120 seconds** reserved, zero
 provider reservation, no active or queued jobs, and the original result hash
 unchanged.
 
-The measured hosted runtime reported **0.2.0**, while the released library was
+That earlier hosted runtime reported **0.2.0**, while the released library was
 **0.2.1**. These checks qualify the shared fixture acquisition and observed host
 controls, not an upgraded worker, independent host query dispatches, live-source
 research or a complete lifecycle. Reopening showed a UI defect: published review
 history displayed a stale-baseline rejection message after parent refresh despite
-correct saved data. The local fix described below is not yet deployed.
+correct saved data. The 0.2.2 rollout and actual host checks above corrected that
+message without changing the retained result.
 Claude subsequently completed an actual native full-JSON download of the
 published successor, producing a **123,492-byte** file with valid text-resource
 metadata. An earlier refresh-child attempt opened a disabled Download dialog and
@@ -148,12 +189,10 @@ with zero network attempts, SQL execution or worker dispatch. This does not
 qualify full app-store/MCP restoration, Claude-host import or checkpoint-file
 download.
 
-**Unreleased fixes:** the published-review history copy now takes precedence
-over stale-baseline rejection text in a local UI change; 12 component tests,
-typechecking and the local production UI build pass. A local engine change aligns fixture classification between
-top-level results and receipts while preserving private-derived precedence;
-two focused tests and Ruff pass. These are prepared fixes, not released or
-deployed behavior, and the focused checks do not establish full qualification.
+The two fixes released in 0.2.2 preserve private-derived classification precedence
+and the requirement to recheck unpublished stale proposals. Their initial local
+checks passed 12 UI component tests, typechecking, a production build, two focused
+engine tests and Ruff; release and actual host evidence is recorded above.
 
 ChatGPT also saved a selected-field checkpoint; a fresh Claude conversation
 resumed that same canonical selection/revision as `ready`. Both hosts saved,
@@ -161,9 +200,9 @@ read and cancelled a manual update request. Claude prepares a composer draft
 that requires Send. The checkpoint file-download control was unavailable in the
 measured ChatGPT session and remains unqualified.
 
-The current immutable UI is
-`ui://sourcesql/research-a19abdd86f97fd03.html`; ten earlier resources remain
-available to older components. The branding footer is removed. Controlled checks
+The earlier immutable UI was
+`ui://sourcesql/research-a19abdd86f97fd03.html` and remains available to older
+components. The branding footer is removed. Controlled checks
 reproduced the old 88-pixel selection jump; the new layout stays the same height
 before selection, with its toolbar visible and after dismissal at desktop/mobile
 widths. Actual ChatGPT and Claude checks also retained a 240-pixel frame for the
@@ -175,7 +214,7 @@ In Claude, use **Connectors → Yours → sourcesQL → More options → Refresh
 list**, then reopen saved research. A fresh chat alone may retain cached UI
 metadata.
 
-Remaining gates are [fresh-account Hobby onboarding, provider-specific host
+Remaining gates are [fresh 0.2.2 provisioning, fresh-account Hobby onboarding, provider-specific host
 rendering and the unqualified client paths](docs/adoption-verification.md).
 The bounded Brave/Serper Vercel HTTP checks below completed after fresh allowance
 verification under the original namespaces and limits. Their temporary test-access
@@ -219,7 +258,7 @@ or comparative product quality.
 
 ## Published adoption release evidence
 
-These are recorded checks for the 0.1.x releases. Current candidate checks are
+These are recorded checks for the 0.1.x releases. Current release checks are
 listed above; an older passing result does not qualify a changed workflow.
 
 Version **0.1.2** changed dark-mode surfaces to neutral charcoal and gray, keeping

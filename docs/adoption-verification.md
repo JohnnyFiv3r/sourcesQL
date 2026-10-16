@@ -4,6 +4,45 @@ A package install, a working gateway and a rendered MCP App establish different
 parts of the adoption path. Keep their evidence separate when qualifying a new
 release or helping someone connect their own account.
 
+## Released qualification: 0.2.2
+
+[v0.2.2](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.2) was
+published from `7e5fb9c834969d87633db2ae8ded779ff27553dc`. Its
+[release workflow](https://github.com/JohnnyFiv3r/sourcesQL/actions/runs/38846282859)
+passed six installed-artifact checks: wheel and source distribution on Python
+3.12, 3.13 and 3.14. Tagged artifact digests matched the qualified candidate.
+A fresh Python 3.13 public-PyPI install outside the checkout matched the published
+wheel digest and passed two-row fixture execution, saved reopening and offline
+bundle import without credentials or provider calls. A network-disabled,
+read-only, nonroot Docker smoke verified installed/runtime/MCP
+version 0.2.2, two-row fixture execution, consistent top-level/receipt
+`synthetic_fixture` classification, saved app reopening/export and current plus
+retained resource reads. This focused check did not repeat the full suite or
+qualify browser rendering or restart persistence. All four active hosted Flight
+definitions were aligned with the reviewed 0.2.2
+bundle. Independent fixture query dispatch from ChatGPT and Claude produced two
+fresh Pro jobs that succeeded in 10.402 and 10.267 seconds with
+engine 0.2.2, the exact execution-wheel digest and consistent result, receipt and
+`latest_receipt` classification. The original result remained unchanged. Pro
+reservation was 360 of 600 seconds, including an earlier 120 seconds; provider
+and Hobby caps stayed unchanged with no new execution on those paths.
+Definition alignment is separate from executed proof for all four workers.
+Both actual ChatGPT and Claude apps rendered the saved one-row `proposed`
+successor and published review history after parent refresh, showing publication
+baseline revision 1 with retained decisions and evidence. The misleading
+stale-baseline rejection message was absent. The deployed current resource is
+`ui://sourcesql/research-2511fe6d0adf4f69.html`; retained a19 resource reads also
+passed. Each host submitted its own fixture query, polled its job, read the
+result and opened the actual app; the published-history check used saved data.
+
+Fresh installed-CLI **0.2.2 personal-cloud provisioning remains unqualified**.
+Packaged setup still uses inline files; the measured rollout payload was 10.79 MB.
+The initial inline attempt lost status without a deployment ID, and the successful
+existing-project rollout used an operator-only content-reference helper. No
+numeric service limit was established. Public content-addressed upload and fresh
+provisioning need their own implementation and first-attempt qualification;
+the clean 0.2.1 Hobby check below does not qualify this changed release path.
+
 ## Published baseline: 0.1.2
 
 The published **0.1.2** wheel was installed into a fresh Python 3.13 environment
@@ -73,8 +112,8 @@ reservation, zero provider reservation, no active or queued jobs, and an unchang
 original result hash.
 
 The reopened published review history displayed a stale-baseline rejection
-message after parent refresh despite correct saved data. Its local fix is not
-yet deployed. Claude later completed an actual native full-JSON download of the
+message after parent refresh despite correct saved data. The 0.2.2 release and
+actual host checks above corrected that message. Claude later completed an actual native full-JSON download of the
 published successor: a 123,492-byte file with valid text-resource metadata. The
 earlier refresh-child attempt with a disabled Download button was cancelled and
 remains separate history. ChatGPT still displayed an explicit unsupported-host
@@ -100,11 +139,10 @@ reopening without shortened production expiry. Installed ChatGPT settings showed
 one sourcesQL entry. Temporary test connections were removed from installed
 connections; Claude's original bearer connection was retained.
 
-**Unreleased fixes:** local published-history copy prioritization passes 12
-component tests, typechecking and the local production UI build. A local engine fixture-classification fix
-keeps top-level results and receipts consistent while retaining private-derived
-precedence; two focused tests and Ruff pass. These prepared changes are not
-released or deployed, and the focused checks are not full qualification.
+The 0.2.2 fixes preserve private-derived classification precedence and stale
+proposal checks before publication. Initial local checks passed 12 UI component
+tests, typechecking, a production build, two focused engine tests and Ruff;
+release and actual host qualification is recorded separately above.
 
 ## Clean Hobby onboarding: 0.2.1
 
@@ -169,12 +207,13 @@ ChatGPT/Claude rendering, broad research quality or a worker upgrade to 0.2.1.
 
 | Path | Observed | Still needs separate qualification |
 | --- | --- | --- |
-| Python package | Published wheel install, fixture execution, stored reopening, portable import and repeatable cloud planning | A new release needs its own artifact checks |
-| Personal cloud | Clean installed-CLI setup/resume in an existing Hobby workspace, one fixture Flight, stored reopening, separate ChatGPT/Claude OAuth rendering and two renewal cycles per host | Fresh-account signup, long-term token expiration, live-provider research and full client lifecycle |
+| Python package | 0.2.2 wheel/sdist installed checks on Python 3.12–3.14; fresh public-PyPI install on Python 3.13, fixture execution, saved reopening and offline import | Each changed release or adopter path needs its own checks |
+| Personal cloud | 0.2.1 clean installed-CLI setup/resume in an existing Hobby workspace, one fixture Flight, stored reopening, separate ChatGPT/Claude OAuth rendering and two renewal cycles per host | Public content-addressed uploads and fresh 0.2.2 provisioning, fresh-account signup, long-term token expiration, live-provider research and full client lifecycle |
+| Hosted runtime | Four active definitions aligned to 0.2.2; independent fixture query dispatch from each host verified two Pro jobs, their execution wheel and classification | Execution of the remaining aligned workers; provider/Hobby execution and broader live host research |
 | Exa | Earlier bounded hosted Auto research and durable results | Current provider configuration and broad research quality |
 | Brave and Serper | One query and three excerpt rows per provider through protected Vercel HTTP, existing 0.1.0 Flights, and fresh HTTP saved-result reads/reopening | Provider-specific host rendering, broader coverage and research quality; adopter accounts need their own checks |
-| ChatGPT | Clean Hobby OAuth rendering and two temporary-registration renewal cycles; replacement original connection with offline consent; checkpoint/request checks and shared fixture review/publication, navigation, refresh acceptance and fresh successor reopening | Replacement connection's expiry cycles, long-term token expiration, deployed stale-history message fix, file export, independent host query dispatch and full lifecycle |
-| Claude | Clean Hobby OAuth rendering and two renewal cycles; earlier correction/checkpoint/request checks, shared fixture review/publication/navigation/refresh/reopening, and native full-JSON download with offline engine-archive import/reopening | Long-term token expiration, deployed stale-history message fix, full app-store/MCP restoration, Claude-host import, checkpoint-file download, independent host query dispatch and full lifecycle |
+| ChatGPT | Clean Hobby OAuth rendering and two temporary-registration renewal cycles; replacement original connection with offline consent; checkpoint/request and shared fixture lifecycle controls; independent fixture query dispatch and actual 0.2.2 published-history rendering | Replacement connection's expiry cycles, long-term token expiration, file export, broader live research and full lifecycle |
+| Claude | Clean Hobby OAuth rendering and two renewal cycles; earlier correction/checkpoint/request and shared fixture lifecycle controls; native JSON download with offline engine-archive reopening; independent fixture query dispatch and actual 0.2.2 published-history rendering | Long-term token expiration, full app-store/MCP restoration, Claude-host import, checkpoint-file download, broader live research and full lifecycle |
 | Cursor | Local Docker fixture rendering and paging | Hosted authentication and full lifecycle; app messaging was unavailable in the tested setup |
 | Continuation 0.2.0 | Installed artifacts, controlled engine/app/Docker/browser checks and stored-data hosted MCP recovery | Remaining client lifecycle paths and fresh-account adoption |
 

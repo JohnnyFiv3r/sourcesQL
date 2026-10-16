@@ -1,9 +1,10 @@
 # Adoption and product roadmap
 
-**0.2.0** includes compact checkpoints and bounded manual evidence-backed
-updates. Installed distributions, controlled engine/app/Docker paths, and actual
-ChatGPT/Claude manual review and publication have been exercised. Fresh-account
-and remaining client checks stay separate.
+**0.2.2** corrects fixture classification and published review-history messages,
+and reports configured hosted worker versions. Installed artifacts, restricted
+Docker execution, two Pro fixture jobs and actual ChatGPT/Claude rendering pass.
+The earlier 0.2.0 checkpoint/manual-update and 0.2.1 clean Hobby evidence remain
+scoped separately from fresh provisioning and remaining client checks.
 
 Implementation, release and actual host qualification are separate milestones.
 See [current status](../STATUS.md) for recorded evidence and
@@ -41,6 +42,15 @@ packaged plugin is not needed. Local Docker remains an alternative adoption path
 
 ## 1. Finish adoption verification
 
+Implement public content-addressed deployment uploads before qualifying fresh
+0.2.2 provisioning. Packaged personal-cloud setup still sends inline files; the
+measured rollout payload was 10.79 MB. An initial inline attempt lost status
+without a deployment ID; the successful existing-project rollout used an
+operator-only content-reference helper. This does not establish a numeric service
+limit or qualify public onboarding. Preserve plan integrity, resumable attempts
+and private credential handling, then measure a clean installed-CLI first attempt
+from an empty setup workspace without that helper or reused receipts.
+
 Qualify account signup and consent with an eligible adopter's fresh personal
 accounts. Clean installed-CLI setup, the static-first deployment path, one bounded
 fixture Flight and separate ChatGPT/Claude OAuth rendering have passed in an
@@ -77,14 +87,20 @@ The actual Claude download also passed offline engine-archive import and fresh
 local reopening without network, SQL execution or worker dispatch; this does not
 establish full app-store/MCP restoration or Claude-host import.
 
+The deployed 0.2.2 UI now also passes actual published-history rendering after
+parent refresh in both hosts, retaining baseline revision 1 and review evidence
+without the earlier stale-baseline rejection message. Independent fixture query
+dispatch from each host also passed query submission, polling, result reading
+and actual app opening.
+
 Use saved data and controlled fixtures for remaining checkpoint stale-revision,
 checkpoint-file download and full app-store/MCP restoration checks. Preserve canonical IDs and original
 revisions in each
 host receipt. Successful tool responses and local browser tests remain separate
 from actual host rendering.
 
-Qualify independent host dispatch and the remaining research lifecycle paths
-separately from the shared-fixture controls. For Cursor, qualify hosted
+Qualify broader live research and the remaining lifecycle paths separately from
+the fixture controls. For Cursor, qualify hosted
 authentication and the supported lifecycle separately
 from local Docker rendering. Keep actions that require unavailable app messaging
 disabled and describe that limitation explicitly. Use a small approved provider
@@ -93,10 +109,14 @@ run only when fixture or saved-data checks cannot establish the behavior.
 ## 3. Keep released artifacts and hosted runtimes aligned
 
 Keep released source, installed artifacts, Docker and deployed resources in
-agreement. The shared-fixture hosted runtime reported 0.2.0 against the released
-0.2.1 library; publishing a package does not upgrade existing workers. Qualify
-that runtime alignment explicitly. Prepared local history-copy and receipt
-classification fixes still need release and deployment checks.
+agreement. The earlier shared-fixture run reported 0.2.0 against the then-released
+0.2.1 library. All four active definitions are now aligned to the reviewed 0.2.2
+bundle; two fresh Pro fixture runs verified its execution wheel and consistent
+classification. Provider and Hobby limits stayed unchanged without new execution.
+The release passed six installed-artifact checks across Python 3.12–3.14, a fresh
+public-PyPI install, a restricted Docker smoke and actual host rendering checks.
+Remaining workers still need their own executed qualification. Publishing a
+package alone does not upgrade a Flight or establish that it ran.
 Publish only artifacts covered by release checks and identify
 any remaining host or adopter gates in the release notes. Refresh client tool
 definitions after a server update; reopen saved results rather than repeating
