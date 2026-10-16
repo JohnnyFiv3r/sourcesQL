@@ -158,8 +158,10 @@ class Engine implements ResearchEngine {
         {
           evidence_id: `e_${suffix}_capacity`,
           row_id: rowId,
+          column_key: "capacity",
           field: "capacity",
           source_version_id: sourceId,
+          status: "supported_text",
           support: [{ quote }],
         },
         ...(discovery
@@ -167,8 +169,10 @@ class Engine implements ResearchEngine {
               {
                 evidence_id: "e_discovery_issuer",
                 row_id: rowId,
+                column_key: "issuer",
                 field: "issuer",
                 source_version_id: sourceId,
+                status: "supported_text",
                 support: [{ quote: "Gamma" }],
               },
             ]

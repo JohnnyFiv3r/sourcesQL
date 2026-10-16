@@ -250,6 +250,7 @@ class Engine:
             "dialect": "duckdb",
             "sqlglot_version": "30.19.0",
             "operators": sorted(EXTERNAL),
+            "input_views": ["original", "effective", "sources"],
             "default_profile": "fixture",
             "profiles": [
                 {
@@ -277,7 +278,7 @@ class Engine:
             "limitations": [
                 "No historical index replay",
                 "Semantic source-local shape restrictions",
-                "Input-set lineage for composed SQL",
+                "Cell lineage for supported projections and joins; other shapes retain input-set lineage",
                 "No schedules",
                 "No automatic provider fallback",
             ],
@@ -302,8 +303,8 @@ class Engine:
             view = binding.get("view", "original")
             revision = binding.get("amendment_revision")
             if (
-                view not in ("original", "effective")
-                or (view == "original" and revision is not None)
+                view not in ("original", "effective", "sources")
+                or (view in ("original", "sources") and revision is not None)
                 or (view == "effective" and (type(revision) is not int or revision < 0))
             ):
                 raise SourcesQLError(
@@ -322,6 +323,18 @@ class Engine:
             ):
                 raise SourcesQLError(
                     "revision_conflict", "Effective input revision does not match retained view"
+                )
+            if view == "sources":
+                from sourcesql.execution.evidence import retained_sources
+                from sourcesql.sql.admission import SOURCE_COLUMNS
+
+                documents = retained_sources(self.store, meta["result_id"])
+                table = Table(
+                    list(SOURCE_COLUMNS),
+                    [
+                        {column.key: source.get(column.key) for column in SOURCE_COLUMNS}
+                        for _, source in sorted(documents.items())
+                    ],
                 )
             tables[alias] = table
             parents.append(
@@ -468,8 +481,11 @@ class Engine:
                 return self.read_result(prior["result_id"])
             return {"run_id": prior["run_id"], "receipt": prior, "result_id": None}
         self.active[run_id] = budget
-        sources = {}
-        evidence = []
+        from sourcesql.execution.evidence import EvidenceContext
+
+        attribution = EvidenceContext()
+        sources = attribution.sources
+        evidence = list(attribution.records.values())
         outcomes = []
         used_documents = set()
         deadline = time.monotonic() + budget.limits["dispatch_deadline_seconds"]
@@ -531,6 +547,8 @@ class Engine:
             return worker(sql, tables, params, timeout=min(30, remaining))
 
         try:
+            attribution.seed(inputs, request.get("inputs", {}), self.store)
+            evidence.extend(attribution.records.values())
             registry = ProviderRegistry(profile)
             registry.preflight(plan.custom_operators, budget)
             if self.worker is run_sql:
@@ -576,7 +594,7 @@ class Engine:
                                 "source_version_id",
                                 "src_" + hashlib.sha256(row["content"].encode()).hexdigest()[:32],
                             )
-                            sources[row["source_version_id"]] = row
+                            attribution.add_source(row)
                         normalized.append(row)
                     if rows and not normalized:
                         raise SourcesQLError(
@@ -584,6 +602,11 @@ class Engine:
                             "No requested source was acquired",
                             "acquisition",
                         )
+                    target = context.get("_lineage_output")
+                    if isinstance(target, dict):
+                        for index, row in enumerate(normalized, 1):
+                            if isinstance(row.get("content"), str):
+                                target[(str(index), "content")] = [attribution.source_handle(row)]
                     return normalized
                 text = args[0]
                 instruction = args[1] if len(args) > 1 else ""
@@ -598,7 +621,7 @@ class Engine:
                     if isinstance(text, str)
                     else digest(text)
                 )
-                source = next((s for s in sources.values() if s.get("content") == text), None)
+                source = attribution.source_for(context.get("_input_lineage", []), text)
                 if source:
                     options.update(
                         source_version_id=source["source_version_id"],
@@ -606,10 +629,7 @@ class Engine:
                     )
                     if request.get(
                         "source_mode", "require_document"
-                    ) == "require_document" and source.get("content_basis") in (
-                        "snippet",
-                        "highlight",
-                    ):
+                    ) == "require_document" and not source.get("coverage", {}).get("complete"):
                         raise SourcesQLError(
                             "unsupported_capability",
                             "Document content is required before semantic processing",
@@ -686,22 +706,23 @@ class Engine:
                     or {"state": "unavailable", "cost_microusd": None, "basis": "not_reported"}
                 )
                 if value["support"]:
-                    evidence.append(
-                        {
-                            "evidence_id": "e_" + uuid.uuid4().hex,
-                            "operator": operator,
-                            "field": context.get("_output_field"),
-                            "source_version_id": source.get("source_version_id")
-                            if source
-                            else context.get("_source_version_id"),
-                            "support": value["support"],
-                            "status": value["status"],
-                            "semantic_truth_verified": False,
-                            "inspected_input": text
-                            if source is None and isinstance(text, str)
-                            else None,
-                        }
+                    base = {
+                        "evidence_id": "e_" + uuid.uuid4().hex,
+                        "operator": operator,
+                        "field": context.get("_output_field"),
+                        "source_version_id": source.get("source_version_id") if source else None,
+                        "support": value["support"],
+                        "status": value["status"],
+                        "semantic_truth_verified": False,
+                        "inspected_input": text
+                        if source is None and isinstance(text, str)
+                        else None,
+                    }
+                    target = context.get("_lineage_output")
+                    records = (
+                        attribution.record(base, fields, target) if isinstance(target, dict) else []
                     )
+                    evidence.extend(records or [base])
                 if (
                     value["status"]
                     in (
@@ -767,46 +788,12 @@ class Engine:
                 table = Table(
                     [c for c in table.columns if c.key != column],
                     [{k: v for k, v in row.items() if k != column} for row in table.rows],
+                    [
+                        {path: refs for path, refs in tags.items() if path[0] != column}
+                        for tags in table.lineage
+                    ],
                 )
-            from sqlglot import exp
-
-            simple = (
-                isinstance(plan.tree, exp.Select)
-                and not plan.tree.args.get("joins")
-                and not plan.tree.args.get("group")
-                and not plan.tree.args.get("with_")
-                and not list(plan.tree.find_all(exp.Subquery))
-            )
-            eligible = (
-                {
-                    p.alias
-                    for p in plan.tree.expressions
-                    if isinstance(p, exp.Alias)
-                    and isinstance(p.this, exp.Anonymous)
-                    and p.this.name.upper() == "SEM_EXTRACT"
-                }
-                if simple
-                else set()
-            )
-            if eligible and any(
-                isinstance(p, exp.Column) and p.name == "url" for p in plan.tree.expressions
-            ):
-                bound = []
-                for item in evidence:
-                    source = sources.get(item.get("source_version_id"))
-                    if (
-                        item.get("field") in eligible
-                        and source
-                        and len([s for s in sources.values() if s["url"] == source["url"]]) == 1
-                    ):
-                        bound.extend(
-                            {**item, "row_id": row_id}
-                            for row_id, row in zip(row_ids, table.rows)
-                            if row.get("url") == source["url"]
-                        )
-                    else:
-                        bound.append(item)
-                evidence = bound
+            evidence, source_bindings, bound_cells = attribution.bind(table, row_ids, evidence)
             with self.lock:
                 if budget.cancelled:
                     raise SourcesQLError("cancelled", "Run cancelled", "publish")
@@ -837,7 +824,9 @@ class Engine:
                         "source_versions": list(sources.values()),
                         "evidence": evidence,
                         "operator_outcomes": outcomes,
-                        "lineage_precision": "input_set",
+                        "lineage_precision": "cell_where_proven" if bound_cells else "input_set",
+                        "bound_evidence_cells": bound_cells,
+                        "source_bindings": source_bindings,
                         "replay_level": "recomputable_inputs" if sources else "values_only",
                         "created_at": receipt["finished_at"],
                     },

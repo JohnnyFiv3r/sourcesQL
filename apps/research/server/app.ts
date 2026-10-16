@@ -114,7 +114,7 @@ export async function createResearchApplication(options: AppOptions = {}) {
         await readFile(join(root, "fixtures/water-procurement.json"), "utf8"),
       ),
     ),
-    async (snapshot) => {
+    async (snapshot, context) => {
       if (
         !snapshot.origin ||
         !["sourcesql", "open-webql"].includes(snapshot.origin.engine) ||
@@ -137,11 +137,22 @@ export async function createResearchApplication(options: AppOptions = {}) {
           "Result reference metadata does not match canonical engine data",
         );
       const offset = snapshot.previewOffset ?? 0;
+      const saved = context?.source === "saved_state";
+      const expectedRows = resolved.rows.slice(
+        offset,
+        offset + snapshot.rows.length,
+      );
+      // Stored citation annotations may have been rendered by an earlier app.
+      // Reauthorize the immutable result and its row values before replacing
+      // those annotations. Caller-provided imports still require exact rows,
+      // including citations; an input cannot opt into this store-owned path.
+      const immutableRows = (rows: typeof snapshot.rows) =>
+        rows.map(({ id, values }) => ({ id, values }));
       if (
-        snapshot.rows.length <= 100 &&
+        (saved || snapshot.rows.length <= 100) &&
         !isDeepStrictEqual(
-          snapshot.rows,
-          resolved.rows.slice(offset, offset + snapshot.rows.length),
+          saved ? immutableRows(snapshot.rows) : snapshot.rows,
+          saved ? immutableRows(expectedRows) : expectedRows,
         )
       )
         throw new Error("Result preview does not match canonical engine data");

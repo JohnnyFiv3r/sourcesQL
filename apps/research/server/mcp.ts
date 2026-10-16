@@ -1525,16 +1525,16 @@ export function createServer(
     const inputPin = z
       .object({
         result_id: id,
-        view: z.enum(["original", "effective"]),
+        view: z.enum(["original", "effective", "sources"]),
         amendment_revision: z.number().int().nonnegative().nullable(),
       })
       .strict()
       .refine(
         (v) =>
-          v.view === "original"
+          v.view !== "effective"
             ? v.amendment_revision === null
             : v.amendment_revision !== null,
-        "Original view needs null; effective view needs an exact app revision",
+        "Original and sources views need null; effective view needs an exact app revision",
       );
     const querySchema = z
       .object({
@@ -1564,7 +1564,10 @@ export function createServer(
           .optional(),
         inputs: z
           .record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/), inputPin)
-          .default({}),
+          .default({})
+          .describe(
+            "Pin saved input results. original reads stored values; effective pins an exact app revision; sources reads canonical retained source documents without fetching, when advertised by capabilities. original/sources require amendment_revision:null.",
+          ),
         profile: z
           .string()
           .regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/)
@@ -1746,7 +1749,7 @@ export function createServer(
               resultSnapshotForAccess(original),
               options.access,
             );
-            if (pin.view === "original") {
+            if (pin.view !== "effective") {
               inputs[alias] = pin;
               continue;
             }

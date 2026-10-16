@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   snapshotSchema,
+  webUrl,
   type Snapshot,
   type CellValue,
 } from "../src/schema.js";
@@ -155,26 +156,67 @@ export function resultSnapshot(
   const capturedAt = String(
     result.receipt.finished_at ?? result.receipt.completed_at ?? "",
   );
+  const fields = new Set(result.columns.map((column) => column.key));
+  const sources = new Map(
+    result.source_versions.map((source) => [source.source_version_id, source]),
+  );
+  const lineage = result.evidence.filter((entry) => !entry.row_id);
   const rows = result.rows.map((values, index) => {
     const rowId = result.row_ids[index];
     const records = result.evidence.filter((e) => e.row_id === rowId);
-    const lineage = result.evidence.filter((e) => !e.row_id);
     const evidence: Record<string, string[]> = {};
+    const cellSources: NonNullable<Snapshot["rows"][number]["cellSources"]> =
+      {};
     const urls = new Set<string>();
+    const seenSupport = new Set<string>();
     for (const entry of records) {
-      const source = result.source_versions.find(
-        (s) => s.source_version_id === entry.source_version_id,
-      );
-      if (source && typeof source.url === "string") urls.add(source.url);
-      const field = String(entry.column_key ?? entry.field ?? "");
+      const field = entry.column_key;
+      if (
+        typeof field !== "string" ||
+        !fields.has(field) ||
+        values[field] === null ||
+        values[field] === undefined ||
+        (entry.status !== undefined &&
+          !["supported_text", "processed", "no_match"].includes(
+            String(entry.status),
+          ))
+      )
+        continue;
       for (const span of (Array.isArray(entry.support)
         ? entry.support
         : Array.isArray(entry.support_spans)
           ? entry.support_spans
           : []) as Record<string, unknown>[]) {
-        if (field && typeof span.quote === "string")
-          (evidence[field] ??= []).push(span.quote);
-        if (typeof span.url === "string") urls.add(span.url);
+        if (
+          !span ||
+          typeof span !== "object" ||
+          typeof span.quote !== "string" ||
+          !span.quote.trim()
+        )
+          continue;
+        const sourceVersionId =
+          span.source_version_id ?? entry.source_version_id;
+        const supportIdentity = JSON.stringify([
+          field,
+          entry.evidence_id ?? entry.id ?? null,
+          sourceVersionId ?? null,
+          span.quote,
+          span.start ?? null,
+          span.end ?? null,
+          span.field ?? null,
+          span.item ?? null,
+        ]);
+        if (seenSupport.has(supportIdentity)) continue;
+        seenSupport.add(supportIdentity);
+        (evidence[field] ??= []).push(span.quote);
+        // Only canonical source-version references establish citation links.
+        // An output URL or an input-set reference cannot prove this cell.
+        const url = sources.get(sourceVersionId)?.url;
+        if (typeof url === "string" && webUrl.safeParse(url).success) {
+          urls.add(url);
+          if (!(cellSources[field] ?? []).some((source) => source.url === url))
+            (cellSources[field] ??= []).push({ url });
+        }
       }
     }
     return {
@@ -185,14 +227,17 @@ export function resultSnapshot(
         ? { sources: [...urls].slice(0, 12).map((url) => ({ url })) }
         : {}),
       evidenceRefs: [...records, ...lineage]
-        .map((e) => String(e.id ?? e.evidence_id ?? ""))
-        .filter(Boolean),
+        .map((entry) => String(entry.id ?? entry.evidence_id ?? ""))
+        .filter((id, index, refs) => !!id && refs.indexOf(id) === index),
       evidence,
-      verificationNote: records.length
+      cellSources,
+      verificationNote: Object.keys(evidence).length
         ? "Direct textual support; not a truth guarantee."
         : lineage.length
           ? "Input-set lineage; no direct cell attribution."
-          : "No directly attributed evidence.",
+          : records.length
+            ? "Evidence retained; no direct cell attribution."
+            : "No directly attributed evidence.",
     };
   });
   return {

@@ -43,6 +43,9 @@ class Column:
 class Table:
     columns: list[Column]
     rows: list[dict[str, Any]]
+    # Coordinator-only opaque evidence references, keyed by column/struct path.
+    # Worker requests and public table payloads contain values and types only.
+    lineage: list[dict[tuple[str, ...], list[str]]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {"columns": [c.to_dict() for c in self.columns], "rows": self.rows}

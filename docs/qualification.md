@@ -53,7 +53,7 @@ as enforcement evidence.
 
 Live tests need named provider/model configuration, explicit destination and private-data permissions where relevant, credentials and an owner-approved total budget. They must measure actual search/fetch/semantic behavior, usage and unresolved remote outcomes, rather than accepting mock receipts as real billing. Fixture scores and curated extraction answers do not measure live semantic quality.
 
-Source completeness and semantic quality need a defined corpus and reference judgments. Exact supporting spans establish textual support. Composed SQL currently retains conservative input-set lineage; the app does not manufacture final-cell attribution where the engine has not established it.
+Source completeness and semantic quality need a defined corpus and reference judgments. Exact supporting spans establish textual support. Direct SQL projections and supported joins retain canonical cell evidence. Unsupported transformations retain conservative input-set lineage; the app does not manufacture final-cell attribution from matching values or output URLs.
 
 Hosted qualification needs an actual user-driven expansion and refresh loop on each claimed host: durable request → host message/turn → query → request-bound save → explicit render → persisted reopen/review. A message acknowledgement is not execution, a save is not rendering, and a local browser preview is not a hosted result. Record the host/version and observed artifacts before making a host claim.
 

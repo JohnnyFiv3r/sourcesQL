@@ -494,8 +494,8 @@ export function sourcesForSelection(
   field?: string,
 ): z.infer<typeof source>[] {
   const candidates =
-    field && row.cellSources?.[field]
-      ? row.cellSources[field]
+    field && row.cellSources !== undefined
+      ? (row.cellSources[field] ?? [])
       : [
           ...(row.sourceUrl ? [{ url: row.sourceUrl }] : []),
           ...(row.sources ?? []),

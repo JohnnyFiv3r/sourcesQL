@@ -212,7 +212,11 @@ test("source selection keeps cell provenance specific and aggregates whole-row s
     ["https://example.com/deadline", "https://example.com/context"],
   );
   assert.equal(sourcesForSelection(row, "issuer").length, 1);
-  assert.equal(sourcesForSelection(row, "disposition").length, 2);
+  assert.equal(
+    sourcesForSelection(row, "disposition").length,
+    0,
+    "An explicit cell-source map does not attribute unrelated row sources to an unlisted field",
+  );
   assert.deepEqual(
     sourcesForSelection(row).map((s) => s.url),
     [

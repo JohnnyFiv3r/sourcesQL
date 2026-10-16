@@ -1160,6 +1160,10 @@ export class MotherDuckEngine implements ResearchEngine {
           "SEM_SCORE",
           "SEM_NORM",
         ],
+        input_views:
+          this.options.engineVersion === "0.2.3"
+            ? ["original", "effective", "sources"]
+            : ["original", "effective"],
         default_profile: "fixture",
         recommended_research_profile: this.options.exa
           ? "exa"

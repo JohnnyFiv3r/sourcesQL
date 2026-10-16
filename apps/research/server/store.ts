@@ -177,7 +177,10 @@ export class ResearchStore {
   constructor(
     private directory: string,
     private seed: Snapshot,
-    private resolveSnapshot?: (snapshot: Snapshot) => Promise<Snapshot>,
+    private resolveSnapshot?: (
+      snapshot: Snapshot,
+      context?: { source: "saved_state" },
+    ) => Promise<Snapshot>,
     private lockWaitMs = 3000,
     private options: ResearchStoreOptions = {},
   ) {
@@ -227,7 +230,7 @@ export class ResearchStore {
       state.snapshots = await Promise.all(
         state.snapshots.map((s) =>
           s.dataRef && (!selected || selected.has(s.id))
-            ? this.resolveSnapshot!(s)
+            ? this.resolveSnapshot!(s, { source: "saved_state" })
             : Promise.resolve(s),
         ),
       );

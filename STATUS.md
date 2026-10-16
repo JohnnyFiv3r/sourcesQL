@@ -24,10 +24,17 @@ Vercel and the versioned Flight; the projection made no provider or model calls.
 This is bounded integration qualification, not complete research coverage or
 factual-accuracy certification. Personal-cloud onboarding defaults retain their
 older search policy unless explicitly reconfigured. No 0.2.3 package has been
-published. Operator evidence and quality experiments remain private. Final projections
-currently retain input-set evidence rather than direct cell attribution. Combining
-complementary sources for one entity and verifying current status remain research
-quality work.
+published. Operator evidence and quality experiments remain private.
+
+The candidate now supports authorized reuse of retained source documents and
+canonical cell evidence through supported projections and joins. A bounded live
+three-document extraction preserved source dates and exact support; subsequent
+SQL combined reviewed announcement and progress sources without new provider
+calls. Unsupported transformations retain input-set evidence, and unresolved
+capacity and identity remain unknown. Saved tables rederive citation annotations
+from canonical engine data after immutable-value validation; caller-supplied
+imports retain full evidence checks. This does not establish population coverage,
+current status beyond the cited dates, or general research-quality parity.
 
 ## Released fixes and runtime alignment: 0.2.2
 

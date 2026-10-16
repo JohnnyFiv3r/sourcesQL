@@ -204,10 +204,23 @@ hosted deployment must be recorded separately.
 
 ## Evidence and coverage
 
-Retained exact quotes establish support in the inspected provider text. Final
-projections currently carry input-set lineage; they do not establish direct cell
-attribution. Inspect the retained field-named support and source dates, and keep
-historical plans distinct from current status.
+Retained exact quotes establish textual support in the inspected provider text.
+The engine carries canonical cell evidence through direct projections, aliases,
+CTEs, struct fields, filters, ordering, joins and branch-specific `CASE`/`COALESCE`.
+Aggregates, set operations and unsupported transformations retain input-set
+evidence instead of claiming direct cell support. An output URL or matching value
+does not establish attribution. Unknown cells do not inherit another cell's source.
+Keep publication dates and claim-specific as-of dates separate from retrieval time.
+A historical plan remains historical until a later source establishes progress.
+
+An input binding with `view: "sources"` and `amendment_revision: null` exposes the
+retained canonical source documents from an authorized result and its ancestors.
+It makes no fetch calls. Bound document content can be processed again under the
+normal semantic budgets; excerpts still require `source_mode: "allow_excerpt"`.
+Rank the preferred source for each field separately, then join the selected facts
+into the final entity row. Shared operator, state or investment amounts are only
+identity leads; require a shared site identifier, address or explicit source bridge
+before combining distinct documents. Preserve unresolved identities separately.
 
 A document can establish one requirement while leaving another unknown. For
 entity research, reconcile identity across complementary announcement and progress
