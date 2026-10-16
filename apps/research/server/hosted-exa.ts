@@ -80,7 +80,7 @@ export function validateExaPolicy(policy: HostedExaPolicy): void {
   if (
     !Number.isSafeInteger(policy.approvedCostMicrousd) ||
     policy.approvedCostMicrousd < 1 ||
-    policy.approvedCostMicrousd > 1000000 ||
+    policy.approvedCostMicrousd > (research ? 2_000_000 : 1_000_000) ||
     !Number.isSafeInteger(policy.dailyCostMicrousd) ||
     policy.dailyCostMicrousd < policy.approvedCostMicrousd ||
     // Trusted operator configuration ceiling; defaults and spending grants are separate.

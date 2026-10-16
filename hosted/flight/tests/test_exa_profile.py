@@ -701,3 +701,84 @@ def test_request_cannot_override_the_trusted_reasoning_effort(key):
     with pytest.raises(SourcesQLError) as error:
         policy.validate_request(research_request(settings, **{key: "high"}), settings, env)
     assert error.value.code == "unauthorized"
+
+
+@pytest.mark.parametrize("configured_model", [False, True])
+@pytest.mark.parametrize("profile", list(policy.SEARCH_TYPES))
+def test_explicit_research_v3_accepts_exact_two_dollars_across_configuration_and_request(
+    configured_model, profile
+):
+    env = research_environment(
+        model=configured_model, SOURCESQL_EXA_APPROVED_COST_MICROUSD="2000000"
+    )
+    settings = policy.load_configuration(env)
+    assert settings["descriptor"]["approved_cost_microusd"] == 2_000_000
+    assert settings["profiles"][profile]["approved_cost_microusd"] == 2_000_000
+    requested = research_request(
+        settings,
+        profile=profile,
+        budgets={**settings["descriptor"]["limits"], "max_cost_microusd": 2_000_000},
+    )
+    policy.validate_request(requested, settings, env)
+    requested["budgets"]["max_cost_microusd"] += 1
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(requested, settings, env)
+    assert error.value.code == "unauthorized"
+
+
+def test_research_v3_configuration_rejects_above_two_dollars_and_keeps_default():
+    with pytest.raises(ValueError):
+        policy.load_configuration(
+            research_environment(SOURCESQL_EXA_APPROVED_COST_MICROUSD="2000001")
+        )
+    env = research_environment()
+    del env["SOURCESQL_EXA_APPROVED_COST_MICROUSD"]
+    settings = policy.load_configuration(env)
+    assert settings["descriptor"]["approved_cost_microusd"] == 50_000
+    policy.validate_request(research_request(settings), settings, env)
+
+
+@pytest.mark.parametrize("version", ["exa-search.v1", "exa-research.v2"])
+def test_legacy_exa_approval_remains_bounded_to_one_dollar(version):
+    with pytest.raises(ValueError):
+        policy.load_configuration(
+            environment(
+                SOURCESQL_EXA_POLICY_VERSION=version,
+                SOURCESQL_EXA_APPROVED_COST_MICROUSD="1000001",
+            )
+        )
+    env = environment(
+        SOURCESQL_EXA_POLICY_VERSION=version,
+        SOURCESQL_EXA_APPROVED_COST_MICROUSD="1000000",
+    )
+    settings = policy.load_configuration(env)
+    limits = {**policy.LIMITS, "max_cost_microusd": 1_000_000}
+    if version == "exa-search.v1":
+        limits["dispatch_deadline_seconds"] = 60
+    policy.validate_request(request(budgets=limits), settings, env)
+    limits["max_cost_microusd"] += 1
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(request(budgets=limits), settings, env)
+    assert error.value.code == "unauthorized"
+
+
+@pytest.mark.parametrize("provider", ["brave", "serper"])
+def test_other_hosted_provider_approvals_remain_bounded_to_one_dollar(provider):
+    prefix = "SOURCESQL_" + provider.upper()
+    env = {
+        "SOURCESQL_ALLOW_LIVE_" + provider.upper(): "1",
+        prefix + "_APPROVED_COST_MICROUSD": "1000001",
+        prefix + "_REQUEST_COST_MICROUSD": "1000",
+        prefix + "_SECRET_NAME": "sourcesql_" + provider,
+    }
+    with pytest.raises(ValueError):
+        policy.load_configuration(env)
+    env[prefix + "_APPROVED_COST_MICROUSD"] = "1000000"
+    env["sourcesql_" + provider + "_" + provider.upper() + "_API_KEY"] = "SYNTHETIC-KEY"
+    settings = policy.load_configuration(env)
+    limits = {**policy.LIMITS, "dispatch_deadline_seconds": 60, "max_cost_microusd": 1_000_000}
+    policy.validate_request(request(profile=provider, budgets=limits), settings, env)
+    limits["max_cost_microusd"] += 1
+    with pytest.raises(SourcesQLError) as error:
+        policy.validate_request(request(profile=provider, budgets=limits), settings, env)
+    assert error.value.code == "unauthorized"

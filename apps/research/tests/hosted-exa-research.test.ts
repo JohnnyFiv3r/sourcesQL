@@ -39,6 +39,11 @@ test("gateway and credential-bearing Flight produce identical legacy and researc
     research(true),
     {
       ...research(true),
+      approvedCostMicrousd: 2_000_000,
+      dailyCostMicrousd: 20_000_000,
+    },
+    {
+      ...research(true),
       model: {
         name: "gpt-6-astra",
         secretName: "sourcesql_openai",
@@ -197,12 +202,45 @@ test("only explicit research v3 configuration permits a daily ceiling up to fift
     { ...base, policyVersion: "exa-search.v1", dailyCostMicrousd: 1_000_001 },
     { ...base, policyVersion: "exa-research.v2", dailyCostMicrousd: 1_000_001 },
     { ...research(), dailyCostMicrousd: 50_000_001 },
-    { ...research(), approvedCostMicrousd: 1_000_001 },
+    {
+      ...research(),
+      approvedCostMicrousd: 2_000_001,
+      dailyCostMicrousd: 3_000_000,
+    },
     { ...research(), dailyCostMicrousd: 49_999 },
     { ...research(), approvedCostMicrousd: Number.NaN },
     { ...research(), dailyCostMicrousd: Infinity },
   ])
     assert.throws(() => validateExaPolicy(policy));
+});
+
+test("research v3 permits an explicit two-dollar job grant without changing defaults or legacy grants", () => {
+  const policy = {
+    ...research(true),
+    approvedCostMicrousd: 2_000_000,
+    dailyCostMicrousd: 20_000_000,
+  };
+  validateExaPolicy(policy);
+  assert.equal(exaBudgets({}, policy, 100).max_cost_microusd, 2_000_000);
+  assert.equal(
+    exaBudgets({ max_cost_microusd: 2_000_000 }, policy, 100).max_cost_microusd,
+    2_000_000,
+  );
+  assert.throws(() =>
+    exaBudgets({ max_cost_microusd: 2_000_001 }, policy, 100),
+  );
+  assert.throws(() =>
+    validateExaPolicy({ ...policy, approvedCostMicrousd: 2_000_001 }),
+  );
+  assert.equal(exaBudgets({}, research(), 100).max_cost_microusd, 50_000);
+  for (const policyVersion of [undefined, "exa-search.v1", "exa-research.v2"])
+    assert.throws(() =>
+      validateExaPolicy({
+        ...base,
+        policyVersion,
+        approvedCostMicrousd: 1_000_001,
+      }),
+    );
 });
 
 test("model configuration must be an exact validated pair on research v3", () => {

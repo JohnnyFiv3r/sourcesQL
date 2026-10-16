@@ -21,6 +21,7 @@ SEARCH_TYPES = {
 }
 DEFAULT_APPROVED_COST_MICROUSD = 50_000
 MAX_APPROVED_COST_MICROUSD = 1_000_000
+MAX_RESEARCH_APPROVED_COST_MICROUSD = 2_000_000
 LIMITS = {
     "max_search_queries": 2,
     "max_search_requests": 2,
@@ -195,7 +196,8 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     if not re.fullmatch(r"[1-9][0-9]{0,6}", approval):
         raise ValueError("Exa requires a bounded positive integer approval")
     approved = int(approval)
-    if approved > MAX_APPROVED_COST_MICROUSD:
+    ceiling = MAX_RESEARCH_APPROVED_COST_MICROUSD if research else MAX_APPROVED_COST_MICROUSD
+    if approved > ceiling:
         raise ValueError("Exa approval exceeds this experiment's policy ceiling")
     secret_name = environment.get("SOURCESQL_EXA_SECRET_NAME") or None
     if secret_name is not None and not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", secret_name):
