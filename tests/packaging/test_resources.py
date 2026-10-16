@@ -3,6 +3,8 @@
 import hashlib
 import io
 import json
+from pathlib import Path
+import tomllib
 import zipfile
 
 import pytest
@@ -79,3 +81,19 @@ def test_materialization_does_not_follow_existing_symlinks(tmp_path, monkeypatch
     with pytest.raises(ValueError, match="symbolic link"):
         resources.materialize_personal_cloud(output)
     assert list(outside.iterdir()) == []
+
+
+def test_previous_deployed_widget_is_an_exact_materializable_public_template(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[2]
+    name = "apps/research/ui-history/research-2511fe6d0adf4f69.html"
+    body = (root / name).read_bytes()
+    assert len(body) == 676875
+    assert (
+        hashlib.sha256(body).hexdigest()
+        == "2511fe6d0adf4f693803ff5bd8e4760f3de0cae78593150ddb827c7d521c6475"
+    )
+    configuration = tomllib.loads((root / "pyproject.toml").read_text())
+    assert name in configuration["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+    installed_archive(tmp_path, monkeypatch, archive_for({name: body}))
+    output = resources.materialize_personal_cloud(tmp_path / "project")
+    assert (output / name).read_bytes() == body
