@@ -160,3 +160,98 @@ def test_duplicate_output_json_keeps_schema_diagnostic_and_completed_usage():
     assert provider.events[0]["status"] == "completed_validation_failed"
     assert provider.events[0]["error_code"] == "invalid_output"
     assert provider.events[0]["error_type"] == "schema"
+
+
+@pytest.mark.parametrize(
+    "bad_support",
+    [
+        [],
+        [{"field": "status", "quote": "Invented status"}],
+        [{"field": "status", "quote": "pending"}],
+    ],
+)
+def test_named_extraction_retains_cited_sibling_when_one_field_has_invalid_support(bad_support):
+    calls = []
+
+    def model(_messages, info):
+        calls.append(1)
+        return ModelResponse(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "value": {"name": "Aurora", "status": "pending"},
+                        "status": "supported_text",
+                        "support": [{"field": "name", "quote": "Aurora Campus"}, *bad_support],
+                    },
+                )
+            ],
+            usage=RequestUsage(input_tokens=12, output_tokens=8),
+        )
+
+    provider = PydanticSemanticProvider(FunctionModel(model))
+    budget = Budget()
+    outcome = provider.semantic(
+        "SEM_EXTRACT",
+        "Aurora Campus is pending; status remains pending.",
+        "facts",
+        {"name": "campus name", "status": "grid status"},
+        {},
+        budget,
+    )
+    assert outcome.value == {"name": "Aurora", "status": None}
+    assert outcome.status == "supported_text"
+    assert [(span["field"], span["quote"]) for span in outcome.support] == [
+        ("name", "Aurora Campus")
+    ]
+    assert outcome.usage["field_errors"][0]["field"] == "status"
+    assert outcome.usage["field_errors"][0]["code"] == "evidence_invalid"
+    assert len(calls) == budget.counts["model_requests"] == 1
+    assert outcome.usage["input_tokens"] == 12 and outcome.usage["output_tokens"] == 8
+
+
+def test_named_extraction_null_is_unstated_not_a_failed_sibling():
+    def model(_messages, info):
+        return ModelResponse(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "value": {"name": "Aurora", "status": None},
+                        "status": "supported_text",
+                        "support": [{"field": "name", "quote": "Aurora Campus"}],
+                    },
+                )
+            ]
+        )
+
+    provider = PydanticSemanticProvider(FunctionModel(model))
+    outcome = provider.semantic(
+        "SEM_EXTRACT", "Aurora Campus", "facts", {"name": "name", "status": "status"}, {}, Budget()
+    )
+    assert outcome.value == {"name": "Aurora", "status": None}
+    assert "field_errors" not in outcome.usage
+
+
+def test_named_extraction_all_invalid_stays_unavailable_instead_of_claiming_not_stated():
+    def model(_messages, info):
+        return ModelResponse(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "value": {"name": "Invented", "status": "pending"},
+                        "status": "supported_text",
+                        "support": [],
+                    },
+                )
+            ]
+        )
+
+    provider = PydanticSemanticProvider(FunctionModel(model))
+    outcome = provider.semantic(
+        "SEM_EXTRACT", "source", "facts", {"name": "name", "status": "status"}, {}, Budget()
+    )
+    assert outcome.value is None and outcome.status == "evidence_invalid"
+    assert {e["field"] for e in outcome.usage["field_errors"]} == {"name", "status"}
+    assert not outcome.support and len(provider.events) == 1

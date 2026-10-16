@@ -1606,7 +1606,12 @@ export function createServer(
           .default("fixture")
           .describe(SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS.profile),
         row_id_column: key.optional(),
-        partial_policy: z.enum(["strict", "retain_partial"]).optional(),
+        partial_policy: z
+          .enum(["strict", "retain_partial"])
+          .default("retain_partial")
+          .describe(
+            "Retain successful work and mark failed semantic values unavailable by default. Choose strict explicitly for an all-or-nothing result; partial output must retain its returned status.",
+          ),
         source_mode: z
           .enum(["require_document", "allow_excerpt"])
           .optional()

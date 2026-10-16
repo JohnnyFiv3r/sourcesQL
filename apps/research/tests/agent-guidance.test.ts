@@ -192,6 +192,71 @@ test("MCP initialize bounds extraction batches while retaining complete saved-so
   assert.deepEqual(wire.calls, []);
 });
 
+test("MCP wire plans per-field evidence and bounded saved-source partial research", async () => {
+  const wire = await discover();
+  const instructions = wire.instructions!;
+  assert.match(
+    instructions,
+    /multiple facts, use separate named SEM_EXTRACT fields with evidence := 'per_field'/,
+  );
+  assert.match(instructions, /rather than a scalar paragraph/);
+  assert.match(instructions, /ordinarily missing fact as SQL NULL/);
+  assert.match(
+    instructions,
+    /failed semantic processing is unavailable evidence/,
+  );
+  assert.match(instructions, /batches of 2 to 4 source documents/);
+  assert.match(instructions, /LIMIT in the candidate CTE before SEM_EXTRACT/);
+  assert.match(instructions, /not only in the outer final SELECT/);
+  assert.match(instructions, /Reuse the original input.sources relation/);
+  assert.match(
+    instructions,
+    /same source identity, content version, field definition, evidence options and model/,
+  );
+  assert.match(
+    instructions,
+    /semantic failure does not justify repeating discovery/,
+  );
+  assert.match(
+    instructions,
+    /user accepts gaps, explicitly pass partial_policy: 'retain_partial'/,
+  );
+  assert.match(
+    instructions,
+    /Reserve partial_policy: 'strict' for a user-requested all-or-nothing result/,
+  );
+  assert.match(
+    instructions,
+    /preserve that status.*rather than claiming complete coverage/,
+  );
+  assert.match(
+    instructions,
+    /Distinct content versions can differ in date, entity or scope/,
+  );
+  assert.match(
+    instructions,
+    /Do not blindly collapse distinct content versions/,
+  );
+  assert.match(
+    instructions,
+    /existing approved budget permits, perform one bounded sourcesQL follow-up using that entity and field/,
+  );
+  assert.match(
+    instructions,
+    /keep unrelated rows and fields unchanged.*leave the cell unknown/,
+  );
+  const query = wire.tools.find((tool) => tool.name === "sourcesql_query")!;
+  const properties = query.inputSchema.properties as Record<
+    string,
+    { enum?: string[] }
+  >;
+  assert.deepEqual(properties.partial_policy.enum, [
+    "strict",
+    "retain_partial",
+  ]);
+  assert.deepEqual(wire.calls, []);
+});
+
 test("MCP initialize preserves failure identity and requires approved fallback or uncertain-work recovery", async () => {
   const wire = await discover();
   const instructions = wire.instructions!;

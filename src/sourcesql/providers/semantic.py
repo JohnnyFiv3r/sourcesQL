@@ -228,6 +228,46 @@ def validate_outcome(
     return SemanticOutcome(value, status, support, usage)
 
 
+def validate_named_outcome(
+    text: str, output: dict, fields: dict[str, str], options: dict, usage: dict
+) -> SemanticOutcome:
+    """One unsupported named field cannot discard independently supported siblings."""
+    values = dict(output["value"])
+    valid_support = []
+    errors = []
+    for field, value in values.items():
+        if value is None:
+            continue
+        try:
+            support = align_model_quotes(
+                text, [span for span in output["support"] if span["field"] == field], options
+            )
+            validate_outcome(
+                "SEM_EXTRACT",
+                text,
+                {field: value},
+                output["status"],
+                support,
+                {field: fields[field]},
+                options,
+                {},
+            )
+            valid_support.extend(support)
+        except SourcesQLError as error:
+            if error.code not in {"evidence_invalid", "invalid_output"}:
+                raise
+            values[field] = None
+            errors.append({"field": field, "code": error.code, "message": error.safe_message})
+    if errors:
+        usage["field_errors"] = errors
+        if all(value is None for value in values.values()):
+            usage["validation_error"] = {"code": errors[0]["code"], "message": errors[0]["message"]}
+            return SemanticOutcome(None, errors[0]["code"], usage=usage)
+    return validate_outcome(
+        "SEM_EXTRACT", text, values, output["status"], valid_support, fields, options, usage
+    )
+
+
 def extraction_item_limit(options: dict) -> int:
     maximum = options.get("max_items", 8)
     if type(maximum) is not int or not 0 <= maximum <= 8:
@@ -577,6 +617,8 @@ class PydanticSemanticProvider:
                     stable_global_ids=False,
                 )
                 return SemanticOutcome([mapping[v] for v in collection], "processed", usage=usage)
+            if operator == "SEM_EXTRACT" and fields and isinstance(output["value"], dict):
+                return validate_named_outcome(text, output, fields, options, usage)
             return validate_outcome(
                 operator,
                 text,

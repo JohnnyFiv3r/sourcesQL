@@ -220,7 +220,7 @@ def test_engine_null_semantic_evidence_has_unprocessed_partial_receipt(tmp_path)
     data = imported(engine, [("content", "VARCHAR")], [{"content": None}])
     query = "SELECT SEM_MATCH(content,'specific campus') AS matched FROM input.a"
     with pytest.raises(SourcesQLError) as error:
-        engine.query(query=query, inputs={"a": binding(data)})
+        engine.query(query=query, inputs={"a": binding(data)}, partial_policy="strict")
     assert error.value.code == "invalid_output"
     partial = engine.query(
         query=query, inputs={"a": binding(data)}, partial_policy="retain_partial"
@@ -308,8 +308,64 @@ def test_model_failure_keeps_category_without_copying_provider_text(tmp_path, mo
         engine.query(
             query="SELECT SEM_EXTRACT(content,'stated value') AS value FROM input.saved",
             inputs={"saved": binding(source)},
+            partial_policy="strict",
         )
     assert error.value.code == code
     assert "PRIVATE_PROVIDER_BODY" not in error.value.safe_message
     assert len(calls) == 1
     assert engine.capabilities()["semantic_limits"]["extract_all_max_items_per_call"] == 8
+
+
+def test_named_field_failure_defaults_to_partial_with_citations_and_strict_still_fails(
+    tmp_path, monkeypatch
+):
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+    from sourcesql.providers import ProviderRegistry
+    from sourcesql.providers.semantic import PydanticSemanticProvider
+
+    calls = []
+
+    def model(_messages, info):
+        calls.append(1)
+        return ModelResponse(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "value": {"name": "Aurora Campus", "status": "invented"},
+                        "status": "supported_text",
+                        "support": [{"field": "name", "quote": "Aurora Campus"}],
+                    },
+                )
+            ]
+        )
+
+    provider = PydanticSemanticProvider(FunctionModel(model))
+    monkeypatch.setattr(ProviderRegistry, "semantic", lambda self, *args: provider.semantic(*args))
+    engine = Engine(tmp_path / "engine")
+    source = imported(engine, [("content", "VARCHAR")], [{"content": "Aurora Campus"}])
+    arguments = {
+        "query": "WITH extracted AS (SELECT SEM_EXTRACT(content,'facts',name := 'name',status := 'status') AS facts FROM input.saved) SELECT facts.name AS name,facts.status AS status FROM extracted",
+        "inputs": {"saved": binding(source)},
+    }
+    result = engine.query(**arguments)
+    assert result["rows"] == [{"name": "Aurora Campus", "status": None}]
+    assert result["columns"] == [
+        {"key": "name", "label": "name", "logical_type": "VARCHAR", "nullable": True},
+        {"key": "status", "label": "status", "logical_type": "VARCHAR", "nullable": True},
+    ]
+    assert result["receipt"]["status"] == "partial" and result["receipt"]["plan_complete"] is False
+    assert result["operator_outcomes"][0]["field_errors"][0]["field"] == "status"
+    assert any(
+        s["quote"] == "Aurora Campus" for e in result["evidence"] for s in e.get("support", [])
+    )
+    assert len(calls) == 1
+    # Cached successful siblings must retain the unavailable-cell diagnostic.
+    replay = engine.query(**arguments)
+    assert replay["receipt"]["status"] == "partial" and len(calls) == 1
+    with pytest.raises(SourcesQLError) as error:
+        engine.query(**arguments, partial_policy="strict")
+    assert error.value.code == "evidence_invalid"
+    assert error.value.safe_message == "Required semantic field is unavailable"
+    assert len(calls) == 1

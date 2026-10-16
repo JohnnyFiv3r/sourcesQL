@@ -404,7 +404,7 @@ class Engine:
                     "disclosure_required",
                     "Private dependencies require exact destination permission",
                 )
-        if request.get("partial_policy", "strict") not in ("strict", "retain_partial"):
+        if request.get("partial_policy", "retain_partial") not in ("strict", "retain_partial"):
             raise SourcesQLError("invalid_request", "Invalid partial policy")
         if request.get("source_mode", "require_document") not in (
             "require_document",
@@ -585,7 +585,7 @@ class Engine:
                                     "safe_message": "Source fetch failed",
                                 }
                             )
-                            if request.get("partial_policy", "strict") == "strict":
+                            if request.get("partial_policy", "retain_partial") == "strict":
                                 raise SourcesQLError(
                                     "provider_unavailable", "Required source fetch failed", "fetch"
                                 )
@@ -659,6 +659,7 @@ class Engine:
                         "cost_microusd": 0,
                         "state": "cache_reuse",
                         "original_usage": value.get("usage", {}),
+                        "field_errors": value.get("usage", {}).get("field_errors", []),
                     }
                 else:
                     outcome = registry.semantic(
@@ -695,6 +696,7 @@ class Engine:
                         "operator": operator,
                         "source_version_id": source.get("source_version_id") if source else None,
                         "status": value["status"],
+                        "field_errors": (value.get("usage") or {}).get("field_errors", []),
                         "field": context.get("_output_field"),
                         "support": value["support"],
                         "inspected_input": text
@@ -733,8 +735,16 @@ class Engine:
                         "evidence_invalid",
                         "invalid_output",
                     )
-                    and request.get("partial_policy", "strict") == "strict"
-                ):
+                    or (value.get("usage") or {}).get("field_errors")
+                ) and request.get("partial_policy", "retain_partial") == "strict":
+                    field_errors = (value.get("usage") or {}).get("field_errors") or []
+                    if field_errors:
+                        code = field_errors[0].get("code")
+                        if code not in {"invalid_output", "evidence_invalid"}:
+                            code = "invalid_output"
+                        raise SourcesQLError(
+                            code, "Required semantic field is unavailable", "semantic"
+                        )
                     failure = (value.get("usage") or {}).get("failure") or {}
                     failure_messages = {
                         "provider_timeout": "Semantic model request timed out",
@@ -767,6 +777,7 @@ class Engine:
             partial = bool(receipt["errors"]) or any(
                 o["status"]
                 in ("failed", "not_processed", "unprocessed", "evidence_invalid", "invalid_output")
+                or bool(o.get("field_errors"))
                 for o in outcomes
             )
             capture_provider_state()
