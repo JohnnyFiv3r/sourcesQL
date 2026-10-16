@@ -21,10 +21,13 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           python - <<'PY'
-          import os, pathlib, re, tomllib
+          import json, os, pathlib, re, tomllib
           version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
           package = pathlib.Path("src/sourcesql/__init__.py").read_text()
           assert re.search(r'__version__ = "' + re.escape(version) + r'"', package)
+          app = json.loads(pathlib.Path("apps/research/package.json").read_text())
+          lock = json.loads(pathlib.Path("apps/research/package-lock.json").read_text())
+          assert app["version"] == lock["version"] == lock["packages"][""]["version"] == version
           if os.environ["GITHUB_REF_TYPE"] == "tag":
               assert os.environ["RELEASE_TAG"] == "v" + version
           PY
@@ -62,9 +65,53 @@ jobs:
           name: package-qualification-${{ matrix.python }}
           path: package-report.json
 
+  container:
+    needs: [build, qualify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Qualify the exact Linux image
+        env:
+          SOURCESQL_DOCKER_APP_OUTPUT: artifacts/container-release
+        run: bash scripts/qualify-docker-app.sh
+      - name: Record image identity
+        run: |
+          docker image inspect sourcesql:app --format '{{json .}}' > artifacts/container-release/publish-image.json
+          docker image inspect sourcesql:app --format '{{.Id}}' > artifacts/container-release/publish-image-id.txt
+      - name: Publish the qualified image
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${GITHUB_REF_NAME#v}"
+          qualified_id="$(cat artifacts/container-release/publish-image-id.txt)"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag "$qualified_id" "$image:$version"
+          test "$(docker image inspect "$image:$version" --format '{{.Id}}')" = "$qualified_id"
+          docker push "$image:$version" | tee artifacts/container-release/push.log
+          docker image inspect "$image:$version" --format '{{json .RepoDigests}}' > artifacts/container-release/published-digests.json
+          docker logout ghcr.io
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-qualification
+          path: artifacts/container-release/
+          if-no-files-found: error
+
   publish:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build, qualify]
+    needs: [build, qualify, container]
     runs-on: ubuntu-latest
     environment:
       name: pypi

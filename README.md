@@ -186,7 +186,7 @@ See the [hosted provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/ma
 
 ## Status and development
 
-The [current status](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/STATUS.md) records package, Docker, provider and host qualification separately. Fresh-account Hobby onboarding, broad live research quality and the complete Claude/Cursor lifecycle still need qualification. Hosted semantic models are unavailable in the reviewed profiles.
+The [current status](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/STATUS.md) records package, Docker, provider and host qualification separately. Hosted Exa research can fetch source documents and use a configured semantic model; search-only profiles retain their smaller limits. Fresh-account onboarding, broad research coverage and client-specific behavior are qualified separately. See the [0.2.3 release notes](https://github.com/JohnnyFiv3r/sourcesQL/blob/v0.2.3/docs/releases/0.2.3.md) for the release scope.
 
 Run local checks from the repository root:
 

@@ -14,7 +14,7 @@ python3 - "$receipt_dir" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
 root = Path.cwd()
-paths = [root / name for name in ("pyproject.toml", "uv.lock", "apps/research/package.json", "apps/research/package-lock.json", "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html", "apps/research/vercel.json", "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh", "hosted/flight/runner.py", "hosted/flight/exa_profile.py", "hosted/flight/tests/test_exa_profile.py")]
+paths = [root / name for name in ("README.md", "hatch_build.py", "pyproject.toml", "uv.lock", "apps/research/package.json", "apps/research/package-lock.json", "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html", "apps/research/vercel.json", "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh", "hosted/flight/runner.py", "hosted/flight/exa_profile.py", "hosted/flight/tests/test_exa_profile.py")]
 for subtree in ("src/sourcesql", "tests", "apps/research/server", "apps/research/src", "apps/research/api", "apps/research/scripts", "apps/research/tests", "apps/research/fixtures"):
     paths.extend(path for path in (root / subtree).rglob("*") if path.is_file() and path.suffix in {".py", ".ts", ".tsx", ".css", ".json"})
 (Path(sys.argv[1]) / "source-hashes-before.json").write_text(json.dumps({str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(paths)}, indent=2) + "\n")
@@ -236,7 +236,7 @@ try:
     stdio.wait(timeout=10)
     assert stdio.returncode == 0
     stderr.close()
-    paths = [root / name for name in ("pyproject.toml", "uv.lock", "apps/research/package.json", "apps/research/package-lock.json", "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html", "apps/research/vercel.json", "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh", "hosted/flight/runner.py", "hosted/flight/exa_profile.py", "hosted/flight/tests/test_exa_profile.py")]
+    paths = [root / name for name in ("README.md", "hatch_build.py", "pyproject.toml", "uv.lock", "apps/research/package.json", "apps/research/package-lock.json", "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html", "apps/research/vercel.json", "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh", "hosted/flight/runner.py", "hosted/flight/exa_profile.py", "hosted/flight/tests/test_exa_profile.py")]
     for subtree in ("src/sourcesql", "tests", "apps/research/server", "apps/research/src", "apps/research/api", "apps/research/scripts", "apps/research/tests", "apps/research/fixtures"):
         paths.extend(path for path in (root / subtree).rglob("*") if path.is_file() and path.suffix in {".py", ".ts", ".tsx", ".css", ".json"})
     final_hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(paths)}

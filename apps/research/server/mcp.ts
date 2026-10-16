@@ -68,6 +68,12 @@ import {
   SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
 } from "./agent-guidance.js";
 
+const appVersion: string = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
+if (!/^\d+\.\d+\.\d+$/.test(appVersion))
+  throw new Error("Invalid app package version");
+
 export function createServer(
   store: ResearchStore,
   htmlPath: string,
@@ -84,7 +90,7 @@ export function createServer(
   const server = new McpServer(
     {
       name: "sourcesql-research-app",
-      version: "0.2.2",
+      version: appVersion,
       title: "sourcesQL",
       websiteUrl: "https://github.com/JohnnyFiv3r/sourcesQL",
       icons: [
