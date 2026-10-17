@@ -27,7 +27,7 @@ import {
 } from "./hosted-search.js";
 
 import type { ResearchCapacity } from "../src/job-view.js";
-import { safeExecutionError } from "./execution-errors.js";
+import { safeExecutionError, safeFailureContext } from "./execution-errors.js";
 
 type Row = Record<string, any>;
 export interface SqlClient {
@@ -134,7 +134,8 @@ const runColumns = `CAST(run_id AS VARCHAR) AS run_id,CAST(flight_id AS VARCHAR)
   flight_version,CAST(run_number AS VARCHAR) AS run_number,status,exit_code,CAST(config AS JSON)::VARCHAR AS config_json`;
 
 export class MotherDuckEngine implements ResearchEngine {
-  readonly supportsExplain = false;
+  readonly supportsExplain = true;
+  readonly supportsAsyncJobs = true;
   readonly namespace: string;
   readonly schema: string;
   readonly maxRuntime: number;
@@ -484,6 +485,7 @@ export class MotherDuckEngine implements ResearchEngine {
     const error = safeExecutionError(job.error_code);
     return {
       job_id: job.id,
+      operation: job.operation,
       request_id: job.request_id,
       status: job.status,
       pending:
@@ -494,17 +496,31 @@ export class MotherDuckEngine implements ResearchEngine {
       cancellation_requested: !!job.cancel_requested,
       created_at: job.created_at,
       updated_at: job.updated_at,
-      ...(job.status === "completed"
+      ...(job.status === "completed" && job.operation !== "explain"
         ? { result_id: job.result_id, run_id: job.engine_run_id }
         : {}),
+      ...(job.status === "completed" && job.operation === "explain"
+        ? { preflight: JSON.parse(job.output_json) } : {}),
       ...(job.status === "failed"
         ? {
             error_code: error.code,
             ...(job.engine_run_id ? { run_id: job.engine_run_id } : {}),
             error,
+            ...safeFailureContext(job.output_json ? JSON.parse(job.output_json) : {}),
           }
         : {}),
     };
+  }
+  private async authorizeCompletedJob(job: Row): Promise<void> {
+    if (job.operation !== "explain") {
+      await this.readResult({ result_id: job.result_id, limit: 0 });
+      return;
+    }
+    const explanation = JSON.parse(job.output_json);
+    await this.transaction(false, async (client) => {
+      for (const pin of explanation.input_pins ?? [])
+        await this.resultRecord(client, pin.result_id);
+    });
   }
   /** Existing daily rows also govern calendar-month reservations, including pre-upgrade work. */
   private async capacityForJob(
@@ -563,7 +579,7 @@ export class MotherDuckEngine implements ResearchEngine {
         };
     }
     const policy = this.options.exa ?? this.options.search;
-    if (job.provider_policy_sha256 && policy) {
+    if (job.operation === "query" && job.provider_policy_sha256 && policy) {
       const cost = Number(
         JSON.parse(job.request_json).budgets?.max_cost_microusd,
       );
@@ -633,7 +649,7 @@ export class MotherDuckEngine implements ResearchEngine {
     operation: string,
   ): { request: Row; requestId: string; hash: string } {
     let request: Row;
-    if (operation === "query") {
+    if (operation === "query" || operation === "explain") {
       const allowed = new Set([
         "query",
         "request_id",
@@ -644,6 +660,8 @@ export class MotherDuckEngine implements ResearchEngine {
         "partial_policy",
         "source_mode",
         "row_id_column",
+        "continuation_of",
+        "research_requirements",
       ]);
       if (
         Object.keys(params).some((key) => !allowed.has(key)) ||
@@ -730,7 +748,7 @@ export class MotherDuckEngine implements ResearchEngine {
         request.source_mode = "allow_excerpt";
       }
     } else {
-      if (!["import_table", "import"].includes(operation))
+      if (!["import_table", "import", "recover_run"].includes(operation))
         throw new BackendError(
           "unsupported_capability",
           "Hosted operation unavailable",
@@ -745,7 +763,7 @@ export class MotherDuckEngine implements ResearchEngine {
       );
     const hash = digest(stable({ operation, request }));
     const requestId =
-      operation === "query"
+      operation === "query" || operation === "explain"
         ? request.request_id
         : `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
     return { request, requestId, hash };
@@ -804,7 +822,7 @@ export class MotherDuckEngine implements ResearchEngine {
           time,
           this.options.flightId,
           this.maxRuntime,
-          operation === "query" &&
+          (operation === "query" || operation === "explain") &&
           (isExaProfile(input.request.profile) ||
             isHostedSearchProfile(input.request.profile))
             ? livePolicyFingerprint(this.options)
@@ -842,20 +860,19 @@ export class MotherDuckEngine implements ResearchEngine {
         dispatchBlocked = { code: error.code, message: error.message };
       }
     }
-    if (operation !== "query" && job.status === "completed") {
+    if (!["query", "explain"].includes(operation) && job.status === "completed") {
       const result = await this.readResult({ result_id: job.result_id });
       return {
         ...result,
         ...(job.output_json ? JSON.parse(job.output_json) : {}),
       };
     }
-    if (operation !== "query" && ["failed", "cancelled"].includes(job.status))
+    if (!["query", "explain"].includes(operation) && ["failed", "cancelled"].includes(job.status))
       throw new BackendError(
         job.status === "cancelled" ? "cancelled" : "execution_failed",
         "Stored materialization did not complete; inspect its job before creating new work",
       );
-    if (job.status === "completed")
-      await this.readResult({ result_id: job.result_id, limit: 0 });
+    if (job.status === "completed") await this.authorizeCompletedJob(job);
     const envelope = await this.queuedEnvelope(job);
     return {
       ...envelope,
@@ -874,7 +891,10 @@ export class MotherDuckEngine implements ResearchEngine {
     const candidate = await this.transaction(false, (client) =>
       this.getJob(client, id),
     );
-    if (candidate.status !== "queued") return candidate;
+    if (candidate.status !== "queued") {
+      if (candidate.status === "completed") await this.authorizeCompletedJob(candidate);
+      return candidate;
+    }
     if (candidate.flight_id !== this.options.flightId)
       throw new BackendError(
         "unsupported_capability",
@@ -1008,7 +1028,7 @@ export class MotherDuckEngine implements ResearchEngine {
           "budget_exhausted",
           this.capacityFailureMessage(capacity),
         );
-      if (job.provider_policy_sha256) {
+      if (job.operation === "query" && job.provider_policy_sha256) {
         const policy = this.options.exa ?? this.options.search;
         const cost = Number(
           JSON.parse(job.request_json).budgets.max_cost_microusd,
@@ -1162,8 +1182,7 @@ export class MotherDuckEngine implements ResearchEngine {
           job.flight_run_number === run.run_number &&
           !["SUCCEEDED", "FAILED", "CANCELLED"].includes(status)
         ) {
-          if (job.status === "completed")
-            await this.readResult({ result_id: job.result_id, limit: 0 });
+          if (job.status === "completed") await this.authorizeCompletedJob(job);
           return this.envelope(job);
         }
         job = await this.transaction(true, async (client) => {
@@ -1190,8 +1209,7 @@ export class MotherDuckEngine implements ResearchEngine {
       }
       // No match or multiple matches stays uncertain. Never repeat submission.
     }
-    if (job.status === "completed")
-      await this.readResult({ result_id: job.result_id, limit: 0 });
+    if (job.status === "completed") await this.authorizeCompletedJob(job);
     return this.queuedEnvelope(job);
   }
   async cancelJob(id: string): Promise<Row> {
@@ -1243,6 +1261,7 @@ export class MotherDuckEngine implements ResearchEngine {
         flight_id := '${job.flight_id}'::UUID,run_number := ${job.flight_run_number}::UBIGINT)`),
       ).catch(() => undefined);
     }
+    if (job.status === "completed") await this.authorizeCompletedJob(job);
     return this.envelope(job);
   }
   private async exportResult(id: string): Promise<Row> {
@@ -1286,6 +1305,7 @@ export class MotherDuckEngine implements ResearchEngine {
         sqlglot_version: "30.19.0",
         operators: [
           "WEB_SEARCH",
+          "SOURCE_WINDOW",
           "WEB_FETCH",
           "SEM_MATCH",
           "SEM_EXTRACT",
@@ -1398,13 +1418,21 @@ export class MotherDuckEngine implements ResearchEngine {
           this.options.exa?.policyVersion === "exa-research.v3"
             ? "Live research uses retained provider text; exact quotes establish text support, not source completeness or factual truth"
             : "Hosted private profiles are not configured; optional live providers are search-only",
-          "Explain requires local engine",
+          "Hosted explain runs canonical admission in a provider-free Flight and consumes configured Flight capacity",
           "Queued jobs require explicit start; status never dispatches",
           "Execution reserves are not an account-wide billing cap",
         ],
       };
-    else if (method === "query") result = await this.enqueue(params);
-    else if (method === "import_table" || method === "import")
+    else if (method === "query" || method === "explain") result = await this.enqueue(params, method);
+    else if (method === "resume_run") {
+      if (Object.keys(params).some((key) => !["run_id", "request_id"].includes(key)))
+        throw new BackendError("invalid_request", "Invalid continuation request");
+      const previous = await this.call<Row>("run_status", { run_id: params.run_id });
+      if (previous.status !== "failed" || previous.settlement_status !== "settled" || !previous.resume_request)
+        throw new BackendError("unsupported_capability", "Run cannot continue without inspection");
+      result = await this.enqueue({ ...previous.resume_request, request_id: identity(params.request_id), continuation_of: params.run_id });
+    }
+    else if (method === "import_table" || method === "import" || method === "recover_run")
       result = await this.enqueue(params, method);
     else if (method === "read_result") result = await this.readResult(params);
     else if (method === "job_status")

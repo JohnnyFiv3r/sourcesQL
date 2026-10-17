@@ -13,6 +13,12 @@ import {
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import {
+  exaConfiguration,
+  exaDescriptor,
+  exaFingerprint,
+  validateExaPolicy,
+} from "../apps/research/server/hosted-exa.ts";
 const require = createRequire(
   new URL("../apps/research/package.json", import.meta.url),
 );
@@ -29,6 +35,11 @@ export function parseArguments(arguments_, environment = process.env) {
     "--exa-secret",
     "--exa-approved-cost-microusd",
     "--exa-daily-cost-microusd",
+    "--openai-model",
+    "--openai-secret",
+    "--openai-reasoning-effort",
+    "--embedding-model",
+    "--embedding-secret",
     ...["brave", "serper"].flatMap((provider) => [
       `--${provider}-secret`,
       `--${provider}-approved-cost-microusd`,
@@ -81,19 +92,58 @@ export function parseArguments(arguments_, environment = process.env) {
     const approved = integer("--exa-approved-cost-microusd", 50_000);
     const daily = integer("--exa-daily-cost-microusd", 1_000_000);
     if (daily < approved) throw Error("invalid_configuration");
-    const descriptor = {
-      approved_cost_microusd: approved,
-      search_types: {
-        exa: "auto",
-        exa_deep: "deep",
-        exa_deep_reasoning: "deep-reasoning",
-      },
-      secret_name: secretName,
-      version: "exa-research.v2",
+    const semanticFlags = [
+      "--openai-model",
+      "--openai-secret",
+      "--openai-reasoning-effort",
+      "--embedding-model",
+      "--embedding-secret",
+    ];
+    const research = semanticFlags.some((flag) => selected.has(flag));
+    const policy = {
+      approvedCostMicrousd: approved,
+      dailyCostMicrousd: daily,
+      secretName,
+      policyVersion: research ? "exa-research.v3" : "exa-research.v2",
+      ...(selected.has("--openai-model") ||
+      selected.has("--openai-secret") ||
+      selected.has("--openai-reasoning-effort")
+        ? {
+            model: {
+              name: selected.get("--openai-model") ?? "",
+              secretName: selected.get("--openai-secret") ?? "",
+              ...(selected.has("--openai-reasoning-effort")
+                ? { reasoningEffort: selected.get("--openai-reasoning-effort") }
+                : {}),
+            },
+          }
+        : {}),
+      ...(selected.has("--embedding-model") ||
+      selected.has("--embedding-secret")
+        ? {
+            embedding: {
+              name: selected.get("--embedding-model") ?? "",
+              secretName: selected.get("--embedding-secret") ?? "",
+            },
+          }
+        : {}),
     };
+    try {
+      validateExaPolicy(policy);
+    } catch {
+      throw Error("invalid_configuration");
+    }
+    if (
+      [policy.model?.secretName, policy.embedding?.secretName].includes(
+        secretName,
+      )
+    )
+      throw Error("invalid_configuration");
+    const descriptor = exaDescriptor(policy);
     exa = {
       descriptor,
-      providerPolicySha256: hash(JSON.stringify(descriptor)),
+      policy,
+      providerPolicySha256: exaFingerprint(policy),
       dailyCostMicrousd: daily,
     };
   } else if (
@@ -102,6 +152,17 @@ export function parseArguments(arguments_, environment = process.env) {
   ) {
     throw Error("invalid_configuration");
   }
+  if (
+    !exa &&
+    [
+      "--openai-model",
+      "--openai-secret",
+      "--openai-reasoning-effort",
+      "--embedding-model",
+      "--embedding-secret",
+    ].some((flag) => selected.has(flag))
+  )
+    throw Error("invalid_configuration");
   let search;
   for (const provider of ["brave", "serper"]) {
     const secret = selected.get(`--${provider}-secret`);
@@ -188,17 +249,21 @@ export function flightConfiguration(options, namespace, schema) {
     JOB_ID: "unsubmitted",
     SOURCESQL_MOTHERDUCK_PG_HOST: options.host,
     ...searchSettings(options),
-    ...(options.exa
-      ? {
-          SOURCESQL_ALLOW_LIVE_EXA: "1",
-          SOURCESQL_EXA_POLICY_VERSION: options.exa.descriptor.version,
-          SOURCESQL_EXA_SECRET_NAME: options.exa.descriptor.secret_name,
-          SOURCESQL_EXA_APPROVED_COST_MICROUSD: String(
-            options.exa.descriptor.approved_cost_microusd,
-          ),
-        }
-      : {}),
+    ...(options.exa ? exaConfiguration(options.exa.policy) : {}),
   };
+}
+
+export function flightSecretNames(options) {
+  return [
+    ...new Set(
+      [
+        options.exa?.descriptor.secret_name,
+        options.search?.descriptor.secret_name,
+        options.exa?.descriptor.model?.secret_name,
+        options.exa?.descriptor.embedding?.secret_name,
+      ].filter(Boolean),
+    ),
+  ];
 }
 
 export function flightSQL(
@@ -215,7 +280,7 @@ export function flightSQL(
     config := MAP {${Object.entries(config)
       .map(([key, value]) => `${literal(key)}: ${literal(value)}`)
       .join(",")}},
-    ${options.exa || options.search ? `flight_secret_names := [${literal((options.exa ?? options.search).descriptor.secret_name)}],` : ""}
+    ${flightSecretNames(options).length ? `flight_secret_names := [${flightSecretNames(options).map(literal).join(",")}],` : ""}
     instance_type := 'F4',max_runtime_sec := 120)`;
 }
 
@@ -237,12 +302,7 @@ export function outputSettings(options, receipt) {
     ...searchSettings(options, true),
     ...(options.exa
       ? {
-          SOURCESQL_ALLOW_LIVE_EXA: "1",
-          SOURCESQL_EXA_POLICY_VERSION: options.exa.descriptor.version,
-          SOURCESQL_EXA_SECRET_NAME: options.exa.descriptor.secret_name,
-          SOURCESQL_EXA_APPROVED_COST_MICROUSD: String(
-            options.exa.descriptor.approved_cost_microusd,
-          ),
+          ...exaConfiguration(options.exa.policy),
           SOURCESQL_EXA_DAILY_COST_MICROUSD: String(
             options.exa.dailyCostMicrousd,
           ),
@@ -267,10 +327,10 @@ export async function main(arguments_ = process.argv.slice(2)) {
     const options = parseArguments(arguments_);
     if (options.help) {
       console.log(
-        "Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]",
+        "Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--openai-model MODEL --openai-secret NAME [--openai-reasoning-effort low]] [--embedding-model text-embedding-3-small --embedding-secret NAME] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]",
       );
       console.log(
-        "Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Optional search flags bind one existing Flight secret by name. Brave/Serper require an operator-set conservative request cost estimate; provider billing is unavailable. Saves token-free settings with submission disabled.",
+        "Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Search flags bind an existing Flight secret by name. Optional OpenAI model/embedding flags require Exa and bind existing OpenAI secrets under research v3; either may share one OpenAI secret. Brave/Serper require an operator-set conservative request cost estimate; provider billing is unavailable. Saves token-free settings with submission disabled.",
       );
       return;
     }

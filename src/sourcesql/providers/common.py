@@ -10,6 +10,7 @@ import json
 import socket
 from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit, urlunsplit
+from uuid import uuid4
 
 import httpx
 
@@ -80,6 +81,80 @@ def normalized_url(url: str) -> str:
         raise SourcesQLError("invalid_request", "Invalid HTTP source URL", "acquisition") from None
 
 
+def search_coverage_record(provider: str, queries: list[str], limit: int) -> dict[str, Any]:
+    """One local search invocation, distinct from a provider request or an entity."""
+    return {
+        "search_id": "search_" + uuid4().hex,
+        "provider": provider,
+        "requested_queries": len(queries),
+        "requested_per_query_limit": limit,
+        "coverage": "provider_returned_hits_only",
+        "corpus_complete": False,
+        "queries": [
+            {
+                "query_index": index,
+                "query": query,
+                "requested_limit": limit,
+                "status": "not_dispatched",
+                "returned_hits": None,
+                "retained_hits": 0,
+                "request_id": None,
+            }
+            for index, query in enumerate(queries)
+        ],
+    }
+
+
+def search_hit(
+    provider: str,
+    search_id: str,
+    query: str,
+    query_index: int,
+    rank: int,
+    request_id: Any = None,
+) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "search_id": search_id,
+        "query": query,
+        "query_index": query_index,
+        "rank": rank,
+        "request_id": request_id if isinstance(request_id, str) else None,
+    }
+
+
+def project_search_provenance(row: dict[str, Any]) -> dict[str, Any]:
+    """Expose typed hit metadata while retaining the original source-version lineage.
+
+    A shared URL/content version can have several hits. Counts describe search
+    coverage only; they never imply distinct entities, exhaustive recall or truth.
+    Legacy hit records may omit search_id/request_id, which remain SQL NULL.
+    """
+    hits = []
+    for hit in row.get("hits", []):
+        hits.append(
+            {
+                key: hit.get(key) if isinstance(hit.get(key), str) else None
+                for key in ("provider", "search_id", "query", "request_id")
+            }
+            | {
+                key: hit.get(key) if type(hit.get(key)) is int else None
+                for key in ("query_index", "rank")
+            }
+        )
+    row.update(
+        search_hits=hits,
+        search_hit_count=len(hits),
+        search_query_count=len(
+            {(hit["provider"], hit["search_id"], hit["query_index"], hit["query"]) for hit in hits}
+        ),
+        best_search_rank=min(
+            (hit["rank"] for hit in hits if hit["rank"] is not None), default=None
+        ),
+    )
+    return row
+
+
 def source_record(
     url: str,
     content: str | None,
@@ -117,6 +192,10 @@ def source_record(
         "content_sha256": content_sha256,
         "normalization_version": "text-v1",
         "provider": provider,
+        "search_hits": [],
+        "search_hit_count": 0,
+        "search_query_count": 0,
+        "best_search_rank": None,
         "coverage": {
             "start": 0,
             "end": len(content or ""),
@@ -203,7 +282,9 @@ def api_json(
             method, url, headers=headers, params=params, json=body, follow_redirects=False
         ) as response:
             if response.is_redirect:
-                raise SourcesQLError("provider_unavailable", "Unexpected API redirect", "acquisition")
+                raise SourcesQLError(
+                    "provider_unavailable", "Unexpected API redirect", "acquisition"
+                )
             return json_object(read_response(response, max_bytes))
     except httpx.HTTPError:
         error = ProviderTransportError(
@@ -234,7 +315,9 @@ def resolve_public(url: str, resolver: Callable = socket.getaddrinfo) -> tuple[s
             ):
                 raise ValueError
     except (ValueError, OSError):
-        raise SourcesQLError("unauthorized", "Source address is not public", "acquisition") from None
+        raise SourcesQLError(
+            "unauthorized", "Source address is not public", "acquisition"
+        ) from None
     return host, sorted(addresses)[0], port
 
 

@@ -298,9 +298,15 @@ def execute_job(
     try:
         request = job["request"]
         operation = job.get("operation", "query")
-        if not isinstance(request, dict) or operation not in {"query", "import_table", "import"}:
+        if not isinstance(request, dict) or operation not in {
+            "query",
+            "explain",
+            "recover_run",
+            "import_table",
+            "import",
+        }:
             raise SourcesQLError("invalid_request", "Unsupported hosted job operation")
-        if operation == "query":
+        if operation in {"query", "explain"}:
             if request.get("profile", "fixture") != "fixture" and (
                 not settings["provider_policy_sha256"]
                 or job.get("provider_policy_sha256") != settings["provider_policy_sha256"]
@@ -311,10 +317,19 @@ def execute_job(
         engine = Engine(
             root=root / "engine", store=store, allow_private=False, profiles=settings["profiles"]
         )
-        if operation == "query":
+        if operation in {"query", "explain"}:
+            explanation = engine.explain(**request)
             if request.get("profile", "fixture") != "fixture":
-                explanation = engine.explain(**request)
                 helper.validate_explain(explanation, settings)
+            if operation == "explain":
+                explanation["validation_compute"] = "on_demand_flight"
+                explanation["external_calls"] = 0
+                store.finish_preflight(config["job_id"], token, explanation)
+                report.update(
+                    status="completed", phase="finished", operation="explain", external_calls=0
+                )
+                return
+            if request.get("profile", "fixture") != "fixture":
                 if any(
                     stage.get("stage") == "external" and stage.get("operator") == "SEM_SCORE"
                     for stage in explanation.get("plan", {}).get("stages", [])
@@ -325,6 +340,8 @@ def execute_job(
                     )
                     report["phase"] = "engine_operation"
             result = engine.query(**request)
+        elif operation == "recover_run":
+            result = engine.recover_run(**request)
         elif operation == "import_table":
             result = engine.import_table(**request)
         else:
@@ -346,7 +363,7 @@ def execute_job(
             plan_complete=receipt["plan_complete"],
         )
     except SourcesQLError as error:
-        store.fail_job(config["job_id"], token, error.code, "Research job failed")
+        store.fail_job(config["job_id"], token, error.code, "Research job failed", error.stage)
         report.update(
             status="cancelled" if error.code == "cancelled" else "failed",
             phase="finished",

@@ -6,6 +6,24 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased research completion work
+
+PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
+The next local implementation covers canonical hosted preflight, bounded durable
+stage journals, explicit restart continuation/source recovery, query-hit
+provenance, retained evidence windows, item-level lineage and explained NULLs.
+Declared output requirements now separate execution success from unresolved
+research obligations. Guided personal-cloud setup accepts explicit model and
+embedding bindings while preserving search-only defaults.
+
+Targeted injected-failure and source-local evidence checks pass. The diagnostic
+UI keeps selection height stable and uses existing cell/correction affordances.
+Full suites pass: 937 Python/Flight tests (44 opt-in cases skipped), 372
+app/gateway/MCP tests and 59 onboarding checks. Python lint/type checks and the
+Node 24 production build pass. Installed artifacts, Docker, hosted alignment and
+fresh ChatGPT/Claude research remain separate acceptance gates. This work has not
+changed the published 0.2.3 artifacts. See [the working plan](docs/accuracy-plan.md).
+
 ## Unreleased notification UI
 
 Local source replaces in-flow feedback banners with a floating overlay using

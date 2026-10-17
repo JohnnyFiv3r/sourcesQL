@@ -511,12 +511,18 @@ test("anonymous mode blocks live job dispatch and job discovery exposes exact sc
     allowPrivateDisclosure: false,
   });
   try {
-    const refused = await session.client.callTool({
-      name: "sourcesql_query",
-      arguments: args(),
-    });
-    assert.equal(refused.isError, true);
+    for (const name of ["sourcesql_query", "sourcesql_explain"]) {
+      const refused = await session.client.callTool({
+        name,
+        arguments: args(),
+      });
+      assert.equal(refused.isError, true);
+    }
     assert.equal(engine.queryCalls, 0);
+    assert.equal(
+      engine.calls.filter((call) => call.method === "explain").length,
+      0,
+    );
     const { tools } = await session.client.listTools();
     for (const name of [
       "sourcesql_job_status",
@@ -532,6 +538,366 @@ test("anonymous mode blocks live job dispatch and job discovery exposes exact sc
     }
   } finally {
     await session.close();
+  }
+});
+
+test("hosted explain materializes the authorized corrected input before validation and preserves its request ID", async () => {
+  class ValidationEngine extends MaterializationEngine {
+    validations: Record<string, unknown>[] = [];
+    override async call<T = Record<string, unknown>>(
+      method: string,
+      params: Record<string, unknown> = {},
+    ): Promise<T> {
+      if (method !== "explain") return super.call<T>(method, params);
+      this.validations.push(params);
+      return {
+        job_id: "job_validation",
+        request_id: params.request_id,
+        operation: "explain",
+        status: "completed",
+        preflight: { external_calls: 0, input_pins: params.inputs },
+      } as T;
+    }
+  }
+  const engine = new ValidationEngine();
+  const session = await connect(engine);
+  try {
+    const snapshot = resultSnapshot(engine.result(), {
+      result_id: "wq_job_result",
+      snapshot_id: "validation-effective-parent",
+      title: "Corrected source",
+    });
+    await session.store.import(snapshot);
+    await session.store.amend({
+      snapshot_id: snapshot.id,
+      row_id: "row_1",
+      field: "value",
+      value: "corrected",
+      mutation_id: randomUUID(),
+      expected_revision: 0,
+    });
+    const input = {
+      ...args(),
+      query: "SELECT value FROM INPUT('parent')",
+      inputs: {
+        parent: {
+          result_id: "wq_job_result",
+          view: "effective",
+          amendment_revision: 1,
+        },
+      },
+    };
+    const { request_id: omitted, ...withoutId } = input;
+    assert.equal(
+      (
+        await session.client.callTool({
+          name: "sourcesql_explain",
+          arguments: withoutId,
+        })
+      ).isError,
+      true,
+    );
+    assert.equal(engine.materializationDispatches, 0);
+    const pending = await session.client.callTool({
+      name: "sourcesql_explain",
+      arguments: input,
+    });
+    assert.notEqual(pending.isError, true, JSON.stringify(pending.content));
+    assert.equal(
+      (pending.structuredContent as Record<string, unknown>).job_id,
+      engine.materializationId,
+    );
+    assert.match(
+      JSON.stringify(pending.content),
+      /repeat the original sourcesql_explain/,
+    );
+    assert.match(JSON.stringify(pending.content), new RegExp(input.request_id));
+    assert.match(
+      JSON.stringify(pending.content),
+      /validation has not been submitted/,
+    );
+    assert.equal(engine.validations.length, 0);
+    assert.equal(engine.materializationDispatches, 1);
+    engine.ready = true;
+    const completed = await session.client.callTool({
+      name: "sourcesql_explain",
+      arguments: input,
+    });
+    assert.notEqual(completed.isError, true, JSON.stringify(completed.content));
+    assert.equal(engine.validations.length, 1);
+    assert.equal(engine.validations[0].request_id, omitted);
+    assert.deepEqual(engine.validations[0].inputs, {
+      parent: {
+        result_id: "wq_materialized",
+        view: "effective",
+        amendment_revision: 1,
+      },
+    });
+    assert.deepEqual(engine.table?.rows, [{ value: "corrected" }]);
+    assert.equal(
+      (completed.structuredContent as Record<string, unknown>).result_id,
+      undefined,
+    );
+    assert.equal(
+      (completed.structuredContent as Record<string, unknown>).operation,
+      "explain",
+    );
+    assert.equal(engine.queryCalls, 0);
+    assert.equal((await session.store.open(snapshot.id)).revision, 1);
+  } finally {
+    await session.close();
+  }
+});
+
+test("query schema forwards explicit continuation and bounded research requirements", async () => {
+  const engine = new JobEngine();
+  const session = await connect(engine);
+  try {
+    const requirements = {
+      key_columns: ["value"],
+      fields: ["value"],
+      minimum_rows: 0,
+    };
+    const response = await session.client.callTool({
+      name: "sourcesql_query",
+      arguments: {
+        ...args(),
+        continuation_of: "run_previous",
+        research_requirements: requirements,
+      },
+    });
+    assert.notEqual(response.isError, true, JSON.stringify(response.content));
+    const query = engine.calls.find((call) => call.method === "query")!;
+    assert.equal(query.params.continuation_of, "run_previous");
+    assert.deepEqual(query.params.research_requirements, requirements);
+    const invalid = await session.client.callTool({
+      name: "sourcesql_query",
+      arguments: {
+        ...args(),
+        research_requirements: { key_columns: [], fields: ["value"] },
+      },
+    });
+    assert.equal(invalid.isError, true);
+    assert.equal(engine.queryCalls, 1);
+  } finally {
+    await session.close();
+  }
+});
+
+test("explicit run continuation preserves its new request ID and refuses unsettled work", async () => {
+  class ResumeEngine extends JobEngine {
+    settled = false;
+    resumes: Record<string, unknown>[] = [];
+    override async call<T = Record<string, unknown>>(
+      method: string,
+      params: Record<string, unknown> = {},
+    ): Promise<T> {
+      if (method === "run_status")
+        return {
+          run_id: params.run_id,
+          status: "failed",
+          settlement_status: this.settled ? "settled" : "pending",
+          resume_request: { query: "PRIVATE-RESUME-SQL" },
+          checkpoints: {
+            stages: [
+              {
+                stage_key: "stage_one",
+                status: "completed",
+                error_code: null,
+                value: "PRIVATE-STAGE-PAYLOAD",
+              },
+            ],
+            total: 1,
+            omitted: 0,
+          },
+        } as T;
+      if (method === "resume_run") {
+        this.resumes.push(params);
+        return {
+          job_id: "job_continued",
+          operation: "query",
+          request_id: params.request_id,
+          status: "queued",
+        } as T;
+      }
+      return super.call<T>(method, params);
+    }
+  }
+  const engine = new ResumeEngine(),
+    session = await connect(engine);
+  try {
+    const request = { run_id: "run_failed", request_id: randomUUID() };
+    const refused = await session.client.callTool({
+      name: "sourcesql_resume_run",
+      arguments: request,
+    });
+    assert.equal(refused.isError, true);
+    assert.equal(engine.resumes.length, 0);
+    engine.settled = true;
+    const inspected = await session.client.callTool({
+      name: "sourcesql_run_status",
+      arguments: { run_id: request.run_id },
+    });
+    const summary = inspected.structuredContent as Record<string, any>;
+    assert.deepEqual(summary.checkpoints, {
+      stages: [
+        { stage_key: "stage_one", status: "completed", error_code: null },
+      ],
+      total: 1,
+      omitted: 0,
+    });
+    assert.doesNotMatch(JSON.stringify(inspected), /PRIVATE-/);
+    const continued = await session.client.callTool({
+      name: "sourcesql_resume_run",
+      arguments: request,
+    });
+    assert.notEqual(continued.isError, true, JSON.stringify(continued.content));
+    assert.deepEqual(engine.resumes, [request]);
+    assert.equal(
+      (continued.structuredContent as Record<string, unknown>).request_id,
+      request.request_id,
+    );
+    assert.equal(
+      (continued.structuredContent as Record<string, unknown>).job_id,
+      "job_continued",
+    );
+    const tool = (await session.client.listTools()).tools.find(
+      (tool) => tool.name === "sourcesql_resume_run",
+    )!;
+    assert.match(tool.description!, /Inspect sourcesql_run_status first/);
+    assert.match(tool.description!, /Do not widen limits or retry an uncertain effect/);
+  } finally {
+    await session.close();
+  }
+});
+
+test("evidence inspection exposes safe page diagnostics while receipt internals remain private", async () => {
+  const engine = new JobEngine();
+  const original = engine.call.bind(engine);
+  engine.call = async <T>(
+    method: string,
+    params: Record<string, unknown> = {},
+  ) => {
+    if (method !== "read_result") return original<T>(method, params);
+    return {
+      ...engine.result(),
+      receipt: {
+        status: "partial",
+        resume_request: { query: "PRIVATE-RESUME-SQL" },
+        provider_events: [
+          {
+            kind: "embedding",
+            status: "failed",
+            raw: "PRIVATE-HTTP-BODY",
+            failure: { message: "PRIVATE-FAILURE" },
+          },
+        ],
+      },
+      cell_diagnostics: [
+        {
+          diagnostic_id: "d_one",
+          row_id: "row_1",
+          column_key: "value",
+          value_path: [],
+          operator: "SEM_EXTRACT",
+          status: "not_stated",
+          reason: "not_stated_in_inspected_evidence",
+          source_version_id: null,
+          inspected_windows: [],
+          input_omitted_characters: 0,
+          raw: "PRIVATE-DIAGNOSTIC",
+        },
+        {
+          diagnostic_id: "d_other_page",
+          row_id: "row_2",
+          column_key: "value",
+          value_path: [],
+          operator: "SEM_EXTRACT",
+          status: "unknown",
+          reason: "unknown",
+        },
+      ],
+      research_quality: {
+        goal_status: "partial",
+        required_cells: 1,
+        unresolved_cells: 1,
+        row_shortfall: 0,
+        gaps: [{ row_id: "row_1", column_key: "value", status: "not_stated" }],
+        gaps_total: 1,
+        gaps_omitted: 0,
+        complete: false,
+        scope: "declared_cells_and_minimum_rows",
+        factual_truth_verified: false,
+        raw: "PRIVATE-QUALITY",
+      },
+    } as T;
+  };
+  const session = await connect(engine);
+  try {
+    const response = await session.client.callTool({
+      name: "sourcesql_inspect_evidence",
+      arguments: { result_id: "wq_job_result" },
+    });
+    assert.notEqual(response.isError, true, JSON.stringify(response.content));
+    const result = response.structuredContent as Record<string, any>;
+    assert.equal(result.cell_diagnostics.length, 1);
+    assert.equal(result.cell_diagnostics[0].status, "not_stated");
+    assert.equal(result.cell_diagnostics[0].row_id, "row_1");
+    assert.equal(result.research_quality.goal_status, "partial");
+    assert.deepEqual(result.receipt.provider_events, [
+      { kind: "embedding", status: "failed" },
+    ]);
+    assert.equal(result.receipt.resume_request, undefined);
+    assert.doesNotMatch(JSON.stringify(response), /PRIVATE-/);
+  } finally {
+    await session.close();
+  }
+});
+
+test("run continuation applies anonymous profile and private-disclosure checks before effects", async () => {
+  for (const access of [
+    {
+      mode: "fixture-anonymous",
+      principal: "anonymous",
+      allowPrivateDisclosure: false,
+    },
+    { mode: "protected", principal: "owner", allowPrivateDisclosure: false },
+  ] as const) {
+    const engine = new JobEngine();
+    let effects = 0;
+    const original = engine.call.bind(engine);
+    engine.call = async <T>(
+      method: string,
+      params: Record<string, unknown> = {},
+    ) => {
+      if (method === "run_status")
+        return {
+          run_id: params.run_id,
+          status: "failed",
+          settlement_status: "settled",
+          data_classification:
+            access.mode === "protected"
+              ? "private_derived"
+              : "synthetic_fixture",
+          resume_request: { profile: "not-a-fixture" },
+        } as T;
+      if (method === "resume_run") {
+        effects++;
+        throw new Error("Must not dispatch");
+      }
+      return original<T>(method, params);
+    };
+    const session = await connect(engine, access);
+    try {
+      const response = await session.client.callTool({
+        name: "sourcesql_resume_run",
+        arguments: { run_id: "run_failed", request_id: randomUUID() },
+      });
+      assert.equal(response.isError, true);
+      assert.equal(effects, 0);
+    } finally {
+      await session.close();
+    }
   }
 });
 

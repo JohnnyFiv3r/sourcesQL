@@ -2807,6 +2807,81 @@ test("failed hosted model jobs reopen with distinct safe errors and never redisp
   }
 });
 
+test("hosted preflight uses canonical Python admission without provider dispatch or a research result", async () => {
+  const h = await harness();
+  const client = new Client({ name: "preflight-test", version: "1" });
+  let server: ReturnType<typeof createServer> | undefined;
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    const store = new ResearchStore(h.directory, seed, undefined, 3000, { backend: new MotherDuckStateBackend(engine) });
+    server = createServer(store, join(root, "apps/research/dist/research.html"), { engine });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const request = { ...query(), partial_policy: "strict" };
+    const submitted = await client.callTool({ name: "sourcesql_explain", arguments: request });
+    assert.notEqual(submitted.isError, true);
+    const job = submitted.structuredContent as Row;
+    assert.equal(job.operation, "explain");
+    assert.equal(job.pending, true);
+    assert.equal(job.result_id, undefined);
+    const [written] = await h.sql.request(randomUUID(), "execute_preflight_job", undefined, [engine.namespace, job.job_id]);
+    assert.equal(written.status, "completed");
+    assert.equal(written.provider_requests, 0);
+    h.runs[0].status = "RUN_STATUS_SUCCEEDED";
+    h.runs[0].exit_code = 0;
+    const done = await client.callTool({ name: "sourcesql_job_status", arguments: { job_id: job.job_id } });
+    assert.notEqual(done.isError, true);
+    const receipt = done.structuredContent as Row;
+    assert.equal(receipt.preflight.external_calls, 0);
+    assert.equal(receipt.preflight.validation_compute, "on_demand_flight");
+    assert.equal(receipt.result_id, undefined);
+    assert.equal(receipt.run_id, undefined);
+    assert.equal(receipt.pending, false);
+    assert.equal((await engine.call<Row>("explain", request)).job_id, job.job_id);
+    assert.equal(h.submissions, 1);
+    assert.equal(await runtimeReserve(engine), "120");
+    assert.equal(await providerReserve(engine), "0");
+    const invalid = await engine.call<Row>("explain", { ...request, request_id: randomUUID(), query: "SELECT SEM_MATCH(content) FROM WEB_SEARCH('aurora')" });
+    const [failed] = await h.sql.request(randomUUID(), "execute_preflight_job", undefined, [engine.namespace, invalid.job_id]);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.provider_requests, 0);
+    h.runs[1].status = "RUN_STATUS_FAILED";
+    const refusal = await engine.call<Row>("job_status", { job_id: invalid.job_id });
+    assert.equal(refusal.error_code, "invalid_query");
+    assert.equal(refusal.stage, "admission");
+    assert.equal(refusal.provider_dispatch, "not_dispatched");
+    assert.equal(refusal.run_id, undefined);
+  } finally {
+    await client.close();
+    await server?.close();
+    await h.close();
+  }
+});
+
+test("completed preflight reauthorizes input pins on status, start and cancel", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    const saved = await publish(engine, "wq_preflight_parent");
+    const submitted = await engine.call<Row>("explain", {
+      ...query(), query: "SELECT value FROM input.saved", partial_policy: "strict",
+      inputs: { saved: { result_id: saved.result_id, view: "original" } },
+    });
+    await h.sql.request(randomUUID(), "execute_preflight_job", undefined, [engine.namespace, submitted.job_id]);
+    h.runs[0].status = "RUN_STATUS_SUCCEEDED";
+    h.runs[0].exit_code = 0;
+    assert.equal((await engine.call<Row>("job_status", { job_id: submitted.job_id })).preflight.external_calls, 0);
+    await engine.connection((connection) => connection.query(`UPDATE ${engine.table("results")} SET revoked=1 WHERE id=$1`, [saved.result_id]));
+    for (const method of ["job_status", "start_job", "cancel_job"])
+      await assert.rejects(engine.call(method, { job_id: submitted.job_id }), { code: "unauthorized" });
+    assert.equal(h.submissions, 1);
+  } finally {
+    await h.close();
+  }
+});
+
 for (const [failure, code] of [
   ["timeout", "provider_timeout"],
   ["connection_error", "provider_connection_error"],

@@ -391,7 +391,7 @@ def validate_request(
 def validate_explain(explanation: dict, settings: dict | None = None) -> None:
     from sourcesql.contracts import SourcesQLError
 
-    allowed = {"WEB_SEARCH"}
+    allowed = {"WEB_SEARCH", "SOURCE_WINDOW"}
     descriptor = (settings or {}).get("descriptor") or {}
     if descriptor.get("version") == RESEARCH_POLICY_VERSION:
         allowed.add("WEB_FETCH")

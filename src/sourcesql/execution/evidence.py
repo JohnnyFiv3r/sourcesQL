@@ -7,7 +7,7 @@ import hashlib
 import uuid
 from typing import Any
 
-from sourcesql.contracts import Table, digest
+from sourcesql.contracts import Table, SourcesQLError, digest
 
 
 def retained_sources(store, result_id: str) -> dict[str, dict]:
@@ -52,6 +52,19 @@ def path_value(row: dict, path: tuple[str, ...]):
     return value
 
 
+def path_present(row: dict, path: tuple[str, ...]) -> bool:
+    """NULL is a present cell, unlike an absent struct/item path."""
+    value: Any = row
+    for part in path:
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        elif isinstance(value, list) and part.isdigit() and 1 <= int(part) <= len(value):
+            value = value[int(part) - 1]
+        else:
+            return False
+    return True
+
+
 def checked_support(record: dict, sources: dict) -> list[dict]:
     source = sources.get(str(record.get("source_version_id")))
     if not source or record.get("status") not in ("supported_text", "processed", "no_match"):
@@ -87,6 +100,8 @@ class EvidenceContext:
         self.sources: dict[str, dict] = {}
         self.records: dict[str, dict] = {}
         self.source_handles: dict[str, str] = {}
+        self.source_windows: dict[str, tuple[int, int]] = {}
+        self.diagnostics: dict[str, dict] = {}
 
     def add_source(self, source: dict) -> None:
         sid = source["source_version_id"]
@@ -100,11 +115,13 @@ class EvidenceContext:
             raise SourcesQLError("evidence_invalid", "Conflicting source identity", "acquisition")
         self.sources[sid] = source
 
-    def source_handle(self, source: dict) -> str:
+    def source_handle(self, source: dict, window: tuple[int, int] | None = None) -> str:
         sid = source["source_version_id"]
         self.add_source(source)
         handle = "s_" + uuid.uuid4().hex
         self.source_handles[handle] = sid
+        if window is not None:
+            self.source_windows[handle] = window
         return handle
 
     def source_for(self, handles: list[str], text: Any) -> dict | None:
@@ -112,7 +129,36 @@ class EvidenceContext:
         if len(matches) != 1:
             return None
         source = self.sources[next(iter(matches))]
-        return source if source.get("content") == text else None
+        windows = {
+            self.source_windows.get(handle, (0, len(source["content"])))
+            for handle in handles
+            if self.source_handles.get(handle) == source["source_version_id"]
+        }
+        if len(windows) != 1:
+            return None
+        start, end = next(iter(windows))
+        if source["content"][start:end] != text:
+            return None
+        return {**source, "_input_window": {"start": start, "end": end}}
+
+    def window(self, text: Any, handles: list[str], start: Any, length: Any):
+        """Explicit slices retain their canonical source and original coordinates."""
+        if text is None or start is None or length is None:
+            return None, None
+        if not isinstance(text, str) or type(start) is not int or type(length) is not int:
+            raise SourcesQLError(
+                "invalid_request", "Source windows require text and integer bounds"
+            )
+        if start < 0 or length < 0 or start > len(text):
+            raise SourcesQLError("invalid_request", "Source window bounds are outside the input")
+        end = min(len(text), start + length)
+        value = text[start:end]
+        source = self.source_for(handles, text)
+        if source is None:
+            return value, None
+        origin = source["_input_window"]["start"]
+        canonical_source = self.sources[source["source_version_id"]]
+        return value, self.source_handle(canonical_source, (origin + start, origin + end))
 
     def seed(self, inputs: dict[str, Table], bindings: dict, store) -> None:
         for alias, table in inputs.items():
@@ -167,8 +213,45 @@ class EvidenceContext:
                     ):
                         continue
                     index, full_path = rows[row_id], (key, *path)
-                    if path_value(table.rows[index], full_path) == source["content"]:
-                        lineage[index].setdefault(full_path, []).append(self.source_handle(source))
+                    window = record.get("source_window")
+                    if window is None:
+                        start, end = 0, len(source["content"])
+                    elif (
+                        isinstance(window, dict)
+                        and type(window.get("start")) is int
+                        and type(window.get("end")) is int
+                        and 0 <= window["start"] <= window["end"] <= len(source["content"])
+                    ):
+                        start, end = window["start"], window["end"]
+                    else:
+                        continue
+                    if path_value(table.rows[index], full_path) == source["content"][start:end]:
+                        lineage[index].setdefault(full_path, []).append(
+                            self.source_handle(source, (start, end))
+                        )
+                for record in meta.get("cell_diagnostics", []):
+                    key, row_id = record.get("column_key"), record.get("row_id")
+                    path = record.get("value_path", [])
+                    if (
+                        row_id not in rows
+                        or key not in columns
+                        or not isinstance(path, list)
+                        or not all(isinstance(part, str) for part in path)
+                    ):
+                        continue
+                    index, full_path = rows[row_id], (key, *path)
+                    if not path_present(table.rows[index], full_path):
+                        continue
+                    token = "d_" + digest([rid, record.get("diagnostic_id"), full_path])[:32]
+                    self.diagnostics[token] = {
+                        **{
+                            k: v
+                            for k, v in record.items()
+                            if k not in ("row_id", "column_key", "value_path")
+                        },
+                        "diagnostic_id": token,
+                    }
+                    lineage[index].setdefault(full_path, []).append(token)
             table.lineage = lineage
 
     def record(self, base: dict, fields: dict, target: dict) -> list[dict]:
@@ -188,29 +271,135 @@ class EvidenceContext:
                         continue
                     path = (str(item + 1), name)
             else:
-                path = ()
+                item = span.get("item")
+                path = (
+                    (str(item + 1),)
+                    if base.get("operator") == "SEM_EXTRACT_ALL" and type(item) is int and item >= 0
+                    else ()
+                )
             grouped[path].append(span)
         records = []
         for path, spans in grouped.items():
             identifier = "e_" + uuid.uuid4().hex
             record = {**base, "evidence_id": identifier, "support": spans}
             self.records[identifier] = record
-            target[path] = [identifier]
+            target.setdefault(path, []).append(identifier)
             records.append(record)
         if fields and grouped:
-            target[()] = [record["evidence_id"] for record in records]
+            target.setdefault((), []).extend(record["evidence_id"] for record in records)
         return records
 
+    def record_outcome(self, base: dict, value: Any, fields: dict, target: dict) -> None:
+        """Record per-cell processing state separately from quoted evidence."""
+        operator = base.get("operator")
+        if operator in {"SEM_NORM", "SEM_SCORE"}:
+            return
+        usage = base.get("usage") or {}
+        errors = base.get("field_errors", usage.get("field_errors", [])) or []
+        statuses = usage.get("field_outcomes", []) or []
+        values = value if operator == "SEM_EXTRACT_ALL" and isinstance(value, list) else [value]
+        for index, item in enumerate(values):
+            cells = (
+                ((field, item.get(field) if isinstance(item, dict) else None) for field in fields)
+                if fields
+                else [("value", item)]
+            )
+            for field, cell in cells:
+                path = ((str(index + 1),) if operator == "SEM_EXTRACT_ALL" else ()) + (
+                    (field,) if fields else ()
+                )
+                field_error = next(
+                    (
+                        error
+                        for error in errors
+                        if error.get("field", "value") == field
+                        and (operator != "SEM_EXTRACT_ALL" or error.get("item") == index)
+                    ),
+                    None,
+                )
+                field_status = next(
+                    (
+                        status
+                        for status in statuses
+                        if status.get("field", "value") == field
+                        and (operator != "SEM_EXTRACT_ALL" or status.get("item") == index)
+                    ),
+                    None,
+                )
+                status = (
+                    field_error.get("code")
+                    if field_error
+                    else field_status.get("status")
+                    if field_status
+                    else base.get("status", "unknown")
+                )
+                if cell is None and status in {"processed", "supported_text", "no_match"}:
+                    status = "unknown"
+                reason = {
+                    "not_stated": "not_stated_in_inspected_evidence",
+                    "not_inspected": "not_inspected",
+                    "ambiguous": "ambiguous",
+                    "conflicting": "conflicting",
+                    "evidence_invalid": "invalid_evidence",
+                    "invalid_output": "invalid_output",
+                    "failed": "provider_failure",
+                    "unprocessed": "not_inspected"
+                    if usage.get("reason") == "missing_text"
+                    else "unprocessed",
+                    "budget_exhausted": "capacity_limited",
+                }.get(status, "resolved" if cell is not None else "unknown")
+                identifier = "d_" + uuid.uuid4().hex
+                self.diagnostics[identifier] = {
+                    "diagnostic_id": identifier,
+                    "operator": operator,
+                    "status": status
+                    if status
+                    in {
+                        "processed",
+                        "supported_text",
+                        "no_match",
+                        "not_stated",
+                        "unknown",
+                        "not_inspected",
+                        "ambiguous",
+                        "conflicting",
+                        "evidence_invalid",
+                        "invalid_output",
+                        "failed",
+                        "unprocessed",
+                        "budget_exhausted",
+                    }
+                    else "unknown",
+                    "reason": reason,
+                    "source_version_id": base.get("source_version_id"),
+                    "inspected_windows": usage.get("inspected_windows", []),
+                    "input_omitted_characters": usage.get("input_omitted_characters"),
+                }
+                target.setdefault(path, []).append(identifier)
+
     def bind(self, table: Table, row_ids: list[str], unbound: list[dict]):
-        bound, source_bindings, referenced = [], [], set()
+        bound, source_bindings, cell_diagnostics, referenced = [], [], [], set()
         for index, (row, row_id) in enumerate(zip(table.rows, row_ids)):
             tags = table.lineage[index] if index < len(table.lineage) else {}
             for path, handles in tags.items():
-                if not path or path_value(row, path) is None:
+                if not path or not path_present(row, path):
                     continue
                 if any(other[: len(path)] == path and len(other) > len(path) for other in tags):
                     continue
                 for handle in dict.fromkeys(handles):
+                    diagnostic = self.diagnostics.get(handle)
+                    if diagnostic:
+                        cell_diagnostics.append(
+                            {
+                                **diagnostic,
+                                "row_id": row_id,
+                                "column_key": path[0],
+                                "value_path": list(path[1:]),
+                            }
+                        )
+                        continue
+                    if path_value(row, path) is None:
+                        continue
                     record = self.records.get(handle)
                     if record:
                         bound.append(
@@ -224,15 +413,19 @@ class EvidenceContext:
                         referenced.add(handle)
                     elif handle in self.source_handles:
                         sid = self.source_handles[handle]
-                        if path_value(row, path) == self.sources[sid]["content"]:
+                        start, end = self.source_windows.get(
+                            handle, (0, len(self.sources[sid]["content"]))
+                        )
+                        if path_value(row, path) == self.sources[sid]["content"][start:end]:
                             source_bindings.append(
                                 {
                                     "row_id": row_id,
                                     "column_key": path[0],
                                     "value_path": list(path[1:]),
                                     "source_version_id": sid,
+                                    "source_window": {"start": start, "end": end},
                                 }
                             )
         retained = [record for record in unbound if record.get("evidence_id") not in referenced]
         cells = {(r["row_id"], r["column_key"]) for r in bound}
-        return bound + retained, source_bindings, len(cells)
+        return bound + retained, source_bindings, len(cells), cell_diagnostics

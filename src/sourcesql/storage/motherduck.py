@@ -25,6 +25,7 @@ TABLES = (
     "CREATE TABLE IF NOT EXISTS results(id VARCHAR PRIMARY KEY, hash VARCHAR NOT NULL, metadata VARCHAR NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, payload VARCHAR NOT NULL, wire_payload VARCHAR NOT NULL, wire_hash VARCHAR NOT NULL)",
     "CREATE TABLE IF NOT EXISTS runs(id VARCHAR PRIMARY KEY, request_id VARCHAR UNIQUE NOT NULL, request_hash VARCHAR NOT NULL, receipt VARCHAR NOT NULL)",
     "CREATE TABLE IF NOT EXISTS semantic_cache(key VARCHAR PRIMARY KEY, value VARCHAR NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS execution_stages(journal_id VARCHAR NOT NULL, stage_key VARCHAR NOT NULL, status VARCHAR NOT NULL, value_json VARCHAR, error_code VARCHAR, PRIMARY KEY(journal_id,stage_key))",
     "CREATE TABLE IF NOT EXISTS jobs(id UUID PRIMARY KEY, request_id UUID UNIQUE NOT NULL, operation VARCHAR NOT NULL, request_hash VARCHAR NOT NULL, request_json VARCHAR NOT NULL, status VARCHAR NOT NULL, created_at VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, flight_id UUID NOT NULL, flight_version INTEGER, flight_run_id UUID, flight_run_number UBIGINT, dispatch_intent_at VARCHAR, claim_token UUID, engine_run_id VARCHAR, result_id VARCHAR, cancel_requested BOOLEAN NOT NULL DEFAULT false, error_code VARCHAR, error_message VARCHAR, max_runtime_sec INTEGER NOT NULL, output_json VARCHAR, flight_settled BOOLEAN NOT NULL DEFAULT false, flight_invalid BOOLEAN NOT NULL DEFAULT false, provider_policy_sha256 VARCHAR, provider_cost_reserved_microusd BIGINT NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS flight_allowances(day VARCHAR PRIMARY KEY, reserved_seconds BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS provider_allowances(day VARCHAR PRIMARY KEY, reserved_microusd BIGINT NOT NULL)",
@@ -107,6 +108,7 @@ class MotherDuckStore(Store):
                 raise SourcesQLError("unauthorized", "Storage owner mismatch", "storage")
         finally:
             con.close()
+        self.initialize_stage_journal()
 
     @contextmanager
     def db(self):
@@ -141,7 +143,7 @@ class MotherDuckStore(Store):
     def retained_size(self, db):
         return db.execute(
             "SELECT coalesce(sum(octet_length(encode(metadata))+octet_length(encode(payload))+octet_length(encode(wire_payload))),0) FROM results"
-        ).fetchone()[0]
+        ).fetchone()[0] + self.stage_bytes(db)
 
     def _job(self, db, job_id):
         identity = str(uuid.UUID(job_id))
@@ -478,7 +480,29 @@ class MotherDuckStore(Store):
                 raise SourcesQLError("invalid_output", "Job publication is unavailable", "jobs")
         return {"status": "completed", "result_id": result_id, "run_id": run_id}
 
-    def fail_job(self, job_id, claim_token, code, safe_message):
+    def finish_preflight(self, job_id, claim_token, explanation):
+        payload = canonical(explanation).decode()
+        if len(payload.encode()) > 1_048_576:
+            raise SourcesQLError(
+                "budget_exhausted", "Validation output exceeds allowance", "admission"
+            )
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = self._job(db, job_id)
+            if job["cancel_requested"] or job["status"] == "cancelled":
+                raise SourcesQLError("cancelled", "Validation was cancelled", "admission")
+            if (
+                job["operation"] != "explain"
+                or job["status"] != "running"
+                or str(job["claim_token"]) != claim_token
+            ):
+                raise SourcesQLError("unauthorized", "Validation ownership unavailable", "jobs")
+            db.execute(
+                "UPDATE jobs SET status='completed',output_json=?,updated_at=? WHERE id=?::UUID",
+                [payload, timestamp(), job_id],
+            )
+
+    def fail_job(self, job_id, claim_token, code, safe_message, stage="admission"):
         with self.db() as db:
             db.execute("BEGIN IMMEDIATE")
             job = self._job(db, job_id)
@@ -500,13 +524,48 @@ class MotherDuckStore(Store):
                 "provider_connection_error",
                 "provider_http_error",
                 "provider_error",
+                "execution_outcome_unknown",
                 "storage_conflict",
                 "storage_unavailable",
                 "invalid_output",
                 "cancelled",
             }
             code = code if isinstance(code, str) and code in allowed else "execution_failed"
+            stages = {
+                "admission",
+                "dispatch",
+                "acquisition",
+                "fetch",
+                "semantic",
+                "worker",
+                "execution",
+                "publish",
+                "storage",
+                "jobs",
+                "read",
+            }
+            stage = stage if isinstance(stage, str) and stage in stages else "execution"
+            state = "not_dispatched"
+            if job.get("engine_run_id"):
+                row = db.execute(
+                    "SELECT receipt FROM runs WHERE id=?", [job["engine_run_id"]]
+                ).fetchone()
+                receipt = json.loads(row[0]) if row else {}
+                intents = receipt.get("dispatch_intents", [])
+                if intents:
+                    state = (
+                        "outcome_unknown"
+                        if receipt.get("settlement_status") != "settled"
+                        else "rejected"
+                        if code == "provider_http_error"
+                        else "settled"
+                    )
             db.execute(
-                "UPDATE jobs SET status='failed',error_code=?,error_message='Research execution failed safely',updated_at=? WHERE id=?::UUID",
-                [code, timestamp(), job_id],
+                "UPDATE jobs SET status='failed',error_code=?,error_message='Research execution failed safely',output_json=?,updated_at=? WHERE id=?::UUID",
+                [
+                    code,
+                    canonical({"stage": stage, "provider_dispatch": state}).decode(),
+                    timestamp(),
+                    job_id,
+                ],
             )

@@ -5,7 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from ..contracts import Budget, SemanticOutcome, SourcesQLError
-from .common import normalized_text, normalized_url, provider_usage, source_record, text_hash
+from .common import (
+    normalized_text,
+    normalized_url,
+    project_search_provenance,
+    provider_usage,
+    search_coverage_record,
+    search_hit,
+    source_record,
+    text_hash,
+)
 from .search import publication_filter, search_options, validate_queries
 from .semantic import validate_outcome
 
@@ -118,6 +127,7 @@ class FixtureProvider:
         self.version = version
         self.events: list[dict] = []
         self.hits: list[dict] = []
+        self.search_coverage: list[dict] = []
 
     def capabilities(self) -> dict:
         return {
@@ -153,6 +163,8 @@ class FixtureProvider:
         if any(options.get(k) is not None for k in ("published_after", "published_before")):
             publication_filter([], options)
         result = []
+        coverage = search_coverage_record("fixture", queries, count)
+        self.search_coverage.append(coverage)
         for query_index, query in enumerate(queries):
             budget.reserve("search_queries", limit="max_search_queries")
             budget.reserve("search_requests", limit="max_search_requests")
@@ -169,24 +181,31 @@ class FixtureProvider:
             for rank, document in enumerate(candidates[:count], 1):
                 row = self._record(document)
                 row["hits"] = [
-                    {
-                        "query": query,
-                        "query_index": query_index,
-                        "rank": rank,
-                        "provider": "fixture",
-                    }
+                    search_hit("fixture", coverage["search_id"], query, query_index, rank)
                 ]
+                project_search_provenance(row)
                 self.hits.extend(row["hits"])
                 rows.append(row)
             self.events.append(
                 {
                     "kind": "search",
+                    "provider": "fixture",
+                    "search_id": coverage["search_id"],
+                    "query_index": query_index,
                     "status": "completed",
                     "fixture_only": True,
                     "usage": provider_usage("fixture"),
                 }
             )
-            result.extend(publication_filter(rows, options))
+            query_coverage = coverage["queries"][query_index]
+            query_coverage.update(status="completed", returned_hits=len(rows))
+            try:
+                retained = publication_filter(rows, options)
+            except SourcesQLError:
+                query_coverage["status"] = "failed"
+                raise
+            query_coverage["retained_hits"] = len(retained)
+            result.extend(retained)
         return result
 
     def fetch(self, urls: list[str], options: dict, budget: Budget) -> list[dict]:
