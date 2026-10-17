@@ -428,7 +428,51 @@ class Engine:
         return plan, inputs, parents, classification, profile, budget
 
     def explain(self, **request):
-        plan, _, parents, classification, profile, budget = self._admit(request)
+        from sourcesql.execution.planner import validate_plan
+
+        plan, inputs, parents, classification, profile, budget = self._admit(request)
+        deadline = time.monotonic() + budget.limits["dispatch_deadline_seconds"]
+        session = None
+
+        def check_active():
+            if budget.cancelled:
+                raise SourcesQLError("cancelled", "Validation cancelled", "worker")
+            with self.store.db() as db:
+                check_job = getattr(self.store, "_check_job", None)
+                if check_job is not None:
+                    check_job(db)
+                for parent in parents:
+                    actual = self.store._authorize(db, parent["result_id"], set())
+                    if actual["content_sha256"] != parent["content_sha256"]:
+                        raise SourcesQLError(
+                            "evidence_invalid", "Parent content pin mismatch", "admission"
+                        )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SourcesQLError(
+                    "budget_exhausted", "Validation deadline exceeded", "worker"
+                )
+            return remaining
+
+        def checked_worker(sql, tables, params):
+            remaining = check_active()
+            worker = session.run_sql if session else self.worker
+            result = worker(sql, tables, params, timeout=min(30, remaining))
+            check_active()
+            return result
+
+        try:
+            check_active()
+            if self.worker is run_sql:
+                session = WorkerSession().__enter__()
+            # Every protected validation owns its launch and checks it. An
+            # earlier query or explain cannot attest a new sandbox process.
+            checked_worker("SELECT 1 AS worker_probe", {}, {})
+            validate_plan(plan, inputs, checked_worker)
+            check_active()
+        finally:
+            if session is not None:
+                session.__exit__(None, None, None)
         return {
             "plan": getattr(plan, "explain", {}),
             "input_pins": parents,

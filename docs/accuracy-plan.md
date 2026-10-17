@@ -1,9 +1,10 @@
 # Research accuracy and completion plan
 
 Updated: 2026-10-17. This is the working backlog for answer quality and reliable
-completion. The released baseline is 0.2.3; newer local changes below have not
-been deployed or released. Controlled workflow checks, offline regressions and
-fresh live research establish different things.
+completion. The released baseline is 0.2.3. Working-branch builds are identified by commit
+and artifact hashes and have not been published as a new release. A deployed
+test build is not full qualification. Controlled workflow checks, offline
+regressions and fresh live research establish different things.
 
 ## Current evidence
 
@@ -23,19 +24,25 @@ The public Python package bundles tokenizer data and passed offline installed
 checks. Compact Flight packaging requires a separate path: an admitted scoring
 job retrieves official, hash-pinned tokenizer data before paid calls, within
 fixed download/time bounds. The compact build and controlled startup checks
-passed locally; actual hosted download remains unqualified. A cold Flight
+passed locally. A cold hosted Flight restored the exact pinned tokenizer in
+0.969 seconds; embedding HTTP execution remains unqualified. A cold Flight
 requires this network step. Scoring uses the supplied source without an
 implicit character prefix; inputs beyond the token limit need explicit passage
-handling. Hosted activation, live scoring quality and complete fresh-host
-research acceptance are pending.
+handling. The embedding configuration is active on the existing hosted Exa worker. Live
+scoring and complete fresh-host research acceptance remain pending.
 
 Q01a now preserves known provider failure codes through the Python job writer,
 gateway and MCP. Authorized callers receive fixed safe summaries and can inspect
 the failed run when one exists. Unknown codes fall back to `execution_failed`;
 provider bodies, prompts and credentials are excluded. Local failure injection
 exercises the actual embedding adapter, strict engine, Flight runner and job
-writer against the same DuckDB storage reopened by the gateway and MCP. This
-does not yet qualify the live MotherDuck transport or canonical hosted preflight.
+writer against the same DuckDB storage reopened by the gateway and MCP. The live hosted route also completed a valid provider-free preflight and
+returned a fixed admission refusal without provider dispatch. One intended
+positive control was malformed and is retained as a failed, intervened attempt.
+These controls do not establish fresh research completion. The corrective binding
+slice passes 1,002 Python/Flight tests (44 opt-in cases skipped), 377 app tests,
+lint and typing. Its exact installed, container and hosted artifacts still need
+their own qualification.
 
 No backlog item is complete merely because its instructions were written or
 its mock tests passed. Move an item to live-qualified only with the exercised
@@ -98,14 +105,35 @@ checks exposed scoring-reuse and canonical-record prototype issues; both have
 new regressions. The corrected candidate also coalesces scoring storage work.
 A local native-store measurement at 32 candidates dropped from 419 to 39 cold
 connector contexts; that is not a hosted latency or billing measurement.
-Installed artifacts, containers, hosted and ordinary-host acceptance for the
-corrected build remain separate pending gates.
+Exact wheel and source installs each passed 185 installed regressions. Docker
+passed 1,005 Linux Python/Flight tests and 377 app tests, actual HTTP/restart/stdio
+workflows and desktop/mobile iframe checks. Four macOS-only tests were skipped;
+the full test session used 512 MiB temporary scratch while runtime scratch
+remained 256 MiB. All four existing hosted workers then completed and reopened
+provider-free fixtures with the exact execution wheel.
+
+Live scoring exposed a further binding-validation defect at `2e37e6a`: a
+populated literal CTE made the provider-free binding pass return an empty list
+for a scalar semantic operation. Execution refused it before HTTP, while explain
+accepted the AST. Exact installed execution reproduced this with zero HTTP
+calls. The corrective slice gives the dry pass typed inert values and shares
+restricted-worker binding validation between explain and execution. Both failed
+controls, their request identities and interventions remain in private evidence;
+no uncertain work is replayed. The corrective artifacts require fresh installed,
+container and hosted checks before fresh-host acceptance.
 
 The hosted qualification plan preserves existing queued research and reservation
-ledgers. It bounds new qualification to 12 Flights, 1,440 reserved seconds and
-$10 of provider reservations within the existing experiment authorization, plus
-a $1 infrastructure hold. The temporary Pro compute limit must be restored after
-qualification without resetting recorded usage. Adopter defaults stay unchanged.
+ledgers. The first candidate used seven Flights and 840 reserved seconds, with
+no provider HTTP dispatch; its $0.01 provider reservation remains recorded. Its
+temporary Pro limits were restored without resetting usage. The corrective phase
+is bounded to 12 additional Flights, 1,440 reserved seconds and $10 of provider
+reservations. Unused child holds carry forward; the amendment adds only a $0.01
+provider hold and a $1 infrastructure hold inside the existing $50 experiment
+authorization. Cumulative maximum is 19 Flights and 2,280 reserved seconds.
+Temporary limits must be restored after qualification. Adopter defaults stay
+unchanged. Fresh ordinary ChatGPT/Claude acceptance and the separate clean
+research-profile onboarding destination still require owner browser/destination
+approval; no such acceptance is claimed.
 
 ## Acceptance set and recording
 

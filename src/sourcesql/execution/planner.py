@@ -788,21 +788,32 @@ def _ancestors(node: exp.Expr, stop: exp.Expr | None):
         parent = parent.parent
 
 
-def execute_plan(
+def _binding_result(operator: str, arguments: list[Any], options: dict[str, Any]) -> Any:
+    # Literal relations can produce rows even when every bound input is empty.
+    # Those rows need valid nullable values, without coordinator/provider work.
+    if operator in {"WEB_SEARCH", "WEB_FETCH", "SEM_EXTRACT_ALL"}:
+        return []
+    if operator == "SEM_NORM":
+        return {value: None for value in arguments[0]}
+    if operator in {"SEM_MATCH", "SEM_SCORE", "SEM_EXTRACT", "SOURCE_WINDOW"}:
+        return None
+    raise SourcesQLError(
+        "unsupported_capability", "Unsupported binding-validation operator", "plan"
+    )
+
+
+def validate_plan(
     plan: ParsedQuery,
     inputs: dict[str, Table],
-    dispatch: Callable[[str, list[Any], dict[str, Any]], Any],
     run_sql: Callable[[str, dict[str, Table], dict[str, Any]], Table],
-    score_batch: Callable | None = None,
-    semantic_batch: Callable | None = None,
-) -> Table:
-    """Execute one previously admitted plan using coordinator-owned effects."""
+) -> None:
+    """Check ordinary SQL binding with typed inert operator results and no effects."""
     # DuckDB itself checks ordinary binding, grouping, and expression types over
     # empty typed relations. No source/model provider is present in this pass.
     # Actual-row arithmetic errors remain ordinary execution failures.
     empty = {alias: Table(table.columns, []) for alias, table in inputs.items()}
     try:
-        _Executor(plan, empty, lambda *_: [], run_sql).execute(plan.tree, {})
+        _Executor(plan, empty, _binding_result, run_sql).execute(plan.tree, {})
     except SourcesQLError as error:
         if error.code in {"invalid_query", "execution_error", "invalid_output"}:
             raise SourcesQLError(
@@ -814,6 +825,18 @@ def execute_plan(
         raise SourcesQLError(
             "invalid_query", "SQL failed schema or expression validation before provider dispatch"
         ) from None
+
+
+def execute_plan(
+    plan: ParsedQuery,
+    inputs: dict[str, Table],
+    dispatch: Callable[[str, list[Any], dict[str, Any]], Any],
+    run_sql: Callable[[str, dict[str, Table], dict[str, Any]], Table],
+    score_batch: Callable | None = None,
+    semantic_batch: Callable | None = None,
+) -> Table:
+    """Execute one previously admitted plan using coordinator-owned effects."""
+    validate_plan(plan, inputs, run_sql)
     return _Executor(plan, inputs, dispatch, run_sql, score_batch, semantic_batch).execute(
         plan.tree, {}
     )
