@@ -13,7 +13,7 @@ data. Its tool-local description requires the requested row unit and answer
 fields, treats source hit lists as acquisition unless a catalog was requested,
 and keeps follow-up chat brief without duplicating the table. The query tool
 also points to declared research requirements. A successful tool response does
-not establish that the host displayed the app. All 379 app tests and the
+not establish that the host displayed the app. All 383 app tests and the
 TypeScript production build pass; a recorded 24-source view renders under strict
 CSP in independent headless Chrome. The reported ChatGPT loading failure still
 needs host-side evidence; these checks do not establish ChatGPT acceptance.
@@ -21,6 +21,14 @@ The render tool also mirrors its standard resource URI in ChatGPT's documented
 optional template alias. Resource-read regressions keep both paths on the same
 immutable bundle; data tools remain without a template. This compatibility
 change still needs verification in ChatGPT and is not a confirmed root cause.
+Inline sizing now treats nonpositive initial height budgets as unmeasured,
+using the existing 560 px fallback. A collapsed-frame reproduction previously
+reported zero indefinitely; the fixed bundle requests a positive height and
+renders. Four sizing regressions and five independent headless cases pass,
+including collapsed frames and partial host context. Positive host limits,
+fullscreen and local preview behavior are preserved. Previous public UI
+resources remain available under their original content hashes. The actual
+ChatGPT client context and end-to-end mobile rendering remain unverified.
 
 PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
 The next local implementation covers canonical hosted preflight, bounded durable

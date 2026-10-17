@@ -69,6 +69,7 @@ import {
 } from "./job-view.js";
 import "./job-status-panel.css";
 import { HostedViewReconciliation } from "./view-reconciliation.js";
+import { inlineHeightLimitFor } from "./host-sizing.js";
 import { readNavigation } from "./navigation-read.js";
 import {
   UpdateReviewPanel,
@@ -362,19 +363,7 @@ function Workspace() {
     const updateLayoutContext = (context: McpUiHostContext | undefined) => {
       // Pagination uses the host's space budget, not the height we request for
       // this page. Otherwise a short last page would shrink the page size too.
-      const dimensions = context?.containerDimensions;
-      setInlineHeightLimit(
-        context &&
-          (!context.researchPreview || context.researchInlineSizing) &&
-          context.displayMode !== "fullscreen"
-          ? Math.min(
-              560,
-              dimensions && "maxHeight" in dimensions
-                ? (dimensions.maxHeight ?? 560)
-                : 560,
-            )
-          : null,
-      );
+      setInlineHeightLimit(inlineHeightLimitFor(context));
     };
     const updateAgentMessaging = () =>
       setCanAskAgent(Boolean(agentMessenger(app, chatGPTMessaging())));
