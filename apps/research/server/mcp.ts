@@ -414,7 +414,11 @@ export function createServer(
         idempotentHint: true,
         openWorldHint: false,
       },
-      _meta: { ui: { resourceUri } },
+      _meta: {
+        ui: { resourceUri },
+        // Mirror the standard field for ChatGPT integrations using its compatibility path.
+        "openai/outputTemplate": resourceUri,
+      },
     },
     ({ snapshot_id, snapshot, result_ref, offset, row_id, job_id }) =>
       safe(async () => {

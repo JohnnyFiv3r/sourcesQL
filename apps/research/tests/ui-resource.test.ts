@@ -50,7 +50,18 @@ test("new UI builds change discovery's cache key and keep older resources readab
         ).resourceUri,
         newUri,
       );
+      assert.equal(
+        tools.find((t) => t.name === name)!._meta?.["openai/outputTemplate"],
+        newUri,
+        "ChatGPT's compatibility alias must identify the same immutable UI",
+      );
     }
+    for (const tool of tools.filter((t) => t.name !== "open_research"))
+      assert.equal(
+        tool._meta?.["openai/outputTemplate"],
+        undefined,
+        "Data and mutation tools must not trigger intermediate app renders",
+      );
     for (const [uri, html] of [
       [newUri, newHtml],
       [oldUri, oldHtml],

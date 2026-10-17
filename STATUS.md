@@ -17,6 +17,10 @@ not establish that the host displayed the app. All 379 app tests and the
 TypeScript production build pass; a recorded 24-source view renders under strict
 CSP in independent headless Chrome. The reported ChatGPT loading failure still
 needs host-side evidence; these checks do not establish ChatGPT acceptance.
+The render tool also mirrors its standard resource URI in ChatGPT's documented
+optional template alias. Resource-read regressions keep both paths on the same
+immutable bundle; data tools remain without a template. This compatibility
+change still needs verification in ChatGPT and is not a confirmed root cause.
 
 PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
 The next local implementation covers canonical hosted preflight, bounded durable

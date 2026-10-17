@@ -99,7 +99,11 @@ test("OAuth discovery exposes the complete owner scope on all tools while preser
       (meta.ui as { resourceUri: string }).resourceUri,
       /^ui:\/\/sourcesql\/research-[a-f0-9]{16}\.html$/,
     );
-    assert.equal(meta["openai/outputTemplate"], undefined);
+    assert.equal(
+      meta["openai/outputTemplate"],
+      (meta.ui as { resourceUri: string }).resourceUri,
+      "OAuth discovery must preserve ChatGPT's matching template alias",
+    );
   }
   assert.deepEqual(oauth.resources, bearer.resources);
   assert.deepEqual(oauth.resource, bearer.resource);
