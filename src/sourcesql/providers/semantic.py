@@ -984,6 +984,19 @@ class OpenAIEmbeddingProvider:
             raise SourcesQLError(
                 "invalid_request", "Invalid scoring cancellation check", "semantic"
             )
+        callbacks = {
+            name: options.get(name)
+            for name in (
+                "on_score_batch_start",
+                "on_completed_score",
+                "on_score_batch_failed",
+                "on_score_batch_completed",
+            )
+        }
+        if any(value is not None and not callable(value) for value in callbacks.values()):
+            raise SourcesQLError(
+                "invalid_request", "Invalid scoring checkpoint callback", "semantic"
+            )
         deadline = options.get("deadline_monotonic")
         if deadline is not None and (
             type(deadline) not in {int, float} or not math.isfinite(deadline)
@@ -1086,6 +1099,44 @@ class OpenAIEmbeddingProvider:
         ]
         interruption: dict | None = None
         affected: set[str] = set()
+        published: set[int] = set()
+
+        def publish_completed_scores():
+            criterion_vector = self._vectors.get(criterion_key)
+            if criterion_vector is None:
+                return
+            for text, indices in inputs.items():
+                source_vector = self._vectors.get(self._cache_key(text))
+                if source_vector is None:
+                    continue
+                if len(source_vector) != len(criterion_vector):
+                    unresolved(indices, "invalid_output", "Cached embedding dimensions differ")
+                    for index in indices:
+                        outcomes[index].status = "invalid_output"
+                    continue
+                value = max(
+                    -1.0,
+                    min(
+                        1.0,
+                        math.fsum(
+                            a * b for a, b in zip(source_vector, criterion_vector, strict=True)
+                        ),
+                    ),
+                )
+                for index in indices:
+                    outcomes[index].value = value
+                    outcomes[index].status = "processed"
+                    if index not in published:
+                        callback = callbacks["on_completed_score"]
+                        if callback is not None:
+                            callback(index, outcomes[index])
+                        published.add(index)
+
+        # Cached vector pairs also produce durable scores without another request.
+        publish_completed_scores()
+        callback = callbacks["on_score_batch_completed"]
+        if callback is not None:
+            callback()
         while pending or criterion_key not in self._vectors:
             if check_active is not None:
                 check_active()
@@ -1107,8 +1158,43 @@ class OpenAIEmbeddingProvider:
             # unique submitted text. Reported usage remains separate.
             # Actual provider usage is reported separately; unknown outcomes keep
             # their reservation rather than being retried or silently refunded.
-            budget.reserve("input_tokens", reserved_tokens, "max_input_tokens")
-            budget.reserve("model_requests", limit="max_model_requests")
+            batch_indices = sorted({index for text in batch for index in inputs.get(text, [])})
+            if not batch_indices:
+                # A criterion-only request affects every as-yet unresolved score.
+                batch_indices = sorted(
+                    index
+                    for indices in inputs.values()
+                    for index in indices
+                    if index not in published
+                )
+            callback = callbacks["on_score_batch_start"]
+            if callback is not None:
+                callback(batch_indices)
+            prior_requests = budget.counts.get("model_requests", 0)
+            try:
+                budget.reserve("input_tokens", reserved_tokens, "max_input_tokens")
+                budget.reserve("model_requests", limit="max_model_requests")
+            except SourcesQLError as error:
+                if budget.counts.get("model_requests", 0) > prior_requests:
+                    self.events.append(
+                        {
+                            "kind": "embedding",
+                            "model": self.model,
+                            "status": "not_dispatched",
+                            "inputs": len(batch),
+                            "usage": {"requests": 0, "input_tokens": 0},
+                        }
+                    )
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(
+                        batch_indices,
+                        {
+                            "code": error.code,
+                            "remote_outcome_unknown": False,
+                        },
+                    )
+                raise
             batch_id = f"embedding_{len(self.events)}"
             event: dict[str, Any] = {
                 "kind": "embedding",
@@ -1188,30 +1274,33 @@ class OpenAIEmbeddingProvider:
             if interruption is not None:
                 event["failure"] = interruption
                 affected = set(batch)
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(batch_indices, interruption)
                 break
+            # Persist valid completed scores before checking a later deadline,
+            # cancellation or request. Coordinator failures must propagate rather
+            # than being mistaken for malformed provider output.
+            publish_completed_scores()
+            if any(outcomes[index].status != "processed" for index in batch_indices):
+                interruption = {
+                    "code": "invalid_output",
+                    "message": "Embedding batch did not produce valid scores",
+                    "remote_outcome_unknown": False,
+                    "retryable": False,
+                }
+                event.update(status="invalid_output", failure=interruption)
+                affected = set(batch)
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(batch_indices, interruption)
+                break
+            callback = callbacks["on_score_batch_completed"]
+            if callback is not None:
+                callback()
 
-        criterion_vector = self._vectors.get(criterion_key)
         for text, indices in inputs.items():
-            source_vector = self._vectors.get(self._cache_key(text))
-            if source_vector is not None and criterion_vector is not None:
-                if len(source_vector) != len(criterion_vector):
-                    unresolved(indices, "invalid_output", "Cached embedding dimensions differ")
-                    for index in indices:
-                        outcomes[index].status = "invalid_output"
-                    continue
-                value = max(
-                    -1.0,
-                    min(
-                        1.0,
-                        math.fsum(
-                            a * b for a, b in zip(source_vector, criterion_vector, strict=True)
-                        ),
-                    ),
-                )
-                for index in indices:
-                    outcomes[index].value = value
-                    outcomes[index].status = "processed"
-            elif interruption is not None:
+            if interruption is not None and any(index not in published for index in indices):
                 for index in indices:
                     outcomes[index].usage.update(
                         reason=interruption["code"], failure=dict(interruption)

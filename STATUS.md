@@ -13,12 +13,16 @@ The next local implementation covers canonical hosted preflight, bounded durable
 stage journals, explicit restart continuation/source recovery, query-hit
 provenance, retained evidence windows, item-level lineage and explained NULLs.
 Declared output requirements now separate execution success from unresolved
-research obligations. Guided personal-cloud setup accepts explicit model and
+research obligations and label those gaps in the existing result count. Scoring
+persists completed HTTP batches before strict cell validation or later deadlines;
+failed and uncertain effects cannot authorize replay. Batched storage checks and
+writes reduce per-row cloud overhead while rechecking authorization and cancellation
+before each paid batch and final publication. Guided personal-cloud setup accepts explicit model and
 embedding bindings while preserving search-only defaults.
 
 Targeted injected-failure and source-local evidence checks pass. The diagnostic
 UI keeps selection height stable and uses existing cell/correction affordances.
-Full suites pass: 937 Python/Flight tests (44 opt-in cases skipped), 372
+Full suites pass: 965 Python/Flight tests (44 opt-in cases skipped), 377
 app/gateway/MCP tests and 59 onboarding checks. Python lint/type checks and the
 Node 24 production build pass. Installed artifacts, Docker, hosted alignment and
 fresh ChatGPT/Claude research remain separate acceptance gates. This work has not

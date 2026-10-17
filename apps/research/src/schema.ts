@@ -185,6 +185,25 @@ export const researchQualitySchema = z
       });
   });
 export type ResearchQuality = z.infer<typeof researchQualitySchema>;
+export function researchGapSummary(
+  quality?: ResearchQuality,
+): string | undefined {
+  if (quality?.goalStatus !== "partial") return undefined;
+  const parts = [];
+  if (quality.rowShortfall)
+    parts.push(
+      `${quality.rowShortfall} more ${quality.rowShortfall === 1 ? "row" : "rows"} required`,
+    );
+  if (quality.unresolvedCells)
+    parts.push(
+      `${quality.unresolvedCells} required ${quality.unresolvedCells === 1 ? "cell is" : "cells are"} unresolved`,
+    );
+  return (
+    "Original research: " +
+    parts.join("; ") +
+    ". Declared requirements only; factual accuracy is not verified."
+  );
+}
 export const v2SnapshotSchema = z
   .object({
     schemaVersion: z.literal(2),

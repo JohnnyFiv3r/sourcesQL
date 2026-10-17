@@ -290,9 +290,9 @@ export function resultSnapshot(
   const rows = result.rows.map((values, index) => {
     const rowId = result.row_ids[index];
     const records = result.evidence.filter((e) => e.row_id === rowId);
-    const evidence: Record<string, string[]> = {};
+    const evidence = Object.create(null) as Record<string, string[]>;
     const cellSources: NonNullable<Snapshot["rows"][number]["cellSources"]> =
-      {};
+      Object.create(null);
     const urls = new Set<string>();
     const seenSupport = new Set<string>();
     for (const entry of records) {
@@ -355,10 +355,14 @@ export function resultSnapshot(
       evidenceRefs: [...records, ...lineage]
         .map((entry) => String(entry.id ?? entry.evidence_id ?? ""))
         .filter((id, index, refs) => !!id && refs.indexOf(id) === index),
-      evidence,
-      cellSources,
+      evidence: Object.fromEntries(Object.entries(evidence)),
+      cellSources: Object.fromEntries(Object.entries(cellSources)),
       ...(diagnostics.has(rowId)
-        ? { cellDiagnostics: diagnostics.get(rowId) }
+        ? {
+            cellDiagnostics: Object.fromEntries(
+              Object.entries(diagnostics.get(rowId)!),
+            ),
+          }
         : {}),
       verificationNote: Object.keys(evidence).length
         ? "Direct textual support; not a truth guarantee."

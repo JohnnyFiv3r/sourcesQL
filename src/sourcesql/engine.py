@@ -24,6 +24,7 @@ from sourcesql.contracts import (
     digest,
 )
 from sourcesql.storage.store import Store
+from sourcesql.storage.stages import MAX_JOURNAL_STAGES
 from sourcesql.research_quality import validate_requirements, assess_requirements
 from sourcesql.execution.worker import run_sql, WorkerSession
 
@@ -668,18 +669,54 @@ class Engine:
         deadline = time.monotonic() + budget.limits["dispatch_deadline_seconds"]
         registry = None
         session = None
+        score_batch_scope = False
+        score_guard_enabled = False
 
-        def check_active():
-            current = self.store.run(run_id)
+        def check_active(*, force=False):
+            if budget.cancelled:
+                raise SourcesQLError("cancelled", "Run cancelled", "dispatch")
+            if score_batch_scope and not force:
+                # Only retained in-memory score preparation/consumption occurs
+                # here. HTTP batches and publication use a fresh durable guard.
+                return receipt
+            if force and score_guard_enabled:
+                with self.store.db() as db:
+                    check_job = getattr(self.store, "_check_job", None)
+                    if check_job is not None:
+                        check_job(db)
+                    row = db.execute("SELECT receipt FROM runs WHERE id=?", (run_id,)).fetchone()
+                    if row is None:
+                        raise SourcesQLError("not_found", "Run unavailable", "read")
+                    current = strict_json(row[0])
+                    for parent in parents:
+                        actual = self.store._authorize(db, parent["result_id"], set())
+                        if parent.get("content_sha256") not in (
+                            None,
+                            actual["content_sha256"],
+                        ):
+                            raise SourcesQLError(
+                                "evidence_invalid", "Parent content pin mismatch", "dispatch"
+                            )
+            else:
+                current = self.store.run(run_id)
+                for parent in parents:
+                    self.store.authorize(parent["result_id"])
             if budget.cancelled or current["status"] == "cancelled":
                 budget.cancelled = True
                 raise SourcesQLError("cancelled", "Run cancelled", "dispatch")
-            for parent in parents:
-                self.store.authorize(parent["result_id"])
             return current
 
         def reserved(counter, amount):
-            current = check_active()
+            if score_batch_scope and counter in {
+                "scoring_documents",
+                "cache_hits",
+                "checkpoint_hits",
+            }:
+                # Limits still apply to each in-memory Budget.reserve. These
+                # counters authorize no effects; persist their cumulative counts
+                # with the next dispatch reservation or final receipt.
+                return
+            current = check_active(force=score_batch_scope)
             receipt.update(
                 counts=dict(budget.counts), receipt_revision=current["receipt_revision"] + 1
             )
@@ -794,7 +831,10 @@ class Engine:
                 self.worker_checked = True
 
             prepared_scores = {}
+            durable_scores = set()
             consumed_scores = set()
+            score_cache = {}
+            score_cache_known = set()
 
             def prepare_semantic(operator, args, kwargs):
                 check_active()
@@ -858,26 +898,26 @@ class Engine:
                 return context, options, fields, text, instruction, source, cachekey
 
             def dispatch_scores(calls):
+                nonlocal score_batch_scope, score_guard_enabled
+                previous_scope = score_batch_scope
+                score_guard_enabled = True
+                score_batch_scope = True
+                try:
+                    check_active(force=True)
+                    values = dispatch_score_batch(calls)
+                    check_active(force=True)
+                    return values
+                finally:
+                    score_batch_scope = previous_scope
+
+            def dispatch_score_batch(calls):
                 pending = {}
                 groups = {}
                 for args, kwargs in calls:
                     _, options, _, text, instruction, _, cachekey = prepare_semantic(
                         "SEM_SCORE", args, kwargs
                     )
-                    if cachekey in pending or cachekey in prepared_scores:
-                        continue
-                    with self.store.db() as db:
-                        cached = db.execute(
-                            "SELECT value FROM semantic_cache WHERE key=?", (cachekey,)
-                        ).fetchone()
-                    if cached and strict_json(cached[0]).get("status") in {
-                        "processed",
-                        "unknown",
-                        "not_stated",
-                    }:
-                        continue
-                    pending[cachekey] = text
-                    # Source identities affect receipts/cache keys, not the embedding computation.
+                    # Source identities bind saved values, not vector batching.
                     scoring_options = {
                         k: v
                         for k, v in options.items()
@@ -891,19 +931,235 @@ class Engine:
                         }
                     }
                     group = digest([instruction, scoring_options])
-                    groups.setdefault(group, (instruction, scoring_options, []))[2].append(cachekey)
-                for instruction, options, keys in groups.values():
+                    entry = groups.setdefault(group, (instruction, scoring_options, {}))
+                    entry[2][cachekey] = text
+                    if cachekey in pending or cachekey in prepared_scores:
+                        continue
+                    pending[cachekey] = text
+                missing = [key for key in pending if key not in score_cache_known]
+                if missing:
+                    with self.store.db() as db:
+                        # Below SQLite's portable parameter allowance; the same
+                        # bounded keyed reads work with native DuckDB storage.
+                        for offset in range(0, len(missing), 128):
+                            keys = missing[offset : offset + 128]
+                            placeholders = ",".join("?" for _ in keys)
+                            score_cache.update(
+                                db.execute(
+                                    "SELECT key,value FROM semantic_cache "
+                                    f"WHERE key IN ({placeholders})",
+                                    keys,
+                                ).fetchall()
+                            )
+                    score_cache_known.update(missing)
+                for cachekey in list(pending):
+                    cached = score_cache.get(cachekey)
+                    if cached and strict_json(cached).get("status") in {
+                        "processed",
+                        "unknown",
+                        "not_stated",
+                    }:
+                        pending.pop(cachekey)
+                with self.store.db() as db:
+                    journal_keys = [
+                        row[0]
+                        for row in db.execute(
+                            "SELECT stage_key FROM execution_stages WHERE journal_id=? ORDER BY stage_key LIMIT ?",
+                            [receipt["journal_id"], MAX_JOURNAL_STAGES + 1],
+                        ).fetchall()
+                    ]
+                if len(journal_keys) > MAX_JOURNAL_STAGES:
+                    raise SourcesQLError(
+                        "evidence_invalid", "Scoring journal exceeds its stage allowance", "storage"
+                    )
+                for instruction, options, all_keys in groups.values():
                     check_active()
+                    ordered = sorted(all_keys)
+                    positions = {key: index for index, key in enumerate(ordered)}
+                    # The original complete set, including cached inputs, makes
+                    # ranges stable across restart and changing cache coverage.
+                    # A sparse failed batch conservatively blocks intervening
+                    # unresolved keys; it never permits an uncertain replay.
+                    prefix = (
+                        "score_"
+                        + digest(
+                            [
+                                ordered,
+                                instruction,
+                                options,
+                                pinned["profile_revision"],
+                                parents,
+                            ]
+                        )[:48]
+                        + "_"
+                    )
+                    for journal_key in journal_keys:
+                        if not journal_key.startswith(prefix):
+                            continue
+                        span = re.fullmatch(r"(\d+)_(\d+)_(\d+)", journal_key[len(prefix) :])
+                        if span is None:
+                            raise SourcesQLError(
+                                "evidence_invalid", "Scoring checkpoint range is invalid", "storage"
+                            )
+                        first, last, _ = map(int, span.groups())
+                        if not 0 <= first <= last < len(ordered):
+                            raise SourcesQLError(
+                                "evidence_invalid", "Scoring checkpoint range is invalid", "storage"
+                            )
+                        retained = self.store.stage_read(receipt["journal_id"], journal_key)
+                        if retained["status"] != "completed":
+                            if any(key in pending for key in ordered[first : last + 1]):
+                                raise SourcesQLError(
+                                    "execution_outcome_unknown"
+                                    if retained["status"] in {"intent", "outcome_unknown"}
+                                    else (retained["error_code"] or "execution_failed"),
+                                    "A retained scoring effect requires inspection before further work",
+                                    "dispatch",
+                                )
+                            continue
+                        value = retained["value"]
+                        if value.get("operator") != "SEM_SCORE" or not isinstance(
+                            value.get("data"), list
+                        ):
+                            raise SourcesQLError(
+                                "evidence_invalid", "Scoring checkpoint is invalid", "storage"
+                            )
+                        for saved in value["data"]:
+                            cachekey = saved.get("key")
+                            outcome = saved.get("outcome")
+                            if (
+                                cachekey not in positions
+                                or not first <= positions[cachekey] <= last
+                                or not isinstance(outcome, dict)
+                                or outcome.get("status") != "processed"
+                            ):
+                                raise SourcesQLError(
+                                    "evidence_invalid", "Scoring checkpoint is invalid", "storage"
+                                )
+                            if cachekey not in pending:
+                                continue
+                            restored = SemanticOutcome(**outcome)
+                            restored.usage = {
+                                **restored.usage,
+                                "requests": 0,
+                                "input_tokens": 0,
+                                "reserved_input_tokens": 0,
+                                "state": "checkpoint_reuse",
+                            }
+                            prepared_scores[cachekey] = restored
+                            durable_scores.add(cachekey)
+                            pending.pop(cachekey)
+                            budget.reserve("checkpoint_hits", limit="unbounded_counter")
+                    keys = [key for key in all_keys if key in pending]
+                    if not keys:
+                        continue
+                    active_batch = None
+                    persisted = set()
+                    unflushed = {}
+
+                    def flush_scores():
+                        if not unflushed:
+                            return
+                        saved = list(unflushed.items())
+                        with self.store.db() as db:
+                            for offset in range(0, len(saved), 128):
+                                batch = saved[offset : offset + 128]
+                                placeholders = ",".join("(?,?)" for _ in batch)
+                                db.execute(
+                                    "INSERT OR REPLACE INTO semantic_cache VALUES " + placeholders,
+                                    [
+                                        item
+                                        for key, value in batch
+                                        for item in (key, canonical(value).decode())
+                                    ],
+                                )
+                        durable_scores.update(unflushed)
+                        unflushed.clear()
+
+                    def begin_score_batch(indices):
+                        nonlocal active_batch
+                        check_active(force=True)
+                        selected = [positions[keys[index]] for index in indices]
+                        ordinal = budget.counts.get("model_requests", 0) + 1
+                        journal_key = prefix + f"{min(selected)}_{max(selected)}_{ordinal}"
+                        state, created = self.store.stage_begin(receipt["journal_id"], journal_key)
+                        if not created:
+                            raise SourcesQLError(
+                                "execution_outcome_unknown"
+                                if state["status"] in {"intent", "outcome_unknown"}
+                                else "storage_conflict",
+                                "Scoring checkpoint changed before dispatch",
+                                "dispatch",
+                            )
+                        active_batch = {"key": journal_key, "scores": {}}
+
+                    def persist_score(index, outcome):
+                        cachekey = keys[index]
+                        if cachekey in persisted or outcome.status != "processed":
+                            return
+                        value = {
+                            "value": outcome.value,
+                            "status": outcome.status,
+                            "support": outcome.support,
+                            "usage": outcome.usage,
+                        }
+                        unflushed[cachekey] = value
+                        if active_batch is not None:
+                            active_batch["scores"][cachekey] = value
+                        persisted.add(cachekey)
+
+                    def complete_score_batch():
+                        nonlocal active_batch
+                        if active_batch is not None:
+                            stage_finish(
+                                active_batch["key"],
+                                "SEM_SCORE",
+                                [
+                                    {"key": key, "outcome": outcome}
+                                    for key, outcome in sorted(active_batch["scores"].items())
+                                ],
+                            )
+                            active_batch = None
+                        flush_scores()
+
+                    def fail_score_batch(indices, failure):
+                        nonlocal active_batch
+                        error = SourcesQLError(
+                            failure.get("code", "execution_failed"),
+                            "Embedding batch failed",
+                            "semantic",
+                        )
+                        setattr(
+                            error,
+                            "remote_outcome_unknown",
+                            failure.get("remote_outcome_unknown") is True,
+                        )
+                        if active_batch is not None:
+                            stage_fail(active_batch["key"], error)
+                            active_batch = None
+
                     values = registry.score_many(
                         [pending[key] for key in keys],
                         instruction,
-                        {**options, "deadline_monotonic": deadline, "check_active": check_active},
+                        {
+                            **options,
+                            "deadline_monotonic": deadline,
+                            "check_active": lambda: check_active(force=True),
+                            "on_score_batch_start": begin_score_batch,
+                            "on_completed_score": persist_score,
+                            "on_score_batch_completed": complete_score_batch,
+                            "on_score_batch_failed": fail_score_batch,
+                        },
                         budget,
                     )
                     if len(values) != len(keys):
                         raise SourcesQLError(
                             "invalid_output", "Scoring must preserve row identity", "semantic"
                         )
+                    # Trusted custom scorers may return one complete batch.
+                    for index, outcome in enumerate(values):
+                        persist_score(index, outcome)
+                    flush_scores()
                     prepared_scores.update(zip(keys, values, strict=True))
                 return [dispatch("SEM_SCORE", args, kwargs) for args, kwargs in calls]
 
@@ -966,12 +1222,21 @@ class Engine:
                 context, options, fields, text, instruction, source, cachekey = prepare_semantic(
                     operator, args, kwargs
                 )
-                with self.store.db() as db:
-                    cached = db.execute(
-                        "SELECT value FROM semantic_cache WHERE key=?", (cachekey,)
-                    ).fetchone()
+                cached = None
+                if operator == "SEM_SCORE" and score_batch_scope and cachekey in score_cache_known:
+                    if cachekey in score_cache:
+                        cached = (score_cache[cachekey],)
+                elif cachekey not in durable_scores:
+                    with self.store.db() as db:
+                        cached = db.execute(
+                            "SELECT value FROM semantic_cache WHERE key=?", (cachekey,)
+                        ).fetchone()
                 cacheable = {"supported_text", "processed", "not_stated", "unknown", "no_match"}
                 if cached and strict_json(cached[0]).get("status") not in cacheable:
+                    cached = None
+                if operator == "SEM_SCORE" and cachekey in prepared_scores:
+                    # A score just persisted by this run still owns its actual
+                    # usage. Only later runs or duplicate positions reuse it.
                     cached = None
                 if cached:
                     value = strict_json(cached[0])
@@ -1067,7 +1332,7 @@ class Engine:
                                     "Supporting text span does not match inspected source",
                                     "semantic",
                                 )
-                    if value["status"] in cacheable:
+                    if value["status"] in cacheable and cachekey not in durable_scores:
                         with self.store.db() as db:
                             db.execute(
                                 "INSERT OR REPLACE INTO semantic_cache VALUES(?,?)",
@@ -1251,6 +1516,8 @@ class Engine:
             with self.lock:
                 if budget.cancelled:
                     raise SourcesQLError("cancelled", "Run cancelled", "publish")
+                if score_guard_enabled:
+                    check_active(force=True)
                 result_classification = (
                     classification
                     if classification == "private_derived"

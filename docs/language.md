@@ -145,8 +145,8 @@ bounded extraction to investigate omitted material.
 
 Unanswered cells remain NULL. Where available, `cell_diagnostics` distinguishes
 unstated, uninspected, ambiguous, conflicting, failed and capacity-limited work.
-Diagnostics are not citations. The app exposes the reason through the cell and
-its existing correction flow.
+Diagnostics are not citations. The app exposes the original research reason
+through the cell and its existing correction flow.
 
 A query may declare `research_requirements` with `key_columns`, `fields` and
 `minimum_rows`. These name output column keys and a bounded minimum row count;
@@ -154,6 +154,10 @@ they do not impose a hidden topical filter. The result's `research_quality`
 records unresolved cell obligations and row shortfall separately from execution
 success. `requirements_satisfied` means those declared shape/presence obligations
 were met; it does not verify truth, unique entity identity or complete web coverage.
+The existing result count labels unresolved declared requirements as partial
+research. This assessment describes the saved query output; a later manual
+correction does not rewrite that earlier observation. Query the effective view
+with declared requirements to assess a corrected result.
 Without declared requirements, research completeness remains `not_evaluated`.
 Reuse saved sources and inspect relevant windows before targeted gap searches.
 Any follow-up still consumes the existing authorized allowances.

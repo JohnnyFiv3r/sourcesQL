@@ -552,10 +552,35 @@ class MotherDuckStore(Store):
                 ).fetchone()
                 receipt = json.loads(row[0]) if row else {}
                 intents = receipt.get("dispatch_intents", [])
-                if intents:
+                events = [
+                    event
+                    for event in receipt.get("provider_events", [])
+                    if event.get("kind") != "embedding_cache"
+                ]
+                known_no_dispatch = (
+                    events
+                    and all(event.get("status") == "not_dispatched" for event in events)
+                    and len(events) >= sum(intent.get("amount", 0) for intent in intents)
+                )
+                if not row:
+                    state = "outcome_unknown"
+                elif intents and not known_no_dispatch:
                     state = (
                         "outcome_unknown"
                         if receipt.get("settlement_status") != "settled"
+                        or len(events) < sum(intent.get("amount", 0) for intent in intents)
+                        or any(
+                            event.get("status")
+                            not in {
+                                "completed",
+                                "failed",
+                                "rejected",
+                                "invalid_output",
+                                "completed_validation_failed",
+                                "not_dispatched",
+                            }
+                            for event in events
+                        )
                         else "rejected"
                         if code == "provider_http_error"
                         else "settled"

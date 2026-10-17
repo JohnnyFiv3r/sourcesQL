@@ -45,6 +45,7 @@ import {
   snapshotSchema,
   sourcesForViewSelection,
   cellDiagnosticSummary,
+  researchGapSummary,
   type ResearchView,
   type Row,
   type ResearchRequestSummary,
@@ -2270,6 +2271,13 @@ function Workspace() {
                   : rows.length === view.snapshot.rows.length
                     ? `${rows.length} ${rows.length === 1 ? "result" : "results"}`
                     : `${rows.length} of ${view.snapshot.rows.length} results`}
+                {researchGapSummary(view.snapshot.researchQuality) && (
+                  <span
+                    title={researchGapSummary(view.snapshot.researchQuality)}
+                  >
+                    {" · Partial research"}
+                  </span>
+                )}
               </span>
               {view.preview &&
                 view.preview.total > view.snapshot.rows.length && (

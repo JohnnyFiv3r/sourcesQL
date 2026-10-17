@@ -84,17 +84,22 @@ meaningful change, with Q10 keeping adopter behavior aligned with what passed.
 
 ## Active execution
 
-PR #2 merged as `3cdfa00` after its exact head passed 796 Python and 357
-app/gateway/MCP tests. External review credits were not used as a merge gate.
+Safe failure transport merged in PR #2 (`3cdfa00`) after its exact head passed
+796 Python and 357 app/gateway/MCP tests.
 
 The next implementation covers Q01–Q08 and Q10 together, with independent
 runtime, packaging/adopter and evidence-path reviews. Local checks include the
 actual Python writer/DuckDB/gateway/MCP preflight route, failed fanout siblings,
 restart continuation, unknown-outcome refusal, later-section evidence, item-level
-lineage, declared research gaps and UI diagnostic presentation. The full suite passes: 937 Python/Flight tests (44 opt-in cases skipped),
-372 app/gateway/MCP tests and 59 onboarding checks. Python lint/type checks and
-the Node 24 production build pass. Installed artifacts, containers, hosted and
-ordinary-host acceptance remain separate pending gates.
+lineage, declared research gaps and UI diagnostic presentation. The full suite passes: 965 Python/Flight tests (44 opt-in cases skipped),
+377 app/gateway/MCP tests and 59 onboarding checks. Python lint/type checks and
+the Node 24 production build pass. Independent review and actual Docker HTTP
+checks exposed scoring-reuse and canonical-record prototype issues; both have
+new regressions. The corrected candidate also coalesces scoring storage work.
+A local native-store measurement at 32 candidates dropped from 419 to 39 cold
+connector contexts; that is not a hosted latency or billing measurement.
+Installed artifacts, containers, hosted and ordinary-host acceptance for the
+corrected build remain separate pending gates.
 
 The hosted qualification plan preserves existing queued research and reservation
 ledgers. It bounds new qualification to 12 Flights, 1,440 reserved seconds and

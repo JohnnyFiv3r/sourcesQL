@@ -6,7 +6,44 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resultSnapshot, type EngineResult } from "../server/engine.js";
 import { ResearchStore } from "../server/store.js";
-import { cellDiagnosticSummary, snapshotSchema } from "../src/schema.js";
+import {
+  cellDiagnosticSummary,
+  researchGapSummary,
+  researchQualitySchema,
+  snapshotSchema,
+} from "../src/schema.js";
+
+test("declared central omissions stay visibly partial without implying factual verification", () => {
+  const quality = researchQualitySchema.parse({
+    goalStatus: "partial",
+    requiredCells: 4,
+    unresolvedCells: 2,
+    rowShortfall: 1,
+    gaps: [],
+    gapsTotal: 0,
+    gapsOmitted: 0,
+    complete: false,
+    scope: "declared_cells_and_minimum_rows",
+    factualTruthVerified: false,
+  });
+  assert.match(
+    researchGapSummary(quality)!,
+    /1 more row required; 2 required cells are unresolved/,
+  );
+  assert.match(
+    researchGapSummary(quality)!,
+    /factual accuracy is not verified/,
+  );
+  assert.equal(researchGapSummary(), undefined);
+  assert.equal(
+    researchGapSummary({ ...quality, goalStatus: "not_evaluated" }),
+    undefined,
+  );
+  assert.equal(
+    researchGapSummary({ ...quality, goalStatus: "requirements_satisfied" }),
+    undefined,
+  );
+});
 
 const reference = {
   result_id: "wq_diagnostics",
