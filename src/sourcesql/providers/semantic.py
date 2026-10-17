@@ -6,6 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
 import math
+from time import monotonic
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -13,7 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from pydantic.json_schema import SkipJsonSchema
 
 from ..contracts import Budget, SemanticOutcome, SourcesQLError, canonical
-from .common import api_json, json_object, text_hash
+from .common import ProviderTransportError, json_object, read_response, text_hash
+from .tokenization import get_embedding_tokenizer
 
 TYPES = {"VARCHAR", "BOOLEAN", "BIGINT", "DOUBLE", "DECIMAL(18,2)", "DATE", "TIMESTAMPTZ"}
 
@@ -779,7 +781,14 @@ class PydanticSemanticProvider:
 
 
 class OpenAIEmbeddingProvider:
-    """Configured embeddings and finite cosine scoring; no lexical fallback."""
+    """Bounded embedding batches and cached finite cosine scores; no lexical fallback."""
+
+    # Smaller than the API's 2,048-input ceiling to bound float response memory.
+    MAX_BATCH_INPUTS = 128
+    CONTRACT_VERSION = "openai-embeddings.v2"
+    MAX_BATCH_TOKENS = 300_000
+    MAX_INPUT_TOKENS = 8_192
+    MAX_RESPONSE_BYTES = 16_777_216
 
     def __init__(
         self,
@@ -787,86 +796,327 @@ class OpenAIEmbeddingProvider:
         api_key: str,
         client: httpx.Client | None = None,
         endpoint: str = "https://api.openai.com/v1/embeddings",
+        encoding_name: str | None = None,
     ):
         self.model, self.api_key, self.endpoint = model, api_key, endpoint
+        self.encoding_name = encoding_name
         self.client = client or httpx.Client(timeout=30, trust_env=False, follow_redirects=False)
         self.events: list[dict] = []
+        # A provider instance belongs to one configured execution context. Never
+        # persist source text or embeddings, or reuse across endpoint/model changes.
+        self._vectors: dict[tuple[str, str, str], tuple[float, ...]] = {}
+
+    def _cache_key(self, text: str) -> tuple[str, str, str]:
+        return self.endpoint, self.model, text
+
+    def preflight(self) -> None:
+        get_embedding_tokenizer(self.model, self.encoding_name)
+
+    @staticmethod
+    def _validated_vectors(data: Any, count: int, dimension: int | None) -> list[tuple[float, ...]]:
+        if not isinstance(data, list) or len(data) != count:
+            raise ValueError
+        indexed = {}
+        for entry in data:
+            if not isinstance(entry, dict):
+                raise ValueError
+            index, vector = entry.get("index"), entry.get("embedding")
+            if type(index) is not int or not 0 <= index < count or index in indexed:
+                raise ValueError
+            if (
+                not isinstance(vector, list)
+                or not vector
+                or (dimension is not None and len(vector) != dimension)
+                or any(type(v) not in {int, float} or not math.isfinite(v) for v in vector)
+            ):
+                raise ValueError
+            dimension = len(vector)
+            norm = math.hypot(*vector)
+            if norm == 0 or not math.isfinite(norm):
+                raise ValueError
+            indexed[index] = tuple(v / norm for v in vector)
+        return [indexed[index] for index in range(count)]
+
+    def _request_embeddings(self, batch: list[str], timeout: float) -> dict:
+        try:
+            with self.client.stream(
+                "POST",
+                self.endpoint,
+                headers={"Authorization": "Bearer " + self.api_key},
+                json={"model": self.model, "input": batch, "encoding_format": "float"},
+                follow_redirects=False,
+                timeout=timeout,
+            ) as response:
+                if response.is_redirect:
+                    raise SourcesQLError(
+                        "provider_unavailable", "Unexpected embedding API redirect", "semantic"
+                    )
+                return json_object(read_response(response, self.MAX_RESPONSE_BYTES))
+        except httpx.TimeoutException:
+            raise ProviderTransportError(
+                "provider_timeout", "Embedding request timed out", "semantic"
+            ) from None
+        except httpx.HTTPError:
+            raise ProviderTransportError(
+                "provider_connection_error", "Embedding connection failed", "semantic"
+            ) from None
 
     def score(self, text: str, criterion: str, options: dict, budget: Budget) -> SemanticOutcome:
+        return self.score_many([text], criterion, options, budget)[0]
+
+    def score_many(
+        self, texts: list[str | None], criterion: str, options: dict, budget: Budget
+    ) -> list[SemanticOutcome]:
         if not self.api_key or not self.model:
             raise SourcesQLError(
                 "unsupported_capability", "An embedding model must be configured", "semantic"
             )
-        if not isinstance(text, str) or not isinstance(criterion, str):
-            return SemanticOutcome(None, "unprocessed")
-        window = options.get("window_chars", 16000)
-        if type(window) is not int or not 1 <= window <= 16000:
+        window = options.get("window_chars")
+        if window is not None and (type(window) is not int or not 1 <= window <= 16000):
             raise SourcesQLError("invalid_request", "Invalid scoring input window", "semantic")
-        budget.reserve("model_requests", limit="max_model_requests")
-        event = {"kind": "embedding", "model": self.model, "status": "dispatched"}
-        self.events.append(event)
-        try:
-            body = api_json(
-                self.client,
-                "POST",
-                self.endpoint,
-                headers={"Authorization": "Bearer " + self.api_key},
-                body={
-                    "model": self.model,
-                    "input": [text[:window], criterion],
-                    "encoding_format": "float",
-                },
+        check_active = options.get("check_active")
+        if check_active is not None and not callable(check_active):
+            raise SourcesQLError(
+                "invalid_request", "Invalid scoring cancellation check", "semantic"
             )
-            data = body.get("data", [])
-            indexed = {entry["index"]: entry["embedding"] for entry in data}
-            if len(data) != 2 or set(indexed) != {0, 1}:
-                raise ValueError
-            a, b = indexed[0], indexed[1]
-            if (
-                not isinstance(a, list)
-                or not isinstance(b, list)
-                or len(a) != len(b)
-                or not a
-                or any(type(v) not in {int, float} or not math.isfinite(v) for v in a + b)
-            ):
-                raise ValueError
-            norm = math.sqrt(sum(v * v for v in a)) * math.sqrt(sum(v * v for v in b))
-            if norm == 0 or not math.isfinite(norm):
-                raise ValueError
-            score = sum(x * y for x, y in zip(a, b, strict=True)) / norm
-            if not math.isfinite(score):
-                raise ValueError
-            tokens = body.get("usage", {}).get("total_tokens")
-            if type(tokens) is int and tokens >= 0:
-                budget.reserve("input_tokens", tokens, "max_input_tokens")
-            event["status"] = "completed"
-            return SemanticOutcome(
-                max(-1.0, min(1.0, score)),
-                "processed",
+        deadline = options.get("deadline_monotonic")
+        if deadline is not None and (
+            type(deadline) not in {int, float} or not math.isfinite(deadline)
+        ):
+            raise SourcesQLError("invalid_request", "Invalid scoring deadline", "semantic")
+        outcomes = [
+            SemanticOutcome(
+                None,
+                "unprocessed",
                 usage={
                     "provider": "openai_embeddings",
                     "model": self.model,
-                    "requests": 1,
-                    "input_tokens": tokens,
+                    "adapter_version": self.CONTRACT_VERSION,
+                    "requests": 0,
+                    "input_tokens": 0,
+                    "reserved_input_tokens": 0,
                     "cost_microusd": None,
                     "score_basis": "cosine_similarity",
-                    "input_omitted_characters": max(0, len(text) - window),
-                    "content_sha256": text_hash(text),
                 },
             )
-        except SourcesQLError as error:
-            event["status"] = (
-                "remote_outcome_unknown"
-                if getattr(error, "remote_outcome_unknown", False)
-                else "failed"
+            for _ in texts
+        ]
+        if not outcomes:
+            return outcomes
+
+        def unresolved(indices: list[int], reason: str, message: str) -> None:
+            for index in indices:
+                outcomes[index].usage.update(
+                    reason=reason,
+                    failure={"code": reason, "message": message, "retryable": False},
+                )
+
+        if not isinstance(criterion, str) or not criterion.strip():
+            unresolved(list(range(len(texts))), "missing_criterion", "Scoring needs a criterion")
+            return outcomes
+        encoder = get_embedding_tokenizer(self.model, self.encoding_name)
+        criterion_tokens = len(encoder.encode_ordinary(criterion))
+        if criterion_tokens > self.MAX_INPUT_TOKENS:
+            unresolved(
+                list(range(len(texts))),
+                "embedding_input_limit",
+                "Scoring criterion exceeds the embedding model's token limit; shorten it",
             )
-            if error.code in {"budget_exhausted", "cancelled"}:
-                raise
-            return SemanticOutcome(
-                None, "failed", usage={"model": self.model, "cost_microusd": None}
+            return outcomes
+
+        inputs: dict[str, list[int]] = {}
+        token_counts: dict[str, int] = {criterion: criterion_tokens}
+        for index, text in enumerate(texts):
+            if not isinstance(text, str) or not text[:window].strip():
+                unresolved([index], "missing_text", "Scoring needs retained source text")
+                continue
+            bounded = text[:window]
+            if bounded not in token_counts:
+                token_counts[bounded] = len(encoder.encode_ordinary(bounded))
+            outcomes[index].usage.update(
+                input_omitted_characters=len(text) - len(bounded),
+                content_sha256=text_hash(text),
+                inspected_characters=len(bounded),
+                inspected_tokens=token_counts[bounded],
+                token_encoding=encoder.name,
+                criterion_sha256=text_hash(criterion),
             )
-        except (ValueError, KeyError, TypeError, OverflowError):
-            event["status"] = "invalid_output"
-            return SemanticOutcome(
-                None, "invalid_output", usage={"model": self.model, "cost_microusd": None}
+            if token_counts[bounded] > self.MAX_INPUT_TOKENS:
+                unresolved(
+                    [index],
+                    "embedding_input_limit",
+                    "Scoring text exceeds the embedding model's token limit; "
+                    "use an explicit substr(content, 1, n) SQL passage or retained highlights",
+                )
+                continue
+            inputs.setdefault(bounded, []).append(index)
+        if not inputs:
+            return outcomes
+
+        criterion_key = self._cache_key(criterion)
+        initially_cached = set(self._vectors)
+        for text, indices in inputs.items():
+            cache_hit = (
+                self._cache_key(text) in initially_cached and criterion_key in initially_cached
             )
+            for index in indices:
+                outcomes[index].usage["embedding_cache_hit"] = cache_hit
+        cached_inputs = sum(self._cache_key(text) in initially_cached for text in inputs)
+        if cached_inputs or criterion_key in initially_cached:
+            self.events.append(
+                {
+                    "kind": "embedding_cache",
+                    "model": self.model,
+                    "status": "cache_hit",
+                    "inputs": cached_inputs,
+                    "criterion_cached": criterion_key in initially_cached,
+                    "usage": {"requests": 0, "input_tokens": 0},
+                }
+            )
+
+        pending = [
+            text
+            for text in inputs
+            if self._cache_key(text) not in self._vectors and text != criterion
+        ]
+        interruption: dict | None = None
+        affected: set[str] = set()
+        while pending or criterion_key not in self._vectors:
+            if check_active is not None:
+                check_active()
+            remaining = deadline - monotonic() if deadline is not None else 30.0
+            if remaining <= 0:
+                raise SourcesQLError("budget_exhausted", "Dispatch deadline exceeded", "dispatch")
+            need_criterion = criterion_key not in self._vectors
+            batch: list[str] = []
+            reserved_tokens = criterion_tokens if need_criterion else 0
+            while pending and len(batch) < self.MAX_BATCH_INPUTS - int(need_criterion):
+                tokens = token_counts[pending[0]]
+                if reserved_tokens + tokens > self.MAX_BATCH_TOKENS:
+                    break
+                batch.append(pending.pop(0))
+                reserved_tokens += tokens
+            if need_criterion:
+                batch.append(criterion)
+            # Exact tokenizer counts are reserved before dispatch, once per
+            # unique submitted text. Reported usage remains separate.
+            # Actual provider usage is reported separately; unknown outcomes keep
+            # their reservation rather than being retried or silently refunded.
+            budget.reserve("input_tokens", reserved_tokens, "max_input_tokens")
+            budget.reserve("model_requests", limit="max_model_requests")
+            batch_id = f"embedding_{len(self.events)}"
+            event: dict[str, Any] = {
+                "kind": "embedding",
+                "model": self.model,
+                "status": "dispatched",
+                "batch_id": batch_id,
+                "inputs": len(batch),
+                "reserved_input_tokens": reserved_tokens,
+                "usage": {"requests": 1, "input_tokens": None},
+            }
+            self.events.append(event)
+            # Charge the batch exactly once, including a criterion-only batch.
+            charge_row = next(
+                (inputs[text][0] for text in batch if text in inputs),
+                next(iter(inputs.values()))[0],
+            )
+            charge_usage = outcomes[charge_row].usage
+            charge_usage["requests"] += 1
+            charge_usage["reserved_input_tokens"] += reserved_tokens
+            charge_usage["input_tokens"] = None
+            charge_usage.setdefault("embedding_batch_ids", []).append(batch_id)
+            for text in batch:
+                for index in inputs.get(text, []):
+                    if index != charge_row:
+                        outcomes[index].usage.setdefault("embedding_batch_ids", []).append(batch_id)
+            try:
+                body = self._request_embeddings(batch, timeout=min(30.0, remaining))
+                usage = body.get("usage")
+                reported_tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
+                if type(reported_tokens) is int and reported_tokens >= 0:
+                    event["usage"]["input_tokens"] = reported_tokens
+                    charge_usage["input_tokens"] = reported_tokens
+                cached_vector = self._vectors.get(criterion_key)
+                if cached_vector is None:
+                    cached_vector = next(
+                        (
+                            self._vectors[self._cache_key(text)]
+                            for text in inputs
+                            if self._cache_key(text) in self._vectors
+                        ),
+                        None,
+                    )
+                vectors = self._validated_vectors(
+                    body.get("data"),
+                    len(batch),
+                    len(cached_vector) if cached_vector is not None else None,
+                )
+                # An invalid batch cannot partially poison the vector cache.
+                for text, vector in zip(batch, vectors, strict=True):
+                    self._vectors[self._cache_key(text)] = vector
+                event["status"] = "completed"
+            except SourcesQLError as error:
+                if error.code in {"budget_exhausted", "cancelled"}:
+                    raise
+                unknown = getattr(error, "remote_outcome_unknown", False)
+                event["status"] = (
+                    "remote_outcome_unknown"
+                    if unknown
+                    else "invalid_output"
+                    if error.code == "invalid_output"
+                    else "failed"
+                )
+                interruption = {
+                    "code": error.code,
+                    "message": error.safe_message,
+                    "remote_outcome_unknown": unknown,
+                    "retryable": False,
+                }
+            except (ValueError, KeyError, TypeError, OverflowError):
+                event["status"] = "invalid_output"
+                interruption = {
+                    "code": "invalid_output",
+                    "message": "Embedding response contains invalid indices or vectors",
+                    "remote_outcome_unknown": False,
+                    "retryable": False,
+                }
+            if interruption is not None:
+                event["failure"] = interruption
+                affected = set(batch)
+                break
+
+        criterion_vector = self._vectors.get(criterion_key)
+        for text, indices in inputs.items():
+            source_vector = self._vectors.get(self._cache_key(text))
+            if source_vector is not None and criterion_vector is not None:
+                if len(source_vector) != len(criterion_vector):
+                    unresolved(indices, "invalid_output", "Cached embedding dimensions differ")
+                    for index in indices:
+                        outcomes[index].status = "invalid_output"
+                    continue
+                value = max(
+                    -1.0,
+                    min(
+                        1.0,
+                        math.fsum(
+                            a * b for a, b in zip(source_vector, criterion_vector, strict=True)
+                        ),
+                    ),
+                )
+                for index in indices:
+                    outcomes[index].value = value
+                    outcomes[index].status = "processed"
+            elif interruption is not None:
+                for index in indices:
+                    outcomes[index].usage.update(
+                        reason=interruption["code"], failure=dict(interruption)
+                    )
+                    if text in affected or criterion in affected:
+                        outcomes[index].status = (
+                            "invalid_output"
+                            if interruption["code"] == "invalid_output"
+                            else "failed"
+                        )
+                    else:
+                        outcomes[index].usage["reason"] = "embedding_batch_interrupted"
+        return outcomes

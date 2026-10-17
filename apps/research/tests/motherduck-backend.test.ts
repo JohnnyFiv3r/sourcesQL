@@ -1376,6 +1376,7 @@ function configureResearchExa(h: Harness, policy: HostedExaPolicy) {
   h.flightSecrets = [
     policy.secretName,
     ...(policy.model ? [policy.model.secretName] : []),
+    ...(policy.embedding ? [policy.embedding.secretName] : []),
   ];
 }
 
@@ -1499,6 +1500,71 @@ for (const model of [false, true]) {
   });
 }
 
+test("v3 embedding capability and Flight attestation stay bound to the configured model and secret", async () => {
+  const h = await harness();
+  try {
+    const policy: HostedExaPolicy = {
+      ...exaResearchPolicy(false),
+      embedding: {
+        name: "text-embedding-3-small",
+        secretName: "sourcesql_openai",
+      },
+    };
+    configureResearchExa(h, policy);
+    const queue = h.engine("owner-a", { exa: policy });
+    await queue.initialize();
+    const caps = await queue.call<Row>("capabilities");
+    for (const profile of caps.profiles.filter((p: Row) => p.mode === "live")) {
+      assert.deepEqual(profile.operators, [
+        "WEB_SEARCH",
+        "WEB_FETCH",
+        "SEM_SCORE",
+      ]);
+      assert.equal(profile.embedding_configured, true);
+      assert.equal(profile.embedding_model, "text-embedding-3-small");
+      assert.equal(profile.embedding_input_max_tokens, 8192);
+      assert.equal(profile.embedding_input_max_utf8_bytes, undefined);
+      assert.equal(profile.embedding_batch_max_tokens, 300_000);
+      assert.equal(profile.embedding_token_encoding, "cl100k_base");
+      assert.equal(profile.score_basis, "cosine_similarity");
+      assert.equal(profile.search_limits.max_semantic_documents, 0);
+      assert.equal(profile.search_limits.max_model_requests, 96);
+    }
+    const queued = await queue.call<Row>("query", liveQuery());
+    const submitter = h.engine("owner-a", {
+      exa: policy,
+      allowSubmission: true,
+    });
+    const expected = { ...h.flightConfig };
+    for (const change of [
+      { SOURCESQL_OPENAI_EMBEDDING_MODEL: "text-embedding-3-large" },
+      { SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME: "other_openai" },
+      { SOURCESQL_OPENAI_EMBEDDING_MODEL: undefined },
+    ]) {
+      h.flightConfig = { ...expected, ...change };
+      await assert.rejects(
+        submitter.call("start_job", { job_id: queued.job_id }),
+        { code: "unsupported_capability" },
+      );
+      assert.equal(h.submissions, 0);
+      assert.equal(await providerReserve(submitter), "0");
+    }
+    h.flightConfig = expected;
+    h.flightSecrets = [policy.secretName];
+    await assert.rejects(
+      submitter.call("start_job", { job_id: queued.job_id }),
+      { code: "unsupported_capability" },
+    );
+    assert.equal(h.submissions, 0);
+    assert.equal(await providerReserve(submitter), "0");
+    configureResearchExa(h, policy);
+    await submitter.call("start_job", { job_id: queued.job_id });
+    assert.equal(h.submissions, 1);
+  } finally {
+    await h.close();
+  }
+});
+
 test("v3 model Flight drift and missing secret refuse before reservation, then exact binding dispatches once", async () => {
   const h = await harness();
   try {
@@ -1573,6 +1639,8 @@ test("v3 no-model policy refuses unexpected model configuration before native di
     const expected = { ...h.flightConfig };
     for (const extra of [
       { SOURCESQL_OPENAI_MODEL: "gpt-4.1-mini" },
+      { SOURCESQL_OPENAI_EMBEDDING_MODEL: "text-embedding-3-small" },
+      { SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME: "sourcesql_openai" },
       { SOURCESQL_OPENAI_SECRET_NAME: "sourcesql_openai" },
       {
         SOURCESQL_OPENAI_MODEL: "gpt-4.1-mini",

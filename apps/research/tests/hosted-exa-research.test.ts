@@ -30,6 +30,53 @@ const research = (model = false): HostedExaPolicy => ({
     : {}),
 });
 
+test("embedding scoring is explicit, fingerprinted, and independent of generative extraction", () => {
+  const policy: HostedExaPolicy = {
+    ...research(),
+    embedding: {
+      name: "text-embedding-3-small",
+      secretName: "sourcesql_openai",
+    },
+  };
+  assert.deepEqual(exaOperators(policy), [
+    "WEB_SEARCH",
+    "WEB_FETCH",
+    "SEM_SCORE",
+  ]);
+  assert.equal(exaResearchLimits(policy).max_semantic_documents, 0);
+  assert.equal(exaResearchLimits(policy).max_output_tokens, 0);
+  assert.equal(exaResearchLimits(policy).max_input_tokens, 200_000);
+  assert.equal(exaResearchLimits(policy).max_model_requests, 96);
+  assert.notEqual(exaFingerprint(policy), exaFingerprint(research()));
+  assert.notEqual(
+    exaFingerprint(policy),
+    exaFingerprint({
+      ...policy,
+      embedding: { ...policy.embedding!, name: "text-embedding-3-large" },
+    }),
+  );
+  assert.notEqual(
+    exaFingerprint(policy),
+    exaFingerprint({
+      ...policy,
+      embedding: { ...policy.embedding!, secretName: "another_openai" },
+    }),
+  );
+  assert.throws(() =>
+    validateExaPolicy({ ...base, embedding: policy.embedding }),
+  );
+  for (const embedding of [
+    null,
+    {},
+    { name: "unreviewed", secretName: "key" },
+    { ...policy.embedding, endpoint: "https://other.invalid" },
+  ]) {
+    assert.throws(() =>
+      validateExaPolicy({ ...policy, embedding } as HostedExaPolicy),
+    );
+  }
+});
+
 test("gateway and credential-bearing Flight produce identical legacy and research descriptors", () => {
   const policies: HostedExaPolicy[] = [
     base,
@@ -51,6 +98,22 @@ test("gateway and credential-bearing Flight produce identical legacy and researc
       },
     },
   ];
+  policies.push(
+    {
+      ...research(),
+      embedding: {
+        name: "text-embedding-3-small",
+        secretName: "sourcesql_openai",
+      },
+    },
+    {
+      ...research(true),
+      embedding: {
+        name: "text-embedding-3-large",
+        secretName: "sourcesql_openai",
+      },
+    },
+  );
   const root = fileURLToPath(new URL("../../../", import.meta.url));
   const python =
     process.env.SOURCESQL_TEST_PYTHON ??
@@ -100,7 +163,7 @@ print(json.dumps(output))
     assert.equal(exaFingerprint(policy), actual[index].fingerprint);
   }
   assert.deepEqual(
-    actual.map((row: { fingerprint: string }) => row.fingerprint),
+    actual.slice(0, 7).map((row: { fingerprint: string }) => row.fingerprint),
     [
       "d46b097da9f7ac09575bd9916889aa2a944c3013e163b0079e98585708318004",
       "d46b097da9f7ac09575bd9916889aa2a944c3013e163b0079e98585708318004",

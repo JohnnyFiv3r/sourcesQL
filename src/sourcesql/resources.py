@@ -19,6 +19,8 @@ TEMPLATE_PATTERNS = (
     "NOTICE",
     "src/sourcesql/**/*.py",
     "src/sourcesql/*.py",
+    "src/sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz",
+    "src/sourcesql/_resources/tokenizers/TIKTOKEN_LICENSE.txt",
     "hosted/setup.mjs",
     "hosted/personal-cloud.mjs",
     "hosted/flight/build.py",

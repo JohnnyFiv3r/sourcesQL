@@ -17,6 +17,7 @@ import {
   SOURCESQL_PRESENTATION_GUIDANCE,
   SOURCESQL_SEARCH_EXAMPLE,
   SOURCESQL_SEARCH_GUIDANCE,
+  SOURCESQL_SEMANTIC_WORKFLOW_GUIDANCE,
   SOURCESQL_SERVER_INSTRUCTIONS,
 } from "../server/agent-guidance.js";
 import { snapshotSchema } from "../src/schema.js";
@@ -167,6 +168,56 @@ test("MCP initialize exposes the research workflow before any tool or provider i
     instructions,
     /filters are not pushed across CTE\/LIMIT boundaries/,
   );
+});
+
+test("MCP wire keeps semantic shortlisting dynamic and embedding scoring optional", async () => {
+  const wire = await discover();
+  const instructions = wire.instructions!;
+  assert.ok(instructions.includes(SOURCESQL_SEMANTIC_WORKFLOW_GUIDANCE));
+  assert.match(
+    instructions,
+    /SEM_MATCH\(content, predicate\) as the LLM semantic filter/,
+  );
+  assert.match(
+    instructions,
+    /SEM_MATCH returns true, false or SQL NULL; it does not require an embedding adapter/,
+  );
+  assert.match(
+    instructions,
+    /SEM_SCORE is optional embedding relevance for ORDER BY/,
+  );
+  assert.match(
+    instructions,
+    /criterion is more specific than the original searches/,
+  );
+  assert.match(instructions, /Do not require scoring before matching/);
+  assert.match(
+    instructions,
+    /a semantic model alone does not enable SEM_SCORE/,
+  );
+  assert.match(instructions, /Use SEM_NORM after extraction/);
+  assert.match(instructions, /normalization labels are not global entity IDs/);
+  assert.match(
+    instructions,
+    /Filters, ranking criteria and thresholds belong in the host-authored SQL/,
+  );
+  assert.match(instructions, /absent metadata is not evidence of irrelevance/);
+  assert.match(
+    instructions,
+    /WHERE SEM_MATCH\(\.\.\.\) drops both false and NULL/,
+  );
+  assert.match(
+    instructions,
+    /retain its NULL rows separately for bounded follow-up/,
+  );
+  assert.doesNotMatch(
+    instructions,
+    /first deduplicate and filter search metadata/,
+  );
+  const query = wire.tools.find((tool) => tool.name === "sourcesql_query")!;
+  assert.match(query.description!, /Use SEM_MATCH to shortlist semantically/);
+  assert.match(query.description!, /Optional SEM_SCORE/);
+  assert.deepEqual(wire.calls, []);
 });
 
 test("MCP initialize bounds extraction batches while retaining complete saved-source coverage", async () => {

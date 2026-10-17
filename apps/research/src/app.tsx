@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { version } from "../package.json";
 import { flushSync } from "react-dom";
@@ -50,6 +57,7 @@ import {
   researchScopeLabel,
 } from "./research-links.js";
 import "./styles.css";
+import { FeedbackToast } from "./feedback-toast.js";
 import { ResearchTreePanel } from "./research-tree-panel.js";
 import { ResearchJobStatusPanel } from "./job-status-panel.js";
 import {
@@ -123,6 +131,10 @@ function Workspace() {
   const reportedHeight = useRef<number | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const dismissFeedback = useCallback(() => {
+    setError("");
+    setNotice("");
+  }, []);
   const [busy, setBusy] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<{
     version: number;
@@ -1176,9 +1188,7 @@ function Workspace() {
       const footer = viewport.querySelector<HTMLElement>(".table-footer");
       const workspace = viewport.closest<HTMLElement>(".workspace")!;
       const chromeHeight = Array.from(
-        workspace.querySelectorAll<HTMLElement>(
-          ":scope > .app-header, :scope > .feedback",
-        ),
+        workspace.querySelectorAll<HTMLElement>(":scope > .app-header"),
       ).reduce(
         (height, element) => height + (element as HTMLElement).offsetHeight,
         0,
@@ -1224,9 +1234,7 @@ function Workspace() {
       // rectangle. Persistent dock clearance keeps selection from resizing it.
       const content = [
         ...Array.from(
-          workspace.querySelectorAll<HTMLElement>(
-            ":scope > .app-header, :scope > .feedback",
-          ),
+          workspace.querySelectorAll<HTMLElement>(":scope > .app-header"),
         ),
         ...Array.from(viewport.children),
       ];
@@ -1256,7 +1264,7 @@ function Workspace() {
     };
     const observer = new ResizeObserver(measure);
     for (const element of [
-      ...workspace.querySelectorAll(":scope > .app-header, :scope > .feedback"),
+      ...workspace.querySelectorAll(":scope > .app-header"),
       ...viewport.children,
     ]) {
       observer.observe(element);
@@ -1274,11 +1282,8 @@ function Workspace() {
     tab,
     reviewOpen,
     treeOpen,
-    error,
-    notice,
     pendingIds,
     pollError,
-    pendingNavigation,
   ]);
   const row = pageRows.find((r) => r.id === selectedId);
   const wholeRow = Boolean(row && !field);
@@ -1551,30 +1556,24 @@ function Workspace() {
     day: "numeric",
     year: "numeric",
   });
-  const feedback = (error || notice) &&
-    !(
-      error &&
-      tab === "correct" &&
-      row &&
-      (!cellProposals.length || manualCorrection)
-    ) && (
-      <div
-        className={`feedback ${error ? "error" : ""}`}
-        role={error ? "alert" : "status"}
-      >
-        <span>{error || notice}</span>
-        <Button
-          variant="ghost"
-          aria-label="Dismiss notification"
-          onClick={() => {
-            setError("");
-            setNotice("");
-          }}
-        >
-          <X />
-        </Button>
-      </div>
-    );
+  const correctionError = Boolean(
+    error &&
+    tab === "correct" &&
+    row &&
+    (!cellProposals.length || manualCorrection),
+  );
+  const feedbackMessage = error
+    ? correctionError
+      ? ""
+      : error
+    : pendingNavigation
+      ? `Opening ${pendingNavigation.title}…`
+      : notice;
+  const feedbackKind = error
+    ? "error"
+    : pendingNavigation
+      ? "progress"
+      : "success";
   return (
     <main className="workspace">
       <header className="app-header">
@@ -1934,14 +1933,12 @@ function Workspace() {
         </div>
         {/* Mount the view toggle here only when a visualization is available. */}
       </header>
-      {feedback}
-      {pendingNavigation && !error && (
-        <div className="feedback" role="status" aria-live="polite">
-          <LoaderCircle className="research-spinner" size={14} />
-          <span>Opening {pendingNavigation.title}…</span>
-        </div>
-      )}
       <div className="workspace-content">
+        <FeedbackToast
+          message={feedbackMessage}
+          kind={feedbackKind}
+          onDismiss={dismissFeedback}
+        />
         <section
           className="records-surface"
           aria-label="Research results"

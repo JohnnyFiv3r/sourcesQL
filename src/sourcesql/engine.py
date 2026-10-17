@@ -531,8 +531,9 @@ class Engine:
             receipt["provider_events"] = events
             receipt["source_hits"] = registry.hits
             attempted = sum(i["amount"] for i in receipt.get("dispatch_intents", []))
-            unresolved = max(0, attempted - len(events)) + sum(
-                e.get("status") in ("dispatched", "remote_outcome_unknown") for e in events
+            dispatched = [e for e in events if e.get("kind") != "embedding_cache"]
+            unresolved = max(0, attempted - len(dispatched)) + sum(
+                e.get("status") in ("dispatched", "remote_outcome_unknown") for e in dispatched
             )
             receipt.update(
                 settlement_status="pending" if unresolved else "settled",
@@ -559,6 +560,105 @@ class Engine:
             if session is not None or not self.worker_checked:
                 checked_worker("SELECT 1 AS worker_probe", {}, {})
                 self.worker_checked = True
+
+            prepared_scores = {}
+            consumed_scores = set()
+
+            def prepare_semantic(operator, args, kwargs):
+                check_active()
+                if time.monotonic() > deadline:
+                    raise SourcesQLError(
+                        "budget_exhausted", "Dispatch deadline exceeded", "dispatch"
+                    )
+                context = {k: v for k, v in kwargs.items() if k.startswith("_")}
+                options = {k: v for k, v in kwargs.items() if not k.startswith("_")}
+                text = args[0]
+                instruction = args[1] if len(args) > 1 else ""
+                if operator == "SEM_NORM" and not instruction:
+                    instruction = "Group equivalent entity names; keep distinct entities separate"
+                fields = {k: v for k, v in options.items() if k not in ("type", "evidence")}
+                options = {k: v for k, v in options.items() if k in ("type", "evidence")}
+                if operator == "SEM_SCORE":
+                    options["score_adapter_revision"] = getattr(
+                        registry.embedding_provider, "CONTRACT_VERSION", "custom.v1"
+                    )
+                if operator == "SEM_NORM":
+                    options["collection"] = text
+                text_hash = (
+                    hashlib.sha256(text.encode()).hexdigest()
+                    if isinstance(text, str)
+                    else digest(text)
+                )
+                source = attribution.source_for(context.get("_input_lineage", []), text)
+                if source:
+                    options.update(
+                        source_version_id=source["source_version_id"],
+                        document_id=source.get("document_id"),
+                    )
+                    if request.get(
+                        "source_mode", "require_document"
+                    ) == "require_document" and not source.get("coverage", {}).get("complete"):
+                        raise SourcesQLError(
+                            "unsupported_capability",
+                            "Document content is required before semantic processing",
+                            "semantic",
+                        )
+                document_key = ("score" if operator == "SEM_SCORE" else "semantic", text_hash)
+                if text is not None and document_key not in used_documents:
+                    budget.reserve(
+                        "scoring_documents" if operator == "SEM_SCORE" else "semantic_documents",
+                        limit="max_candidates"
+                        if operator == "SEM_SCORE"
+                        else "max_semantic_documents",
+                    )
+                    used_documents.add(document_key)
+                cachekey = digest(
+                    [operator, text, instruction, fields, options, pinned["profile_revision"]]
+                )
+                return context, options, fields, text, instruction, source, cachekey
+
+            def dispatch_scores(calls):
+                pending = {}
+                groups = {}
+                for args, kwargs in calls:
+                    _, options, _, text, instruction, _, cachekey = prepare_semantic(
+                        "SEM_SCORE", args, kwargs
+                    )
+                    if cachekey in pending or cachekey in prepared_scores:
+                        continue
+                    with self.store.db() as db:
+                        cached = db.execute(
+                            "SELECT value FROM semantic_cache WHERE key=?", (cachekey,)
+                        ).fetchone()
+                    if cached and strict_json(cached[0]).get("status") in {
+                        "processed",
+                        "unknown",
+                        "not_stated",
+                    }:
+                        continue
+                    pending[cachekey] = text
+                    # Source identities affect receipts/cache keys, not the embedding computation.
+                    scoring_options = {
+                        k: v
+                        for k, v in options.items()
+                        if k not in {"source_version_id", "document_id"}
+                    }
+                    group = digest([instruction, scoring_options])
+                    groups.setdefault(group, (instruction, scoring_options, []))[2].append(cachekey)
+                for instruction, options, keys in groups.values():
+                    check_active()
+                    values = registry.score_many(
+                        [pending[key] for key in keys],
+                        instruction,
+                        {**options, "deadline_monotonic": deadline, "check_active": check_active},
+                        budget,
+                    )
+                    if len(values) != len(keys):
+                        raise SourcesQLError(
+                            "invalid_output", "Scoring must preserve row identity", "semantic"
+                        )
+                    prepared_scores.update(zip(keys, values, strict=True))
+                return [dispatch("SEM_SCORE", args, kwargs) for args, kwargs in calls]
 
             def dispatch(operator, args, kwargs):
                 check_active()
@@ -609,38 +709,8 @@ class Engine:
                             if isinstance(row.get("content"), str):
                                 target[(str(index), "content")] = [attribution.source_handle(row)]
                     return normalized
-                text = args[0]
-                instruction = args[1] if len(args) > 1 else ""
-                if operator == "SEM_NORM" and not instruction:
-                    instruction = "Group equivalent entity names; keep distinct entities separate"
-                fields = {k: v for k, v in options.items() if k not in ("type", "evidence")}
-                options = {k: v for k, v in options.items() if k in ("type", "evidence")}
-                if operator == "SEM_NORM":
-                    options["collection"] = text
-                text_hash = (
-                    hashlib.sha256(text.encode()).hexdigest()
-                    if isinstance(text, str)
-                    else digest(text)
-                )
-                source = attribution.source_for(context.get("_input_lineage", []), text)
-                if source:
-                    options.update(
-                        source_version_id=source["source_version_id"],
-                        document_id=source.get("document_id"),
-                    )
-                    if request.get(
-                        "source_mode", "require_document"
-                    ) == "require_document" and not source.get("coverage", {}).get("complete"):
-                        raise SourcesQLError(
-                            "unsupported_capability",
-                            "Document content is required before semantic processing",
-                            "semantic",
-                        )
-                if text_hash not in used_documents:
-                    budget.reserve("semantic_documents", limit="max_semantic_documents")
-                    used_documents.add(text_hash)
-                cachekey = digest(
-                    [operator, text, instruction, fields, options, pinned["profile_revision"]]
+                context, options, fields, text, instruction, source, cachekey = prepare_semantic(
+                    operator, args, kwargs
                 )
                 with self.store.db() as db:
                     cached = db.execute(
@@ -662,9 +732,26 @@ class Engine:
                         "field_errors": value.get("usage", {}).get("field_errors", []),
                     }
                 else:
-                    outcome = registry.semantic(
-                        operator, text, instruction, fields, options, budget
-                    )
+                    outcome = prepared_scores.get(cachekey) if operator == "SEM_SCORE" else None
+                    if outcome is None:
+                        outcome = registry.semantic(
+                            operator, text, instruction, fields, options, budget
+                        )
+                    elif cachekey in consumed_scores:
+                        # Reusing a failed batch outcome must not retry or charge usage twice.
+                        from dataclasses import replace
+
+                        outcome = replace(
+                            outcome,
+                            usage={
+                                **outcome.usage,
+                                "requests": 0,
+                                "input_tokens": 0,
+                                "reserved_input_tokens": 0,
+                                "state": "run_reuse",
+                            },
+                        )
+                    consumed_scores.add(cachekey)
                     value = {
                         "value": outcome.value,
                         "status": outcome.status,
@@ -764,7 +851,9 @@ class Engine:
                     )
                 return value["value"]
 
-            table = execute_plan(plan, inputs, dispatch, checked_worker)
+            table = execute_plan(
+                plan, inputs, dispatch, checked_worker, score_batch=dispatch_scores
+            )
             if (
                 len(table.rows) > budget.limits["max_output_rows"]
                 or len(canonical(table.to_dict())) > budget.limits["max_output_bytes"]

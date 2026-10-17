@@ -21,6 +21,7 @@ from sourcesql.providers import (
     SerperProvider,
 )
 from sourcesql.providers.common import json_object, text_hash
+from sourcesql.providers.tokenization import get_embedding_tokenizer
 
 
 def public_dns(host, port, **kwargs):
@@ -456,12 +457,17 @@ def test_configured_embeddings_are_scored_without_lexical_substitution():
             },
         )
 
-    provider = OpenAIEmbeddingProvider("mock-embedding", "mock-key", mock_client(response))
+    provider = OpenAIEmbeddingProvider("text-embedding-3-small", "mock-key", mock_client(response))
     budget = Budget()
     result = provider.score("campus", "grid agreement", {}, budget)
     assert result.value == pytest.approx(2**-0.5)
-    assert result.usage["model"] == "mock-embedding"
-    assert budget.counts["model_requests"] == 1 and budget.counts["input_tokens"] == 4
+    assert result.usage["model"] == "text-embedding-3-small"
+    assert budget.counts["model_requests"] == 1
+    encoder = get_embedding_tokenizer("text-embedding-3-small")
+    assert budget.counts["input_tokens"] == sum(
+        len(encoder.encode_ordinary(text)) for text in ("campus", "grid agreement")
+    )
+    assert result.usage["input_tokens"] == 4
 
 
 def test_live_guard_refuses_before_any_dispatch_without_grant():
@@ -477,6 +483,26 @@ def test_live_guard_refuses_before_any_dispatch_without_grant():
     with pytest.raises(SourcesQLError) as error:
         provider.search(["campus"], {}, budget)
     assert error.value.code == "unauthorized" and budget.counts == {}
+
+
+def test_embedding_tokenizer_configuration_is_validated_before_search_dispatch():
+    registry = ProviderRegistry(
+        {
+            "mode": "live",
+            "provider": "exa",
+            "api_key": "mock-key",
+            "allow_live": True,
+            "approved_cost_microusd": 1,
+            "metering_policy": "estimated",
+            "http_client": mock_client(lambda _: pytest.fail("unexpected search")),
+            "embedding": {"name": "custom-embedding", "api_key": "mock-key"},
+        }
+    )
+    budget = Budget({"max_cost_microusd": 1})
+    with pytest.raises(SourcesQLError) as error:
+        registry.preflight(["WEB_SEARCH", "SEM_SCORE"], budget)
+    assert error.value.code == "unsupported_capability"
+    assert registry.events == [] and budget.counts == {}
 
 
 def test_strict_metering_and_unconfigured_scorer_refused_before_dispatch():

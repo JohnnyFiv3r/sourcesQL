@@ -1,229 +1,226 @@
 # Exa research modes
 
-The hosted Exa adapter previously hardcoded `type: "auto"`. Its first live
-qualification deliberately enabled only bounded search excerpts: no document
-fetches, semantic model or embedding adapter. That explains why installing an
-Exa key did not expose all Exa capabilities. The MCP descriptions also explained
-execution recovery without teaching agents to use sourcesQL for initial research.
+Exa acquires source candidates; sourcesQL's SQL operators select, inspect and
+combine their evidence. The host assistant plans the terms and writes the query
+for each question. The engine admits the query, executes configured providers
+within finite limits and retains results and receipts.
 
-The updated server publishes a research workflow in MCP initialization and in
-query/capability tool descriptions. Agents must discover configured profiles,
-choose a live profile explicitly, use sourcesQL for invoked research, preserve
-source support, and reopen stored results. Any approved alternative research tool
-must keep its own provenance. The engine's default remains synthetic `fixture`;
-fixture output is never a fallback for unavailable live research.
+Start with `sourcesql_capabilities`. It reports the selected profile's actual
+search modes, operators, limits and model availability. Grammar support does not
+mean every deployment has the corresponding adapter. Choose a live profile
+explicitly: the omitted profile remains synthetic `fixture`, which is never a
+fallback for unavailable live research.
 
-Research execution and presentation are separate. Raw discovery and intermediate
-SQL results stay behind the scenes; `import_research` saves without rendering.
-Only `open_research` advertises a rendering resource, and the agent calls it once
-after final filtering, columns and display labels are ready. Completed-query
-receipts no longer instruct the host to open every intermediate result.
-
-## Versioned hosted profiles
-
-Existing deployments without `SOURCESQL_EXA_POLICY_VERSION` retain the approved
-`exa-search.v1` contract: only `exa` with Auto, a 60-second dispatch window and the
-same policy fingerprint. This allows instruction/presentation fixes to ship
-without changing the execution resource or secret binding. The following optional
-v2 profiles require `SOURCESQL_EXA_POLICY_VERSION=exa-research.v2` and a reviewed
-v2 Flight. Its exact version marker is checked before reserving execution.
+## Discovery and search modes
 
 | Profile | Exa search type | Intended use |
 | --- | --- | --- |
-| `exa` | `auto` | Broad candidate acquisition across planned complementary queries |
-| `exa_deep` | `deep` | Selective multi-step retrieval for difficult questions or evidence gaps |
-| `exa_deep_reasoning` | `deep-reasoning` | Explicit higher-effort retrieval when reasoning depth is needed |
+| `exa` | `auto` | Broad candidate acquisition across complementary queries |
+| `exa_deep` | `deep` | Selective retrieval for difficult questions or evidence gaps |
+| `exa_deep_reasoning` | `deep-reasoning` | Explicit higher-effort retrieval when reasoning depth is useful |
 
-All three are operator-controlled profiles, not arbitrary request configuration.
-The `exa-research.v2` policy fingerprint includes the exact mapping. Request bodies
-cannot replace the provider, mode or search type. Both gateway dispatch and Flight
-claim/execution verify the policy. An old queued job with a different policy must
-be reconciled rather than silently run with new behavior. Existing saved results
-retain their original immutable provenance.
+These are operator-controlled profiles. Query text cannot replace the provider,
+mode or trusted configuration. There is no invented `broad` search type.
 
-For broad discovery, the host agent generates at least six maximally diverse
-`WEB_SEARCH` query strings from the user's request, varying terminology, source
-type and angle, with relevant synonyms, subcategories and geography. This uses
-the host's normal search planning rather than fixed domain templates or a
-separate term-generation model. Useful overlap is intentional; near-identical
-paraphrases add little coverage. Targeted follow-up research or known-source
-checks may need fewer queries. Merge results and deduplicate sources without
-losing query-hit provenance. Each input produces a separate Auto request with its own
-ranking and source versions. The current hosted allowance permits only two
-inputs and ten total pages; it does not implement thousand-page acquisition or
-accommodate the six-query broad-discovery instruction. The agent must explain
-that constraint before searching and request a suitable configuration or an
-explicitly authorized limited pass. It must not silently shrink coverage or
-split jobs to evade limits. Updating instructions does not raise execution caps.
-Exa also documents
-`additionalQueries` for deeper retrieval, but its combined result pool does not
-provide the per-input attribution and result limits our SQL operator promises.
-We therefore do not silently map variadic SQL inputs onto that different contract.
-There is no invented Exa `type: "broad"` value. See the
-[official Search API](https://exa.ai/docs/reference/search).
+For broad discovery, generate at least six diverse `WEB_SEARCH` query strings
+when the advertised limits and approved budget permit that scope. Vary terms,
+source types and angles, including relevant synonyms, subcategories and
+geography. Use normal task-specific search planning rather than fixed domain
+templates or a separate term-generation model. Useful overlap is intentional;
+near-identical paraphrases add little coverage. Targeted follow-up or a known
+source may need fewer queries.
 
-For example, only after an explicitly authorized limited two-query pass, submit
-this SQL using `profile: "exa"`, `source_mode: "allow_excerpt"`, and a new hosted
-request UUID. This is a limited example, not the broad-discovery default:
+Each query string creates a separate request with its own ranking and source
+versions. Preserve that membership when merging overlapping results. Exa's
+`additionalQueries` combines retrieval differently; the adapter does not silently
+substitute it for variadic SQL inputs and their per-query limits. See the
+[Search API](https://exa.ai/docs/reference/search).
+
+Bind `q1` through `q6` to the assistant's terms and submit this candidate-discovery
+query only when the profile and budget permit six requests and up to thirty hits:
 
 ```sql
-SELECT url, title, content AS source_excerpt
-FROM WEB_SEARCH(
-  'Tennessee municipal drinking water utilities official directory',
-  'Tennessee investor owned water utilities regulated companies official records',
-  per_query_limit := 5
-)
-LIMIT 10
+SELECT title AS source_title, url AS source_url, content AS source_excerpt
+FROM WEB_SEARCH($q1, $q2, $q3, $q4, $q5, $q6, per_query_limit := 5)
 ```
 
-These are candidate source pages, not a verified census of ten utilities. Poll
-the same job, read its receipt, then use `open_research` with the completed result
-reference. A final SQL `LIMIT` does not itself limit provider work.
+Use `source_mode: "allow_excerpt"` for discovery. These rows are source pages,
+not a verified entity inventory. All positional arguments are strings; a count
+belongs in `per_query_limit`. A final SQL `LIMIT` only bounds returned rows.
 
-## SQL controls expensive semantic work
+If the configured limits cannot support the requested coverage, explain the
+constraint before searching and obtain a suitable configuration or an explicitly
+limited pass. Do not silently shrink the research, raise caps or split jobs to
+evade limits.
 
-Quality-first means useful coverage and selective strong reasoning, not deep
-retrieval for every discovery query or semantic processing of every row. The SQL
-pipeline remains authoritative: acquire candidates, apply justified deterministic
-filters, merges, joins and source deduplication where admitted, use semantic
-matching only where needed, then
-extract the requested fields from surviving rows. Source-local ordinary `WHERE`
-conjuncts execute before semantic predicates, regardless of their textual order;
-`SEM_MATCH` executes before projected extraction. A filter on an extracted value
-cannot save the extraction it depends on. Filters do not cross CTE or LIMIT
-boundaries, and a final output LIMIT cannot be advertised as a model-call cap.
-Only an explicitly staged shortlist permitted by the user's scope reduces that
-input population without silently changing the task.
+## Semantic shortlisting and detailed extraction
 
-These savings apply to subsequent semantic work. A SQL filter over returned
-search pages cannot undo the cost of the Exa request that acquired them. Avoid
-unnecessary searches by reusing saved candidates, and choose query scope before
-submitting retrieval. Joins may multiply rows; deduplicate repeated source work before semantic
-processing. A top-candidate rule must match the requested scope and disclose its
-coverage. Deep-reasoning retrieval is an optional escalation, not the default
-replacement for broad Auto discovery or SQL-controlled semantics.
+The host composes each research query with supported SQL and semantic operators:
 
-The planner regression compares three candidate sources: the unfiltered plan
-makes three semantic matches and two extractions; an exact title filter makes
-one match and one extraction; an empty exact filter makes no semantic call.
-This proves execution mechanics with synthetic providers, not hosted live model
-quality. Hosted semantic operators still need a separately configured adapter.
+1. Acquire complementary sources and conservatively deduplicate equivalent
+   source versions. Preserve versions that contain different dates, entities or
+   supporting facts.
+2. Use `SEM_MATCH` as the LLM predicate for source relevance. Ordinary SQL filters
+   are available for established exclusions in the user's scope; title, URL and
+   metadata filters are not mandatory gates. Missing metadata is not evidence of
+   irrelevance.
+3. Optionally use `SEM_SCORE` in an ordering stage when the criterion is more
+   specific than the original searches. Discovery results are already ranked for
+   their search terms. Additional scoring is neither a required first stage nor
+   a replacement for factual qualification.
+4. Fetch additional retained text when necessary, then run `SEM_EXTRACT` or
+   `SEM_EXTRACT_ALL` on relevant sources. Extract multiple precise fields from a
+   source together where useful, preserving units, dates and qualifiers.
+5. Apply `SEM_NORM` to equivalent extracted values, then use ordinary SQL joins,
+   grouping, projections and ordering to consolidate the final table.
 
-## Costs and limits
+The selected language model executes matching, extraction and normalization.
+The embedding adapter executes scoring. `SEM_MATCH` does not require embeddings;
+a language model alone does not enable `SEM_SCORE`. Scores measure relevance,
+not truth, and do not have a universal cutoff across models or criteria.
+Normalization labels belong to the inspected collection and do not establish
+that similarly named entities are identical. Use ordinary SQL for deterministic
+formatting and preserve original observations beside normalized values.
 
-The optional v2 limits are two query inputs, two search requests, ten total
-candidates, no fetch/model requests, a 100-second dispatch window, F4 runtime at most
-120 seconds, $0.05 per-job provider approval and $1 daily provider reservation.
-Existing v1 deployments retain their 60-second query window and exact policy.
-Search result counts are intentionally bounded by these product limits. The
-deep-reasoning HTTP client has a bounded 60-second timeout; no automatic retries
-or fallback to ordinary search are added. The engine window leaves 20 seconds
-within the Flight limit for startup/finalization and accommodates the documented
-12–40 seconds per deep-reasoning request; slow or uncertain work still terminates
-honestly instead of silently retrying paid requests.
+Ordinary SQL semantics apply. `WHERE SEM_MATCH(...)` keeps true and drops false
+and NULL. If inconclusive candidates need investigation, project the match into
+a CTE or saved result and retain NULL rows separately for bounded follow-up.
+An excerpt may omit the relevant fact; fetch or inspect the retained source
+before treating that gap as a negative. Retaining an unresolved candidate does
+not qualify it for the final answer. The [language reference](language.md)
+contains an example and the admitted SQL subset.
 
-Exa's October 14, 2026 pricing lists $0.012 for deep, $0.015 for deep-reasoning and
-$0.007 for auto per request with up to ten results. Two default Auto searches
-therefore have a $0.014 nominal estimate; two deep-reasoning searches are $0.030. These numbers and response estimates are not
-reconciled bills. `/search` does not document a per-request cash hard stop; our
-finite grants and daily reservations do not promise account-wide billing control.
-See [Exa pricing](https://exa.ai/docs/admin/pricing).
+Source-local ordinary `WHERE` conjuncts execute before semantic predicates, and
+`SEM_MATCH` runs before projected extraction. Those mechanics do not require a
+metadata filter in every query. Filters on extracted fields run after their
+extraction. Filters do not cross CTE or LIMIT boundaries. An explicitly staged
+shortlist or extraction batch can bound later work; it must preserve the user's
+requested coverage or disclose what remains unresolved.
 
-The free Exa balance resets to $10 monthly, rather than daily. This allocation,
-MotherDuck compute allowances, and sourcesQL's per-day reservations are separate.
-Quality-first adoption preserves requested coverage and selective semantic
-quality; exhausted allowances are reported rather than silently shrinking scope
-or enabling automatic paid top-up. Auto is the intended broad retrieval mode,
-not a fallback after the budget is spent.
-The application reservation is not a live reading of an account's free credit
-balance and cannot guarantee free usage when other applications spend credits.
+`SEM_EXTRACT_ALL` supports at most eight items per source invocation. Partition
+larger requested entity sets or supported source windows into explicit batches
+and retain completed handles. This limits one invocation, not the total answer.
+Neither model-call limits nor a Flight's runtime guarantee that every configured
+maximum can be consumed in one job.
 
-## Remaining capabilities
+## Fetching, evidence and reuse
 
-Search mode does not enable the hosted `WEB_FETCH` or `SEM_*` operators. The
-profile still explicitly reports those limits. Exa's structured `outputSchema`
-and grounding need a separate mapping into sourcesQL's typed fields, retained
-sources and verified textual support; generated synthesis must not become source
-evidence merely because it arrived in the same response.
+Use `WEB_FETCH` only for known source URLs allowed by the trusted fetch policy.
+Fetch relevant or unresolved sources when their retained excerpt is insufficient.
+`require_document` can fetch incomplete hits before SQL shortlisting, so it is
+not the broad-discovery default. Exa Contents text remains a bounded provider
+representation, not verified complete document coverage.
 
-For asynchronous list building, enrichment and continuing research, Exa's
-[Agent API](https://exa.ai/docs/agent/quickstart) is the relevant separate surface.
-It needs durable external run IDs, terminal-state inspection, grounding storage,
-cancellation and lost-submission recovery. It should not be hidden inside a short
-Flight polling loop. The fixed low effort is documented at $0.025; metered auto
-has a configurable budget with a $1 minimum and a larger default. No Agent run,
-subscription or new credential destination is enabled by this search-mode change.
-
-## Wider research and grounded extraction
-
-The opt-in `exa-research.v3` policy separates ordinary defaults from explicit
-research ceilings. Its configured maximums are 32 query strings, 48 search
-requests, 2,500 returned candidates, 40 document fetches and four concurrent
-search requests. Each Exa query accepts at most 100 results. These are ceilings,
-not default work sizes or evidence that a run found that many relevant entities.
-Existing v1 and v2 deployments retain their original fingerprints and limits.
-
-Use `SOURCESQL_EXA_POLICY_VERSION=exa-research.v3` in both the gateway and its
-reviewed Flight. To enable semantic extraction, configure
-`SOURCESQL_OPENAI_MODEL` and `SOURCESQL_OPENAI_SECRET_NAME` together and bind that
-MotherDuck Flight secret with its `OPENAI_API_KEY` entry. The gateway needs the
-secret's name, not its value. The policy fingerprint includes the model identity
-and effective limits; dispatch refuses a different model or missing secret
-before reserving or submitting a Flight. Without a model, v3 exposes search and
-fetch but reserves zero semantic/model tokens. It never advertises embeddings
-as configured merely because a language model is available.
-
-The host still plans the search terms. Inspect the composition of the acquired
-sources before semantic work: company profiles may help organization discovery
-but provide little project-level evidence. Use task-appropriate SQL to route
-source types, deduplicate repeated URLs and preserve the excluded population
-for coverage review. Do not turn a prioritized document sample into a claim of
-complete entity coverage.
-
-Default to `source_mode: "allow_excerpt"` for discovery. After SQL filtering,
-`WEB_FETCH(url)` can materialize retained source text for each surviving row;
-use one multi-field `SEM_EXTRACT` or `SEM_EXTRACT_ALL` per document where useful.
-Exa Contents is not verified complete document coverage. Setting
-`require_document` may trigger fetching all incomplete search hits before SQL
-filtering, and refuses text that does not establish completeness.
+An input binding with `view: "sources"` and `amendment_revision: null` exposes
+retained canonical source documents from an authorized result and its ancestors
+without another fetch. Reuse those saved rows for semantic follow-up, ordinary
+SQL and gap investigation. Keep successful batch handles instead of repeating
+all discovery after an extraction failure.
 
 Native OpenAI extraction uses Responses with storage disabled and no hidden SDK
-retries. Explicit OpenAI-compatible endpoints retain Chat Completions. Models
-copy exact supporting quotations; the adapter establishes their character
-coordinates deterministically in the inspected window. Missing, altered and
-ambiguous quotes are refused. Valid preexisting coordinates can disambiguate a
-repeated quote. Text support still does not establish factual truth, freshness
-or correct entity identity.
+retries. Explicit OpenAI-compatible endpoints use Chat Completions. Models copy
+supporting quotations; the adapter checks their coordinates in the inspected
+text. Missing, altered or ambiguous quotes leave the affected value unavailable
+under `retain_partial`, while independently supported siblings can survive.
+An ordinarily missing fact remains distinct from failed processing.
 
-The model output ceiling includes reasoning tokens. Input tokens are accounted
-from reported usage after dispatch; cost figures and application reservations
-remain estimates, not a provider billing hard stop. Use finite request/token
-limits and a separate total experiment budget. Broader ceilings do not extend a
-Flight's runtime or its daily application reservation. Local qualification and
-hosted deployment must be recorded separately.
+Exact quotes establish textual support, not truth, freshness or identity. Carry
+source publication and claim-specific as-of dates separately from retrieval time.
+Historical announcements do not establish current progress. A source can support
+one requirement while leaving another unresolved. Combine complementary facts
+only after a shared entity or site identifier, address or explicit source bridge
+establishes identity; a common company, region or investment amount is only a
+lead. Preserve unresolved identities separately.
 
-## Evidence and coverage
-
-Retained exact quotes establish textual support in the inspected provider text.
-The engine carries canonical cell evidence through direct projections, aliases,
-CTEs, struct fields, filters, ordering, joins and branch-specific `CASE`/`COALESCE`.
+Canonical cell evidence survives supported direct projections, aliases, CTEs,
+struct fields, filters, ordering, joins and branch-specific `CASE`/`COALESCE`.
 Aggregates, set operations and unsupported transformations retain input-set
-evidence instead of claiming direct cell support. An output URL or matching value
-does not establish attribution. Unknown cells do not inherit another cell's source.
-Keep publication dates and claim-specific as-of dates separate from retrieval time.
-A historical plan remains historical until a later source establishes progress.
+evidence rather than claiming direct cell citations. Inspect evidence before
+promising cell-level support; a URL or matching value alone is insufficient.
 
-An input binding with `view: "sources"` and `amendment_revision: null` exposes the
-retained canonical source documents from an authorized result and its ancestors.
-It makes no fetch calls. Bound document content can be processed again under the
-normal semantic budgets; excerpts still require `source_mode: "allow_excerpt"`.
-Rank the preferred source for each field separately, then join the selected facts
-into the final entity row. Shared operator, state or investment amounts are only
-identity leads; require a shared site identifier, address or explicit source bridge
-before combining distinct documents. Preserve unresolved identities separately.
+## Hosted configuration and limits
 
-A document can establish one requirement while leaving another unknown. For
-entity research, reconcile identity across complementary announcement and progress
-sources before making the final eligibility decision. A missing date in one
-source is unresolved evidence, not proof that the entity is ineligible. Explicit
-shortlists limit coverage and may require a separately authorized follow-up.
+The gateway and Flight must agree on the reviewed policy and its fingerprint.
+Saved results retain their original immutable provenance. A queued job with a
+different policy must be reconciled rather than silently run under new settings.
+
+- `exa-search.v1` is the legacy Auto search-only policy with a 60-second dispatch
+  window.
+- `exa-research.v2` adds the search-mode profiles above, while retaining a small
+  search-only allowance: two inputs, two requests and ten candidates, with a
+  100-second dispatch window.
+- `exa-research.v3` permits configured research ceilings of 32 query strings,
+  48 search requests, 2,500 candidates, 40 fetches and four concurrent searches.
+  Exa accepts at most 100 results per query. Language-model and embedding work
+  are separate opt-ins.
+
+These are policy ceilings, not default workloads or a statement about which
+version a particular endpoint is running. Read that endpoint's capabilities.
+A higher candidate ceiling does not lengthen the F4 Flight's 120-second maximum
+runtime. Runtime, request and token limits still bound each stage.
+
+Configure `SOURCESQL_EXA_POLICY_VERSION=exa-research.v3` in the gateway and its
+reviewed Flight. For matching, extraction and normalization, set
+`SOURCESQL_OPENAI_MODEL` and `SOURCESQL_OPENAI_SECRET_NAME` together. Bind that
+MotherDuck Flight secret with its `OPENAI_API_KEY` entry. The gateway receives
+the secret name, not its value.
+
+For optional OpenAI embedding scoring, set
+`SOURCESQL_OPENAI_EMBEDDING_MODEL` and
+`SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME` together. The hosted adapter accepts
+`text-embedding-3-small` or `text-embedding-3-large`; start with the small model
+and qualify its ranking on representative retained sources. The embedding secret
+also supplies `OPENAI_API_KEY`. Explicitly naming the existing model secret can
+reuse its credential without treating language-model setup as embedding consent.
+The reviewed Flight must bind the named secret and match the descriptor.
+
+The embedding adapter uses model-aware local tokenization and reserves exact
+input token counts before dispatch. The public package bundles tokenizer data;
+the compact Flight prepares the same checksum-pinned public data before live
+scoring. The `openai-embeddings.v2` descriptor binds this behavior;
+an earlier scorer's cached results cannot substitute for the new contract.
+See [scoring limits and passage handling](providers.md#semantic-matching-ranking-and-normalization).
+
+Model and embedding identities participate in the policy fingerprint. Leaving
+embeddings absent preserves the existing unconfigured contract; only an
+explicitly configured scorer advertises `SEM_SCORE`. Configuration and fixture
+checks do not establish live ranking quality or latency.
+
+## Costs, capacity and presentation
+
+Search, Contents, language-model inference, embeddings and MotherDuck compute
+are separately metered. Consult [Exa pricing](https://exa.ai/pricing) and the
+configured model provider's pricing rather than assuming an advertised credit
+balance is available to this account. Response usage and application reservations
+are estimates, not reconciled bills or account-wide hard stops. Other applications
+can consume the same credits.
+
+All calls require finite approved budgets. A SQL filter cannot undo acquisition
+costs already incurred. Saved data can avoid repeat retrieval, and semantic
+shortlisting reduces detailed extraction work. Do not infer a cost or latency
+advantage solely from an operator name; measure the configured providers and
+actual batch sizes.
+
+Keep source discovery and intermediate tables behind the scenes.
+`import_research` saves without rendering. After final filtering, consolidation,
+column selection, labels and ordering, call `open_research` once for the finished
+table. A stored result or completed query is not automatically the final answer.
+Reopening it performs no new search. Actual host rendering must be verified
+separately from a successful tool response.
+
+When capacity is exhausted, retain the job and show its returned capacity state
+in the app. Do not change providers, increase limits or claim a platform's free
+balance is empty based only on an application reservation. An explicitly approved
+limited or partial result must disclose its coverage.
+
+## Separate Exa capabilities
+
+Exa structured `outputSchema` and grounding need a separate mapping into typed
+fields, retained sources and verified textual support. Generated synthesis does
+not become source evidence simply because it arrived with search results.
+
+The asynchronous [Agent API](https://exa.ai/docs/agent/quickstart) is a separate
+integration for list building and longer research. It needs durable external run
+IDs, status inspection, grounding retention and lost-submission recovery. It is
+not enabled by selecting deep search and should not become a hidden polling loop
+inside a short Flight. No Agent run or subscription is implied by this setup.

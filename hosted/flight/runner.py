@@ -6,7 +6,9 @@ credentials stay in this parent; the engine sanitizes each protected SQL worker.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import gzip
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -20,11 +22,21 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from uuid import UUID
 import zipfile
 
 BUNDLE_MANIFEST = None
 BUNDLE_ENCODED = None
+
+TOKENIZER_HYDRATION = {
+    "resource": "sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz",
+    "url": "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
+    "raw_sha256": "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7",
+    "max_download_bytes": 2_000_000,
+    "timeout_seconds": 10,
+    "restoration": "gzip-mtime-0",
+}
 
 INSTALL_CODE = r"""
 from importlib import metadata
@@ -173,6 +185,93 @@ def load_profile_helper(root: Path):
     return helper
 
 
+def hydrate_embedding_tokenizer(
+    installed: Path, manifest: dict, *, timeout_seconds: float = 10
+) -> dict:
+    """Restore only reviewed public ranks; never receive query text or secrets.
+
+    The package tokenizer remains strictly offline. This trusted Flight-only
+    setup step runs before provider dispatch and only for admitted SEM_SCORE.
+    """
+    import httpx
+    from sourcesql.contracts import SourcesQLError
+
+    spec = manifest.get("tokenizer_hydration") or {}
+    resource = TOKENIZER_HYDRATION["resource"]
+    expected = {
+        **TOKENIZER_HYDRATION,
+        "distribution_resource_sha256": manifest.get("engine_source_sha256", {}).get(resource),
+    }
+    if (
+        spec != expected
+        or not re.fullmatch(r"[0-9a-f]{64}", str(expected["distribution_resource_sha256"]))
+        or type(timeout_seconds) not in (float, int)
+        or not 0 < timeout_seconds <= TOKENIZER_HYDRATION["timeout_seconds"]
+    ):
+        raise SourcesQLError(
+            "unsupported_capability", "Unreviewed embedding tokenizer setup", "dispatch"
+        )
+    installed = installed.resolve()
+    target = installed / resource
+    if not target.resolve().is_relative_to(installed) or target.is_symlink():
+        raise SourcesQLError(
+            "unsupported_capability", "Invalid embedding tokenizer resource path", "dispatch"
+        )
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    maximum = spec["max_download_bytes"]
+
+    async def download() -> bytes:
+        async with asyncio.timeout(timeout_seconds):
+            async with httpx.AsyncClient(
+                timeout=timeout_seconds, trust_env=False, follow_redirects=False
+            ) as client:
+                async with client.stream(
+                    "GET", spec["url"], headers={"Accept-Encoding": "identity"}
+                ) as response:
+                    if (
+                        response.status_code != 200
+                        or response.headers.get("content-encoding", "identity").lower()
+                        != "identity"
+                    ):
+                        raise ValueError("Unexpected tokenizer response")
+                    length = response.headers.get("content-length")
+                    if length is not None and (not length.isdecimal() or int(length) > maximum):
+                        raise ValueError("Tokenizer download is too large")
+                    data = bytearray()
+                    async for chunk in response.aiter_raw(chunk_size=65_536):
+                        if len(data) + len(chunk) > maximum:
+                            raise ValueError("Tokenizer download is too large")
+                        data.extend(chunk)
+                    return bytes(data)
+
+    try:
+        if target.exists():
+            with gzip.open(target, "rb") as existing:
+                data = existing.read(maximum + 1)
+            state = "present"
+        else:
+            data = asyncio.run(download())
+            state = "restored"
+        if len(data) > maximum or digest(data) != spec["raw_sha256"]:
+            raise ValueError("Tokenizer data checksum mismatch")
+        compressed = gzip.compress(data, mtime=0) if state == "restored" else None
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Tokenizer setup exceeded its deadline")
+        if compressed is not None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(compressed)
+        return {
+            "state": state,
+            "raw_sha256": spec["raw_sha256"],
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+        }
+    except (OSError, ValueError, EOFError, TimeoutError, httpx.HTTPError) as error:
+        raise SourcesQLError(
+            "provider_unavailable", "Embedding tokenizer setup is unavailable", "dispatch"
+        ) from error
+
+
 def execute_job(
     store, config: dict, report: dict, root: Path, profile_helper=None, profile_settings=None
 ) -> None:
@@ -214,7 +313,17 @@ def execute_job(
         )
         if operation == "query":
             if request.get("profile", "fixture") != "fixture":
-                helper.validate_explain(engine.explain(**request), settings)
+                explanation = engine.explain(**request)
+                helper.validate_explain(explanation, settings)
+                if any(
+                    stage.get("stage") == "external" and stage.get("operator") == "SEM_SCORE"
+                    for stage in explanation.get("plan", {}).get("stages", [])
+                ):
+                    report["phase"] = "tokenizer_hydration"
+                    report["tokenizer_hydration"] = hydrate_embedding_tokenizer(
+                        root / "installed", BUNDLE_MANIFEST
+                    )
+                    report["phase"] = "engine_operation"
             result = engine.query(**request)
         elif operation == "import_table":
             result = engine.import_table(**request)

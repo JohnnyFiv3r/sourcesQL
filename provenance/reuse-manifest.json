@@ -3,6 +3,12 @@
   "engine_license": "Apache-2.0",
   "components": [
     {
+      "component": "Offline embedding tokenizer preset and data",
+      "kind": "MIT tokenizer preset adaptation and losslessly compressed official data",
+      "record": "provenance/tokenizer-reuse.json",
+      "runtime_dependency": "tiktoken==0.14.0"
+    },
+    {
       "component": "SQL admission and staged planning",
       "kind": "public invariant and test adaptation",
       "source": "https://github.com/JohnnyFiv3r/memoriesql",

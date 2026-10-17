@@ -586,7 +586,12 @@ export class MotherDuckEngine implements ResearchEngine {
       );
       const services: NonNullable<ResearchCapacity["services"]> = this.options
         .exa
-        ? ["exa", ...(this.options.exa.model ? ["openai" as const] : [])]
+        ? [
+            "exa",
+            ...(this.options.exa.model || this.options.exa.embedding
+              ? ["openai" as const]
+              : []),
+          ]
         : [this.options.search!.provider];
       for (const [period, limit] of [
         ["month", this.monthlyProviderCostMicrousd],
@@ -963,9 +968,13 @@ export class MotherDuckEngine implements ResearchEngine {
             (config.SOURCESQL_OPENAI_MODEL !== undefined ||
               config.SOURCESQL_OPENAI_SECRET_NAME !== undefined ||
               config.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined)) ||
+          (!policy.embedding &&
+            (config.SOURCESQL_OPENAI_EMBEDDING_MODEL !== undefined ||
+              config.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME !== undefined)) ||
           !Array.isArray(secrets) ||
           !secrets.includes(policy.secretName) ||
-          (policy.model && !secrets.includes(policy.model.secretName))
+          (policy.model && !secrets.includes(policy.model.secretName)) ||
+          (policy.embedding && !secrets.includes(policy.embedding.secretName))
         )
           throw new BackendError(
             "unsupported_capability",
@@ -1329,7 +1338,26 @@ export class MotherDuckEngine implements ResearchEngine {
                   source_mode: "allow_excerpt",
                   model_configured: !!this.options.exa!.model,
                   model_name: this.options.exa!.model?.name ?? null,
-                  embedding_configured: false,
+                  embedding_configured: !!this.options.exa!.embedding,
+                  embedding_model: this.options.exa!.embedding?.name ?? null,
+                  embedding_adapter_version: this.options.exa!.embedding
+                    ? "openai-embeddings.v2"
+                    : null,
+                  score_basis: this.options.exa!.embedding
+                    ? "cosine_similarity"
+                    : null,
+                  embedding_input_max_tokens: this.options.exa!.embedding
+                    ? 8192
+                    : null,
+                  embedding_batch_max_tokens: this.options.exa!.embedding
+                    ? 300_000
+                    : null,
+                  embedding_token_encoding: this.options.exa!.embedding
+                    ? "cl100k_base"
+                    : null,
+                  embedding_batch_max_inputs: this.options.exa!.embedding
+                    ? 128
+                    : null,
                   fetched_text_coverage:
                     this.options.exa!.policyVersion === "exa-research.v3"
                       ? "Retained provider text; completeness is not established"
@@ -1584,6 +1612,16 @@ export async function createMotherDuckBackend(
             secretName: environment.SOURCESQL_EXA_SECRET_NAME ?? "",
             policyVersion:
               environment.SOURCESQL_EXA_POLICY_VERSION ?? "exa-search.v1",
+            ...(environment.SOURCESQL_OPENAI_EMBEDDING_MODEL !== undefined ||
+            environment.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME !== undefined
+              ? {
+                  embedding: {
+                    name: environment.SOURCESQL_OPENAI_EMBEDDING_MODEL ?? "",
+                    secretName:
+                      environment.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME ?? "",
+                  },
+                }
+              : {}),
             ...(environment.SOURCESQL_OPENAI_MODEL !== undefined ||
             environment.SOURCESQL_OPENAI_SECRET_NAME !== undefined ||
             environment.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined

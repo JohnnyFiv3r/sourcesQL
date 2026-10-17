@@ -26,6 +26,8 @@
   --accent: #e8fbf7;
   --row-height: 52px;
   --selection-dock-space: 72px;
+  --overlay-duration: 200ms;
+  --overlay-easing: cubic-bezier(0.2, 0.8, 0.2, 1);
   color: var(--foreground);
   background: var(--background);
 }
@@ -820,27 +822,71 @@ html[data-table-transition="out"] {
     animation: none !important;
   }
 }
-.feedback {
+.feedback-layer {
+  position: absolute;
+  inset: 12px 12px auto;
+  z-index: 6;
   display: flex;
-  gap: 10px;
-  justify-content: space-between;
+  justify-content: center;
+  pointer-events: none;
+}
+.feedback-toast {
+  display: flex;
   align-items: center;
-  padding: 9px 10px;
-  background: var(--subtle);
-  border-left: 2px solid var(--foreground);
-  margin: 10px 0;
+  gap: 10px;
+  width: max-content;
+  max-width: min(560px, 100%);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow:
+    0 6px 24px #00000016,
+    0 1px 4px #00000008;
   font-size: 12px;
   line-height: 1.5;
+  opacity: 0;
+  transform: translateY(10px);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--overlay-duration) var(--overlay-easing),
+    transform var(--overlay-duration) var(--overlay-easing),
+    visibility 0s linear var(--overlay-duration);
+}
+.feedback-toast[data-state="visible"] {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+.feedback-toast > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--primary);
+}
+.feedback-message {
+  min-width: 0;
+  max-height: clamp(3rem, calc(100dvh - 140px), 10rem);
+  overflow-y: auto;
   overflow-wrap: anywhere;
 }
-.feedback .button {
-  width: 26px;
-  height: 26px;
-  min-height: 26px;
-  padding: 3px;
+.feedback-toast .button {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
   flex: none;
 }
-.feedback.error,
+.feedback-toast.error > svg {
+  color: #a33524;
+}
+:root[data-theme="dark"] .feedback-toast.error > svg {
+  color: #ffab9d;
+}
 .import-error {
   color: #a33524;
   background: #fff5f2;
@@ -875,7 +921,7 @@ html[data-table-transition="out"] {
   transform: translateX(-50%);
   z-index: 4;
   max-width: calc(100% - 24px);
-  animation: dock-in 0.2s ease-out;
+  animation: dock-in var(--overlay-duration) var(--overlay-easing);
 }
 .action-bar {
   display: flex;
@@ -1127,6 +1173,9 @@ label .input {
   .more-menu summary {
     width: 28px;
     height: 28px;
+  }
+  .feedback-layer {
+    inset: 8px 8px auto;
   }
   .selection-dock {
     bottom: 8px;

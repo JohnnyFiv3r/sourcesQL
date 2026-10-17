@@ -193,6 +193,40 @@ def test_discovery_stages_match_before_extract_and_retains_context():
     assert fixture.calls[-2][2]["_source_url"] == "https://aurora.example/project"
 
 
+def test_optional_score_batch_only_receives_semantic_survivors_before_output_limit():
+    fixture = Fixture()
+    batches = []
+
+    def score_batch(calls):
+        batches.append(calls)
+        return [None if "Aurora" in args[0] else 0.8 for args, _ in calls]
+
+    plan = admit("""SELECT title, SEM_SCORE(content, 'signed grid agreement') AS relevance
+      FROM WEB_SEARCH('campuses') WHERE SEM_MATCH(content, 'specific campus')
+      ORDER BY relevance DESC NULLS LAST LIMIT 1""")
+    result = execute_plan(plan, {}, fixture, reference_sql, score_batch=score_batch)
+    assert result.rows == [{"title": "Birch", "relevance": 0.8}]
+    assert len(batches) == 1
+    assert [args[0] for args, _ in batches[0]] == [s["content"] for s in SOURCES[:2]]
+    assert [c[0] for c in fixture.calls] == ["WEB_SEARCH"] + ["SEM_MATCH"] * 3
+
+
+def test_invalid_sql_binding_never_calls_score_batch():
+    fixture = Fixture()
+    plan = admit("""WITH ranked AS (
+      SELECT title, SEM_SCORE(content, 'criterion') AS score FROM WEB_SEARCH('campuses')
+    ) SELECT sum(title) AS total FROM ranked""")
+    with pytest.raises(SourcesQLError, match="validation before provider dispatch"):
+        execute_plan(
+            plan,
+            {},
+            fixture,
+            reference_sql,
+            score_batch=lambda calls: pytest.fail("scored invalid SQL"),
+        )
+    assert fixture.calls == []
+
+
 def test_six_reviewed_examples_execute():
     directory = Path(__file__).resolve().parents[2] / "examples"
     inputs = {

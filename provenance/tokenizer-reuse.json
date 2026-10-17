@@ -1,0 +1,19 @@
+{
+  "component": "Offline embedding tokenization",
+  "source": "https://github.com/openai/tiktoken",
+  "version": "0.14.0",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2022 OpenAI, Shantanu Jain",
+  "preset_source": "tiktoken_ext/openai_public.py:cl100k_base",
+  "data_source": "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
+  "data_sha256": "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7",
+  "packaged_data": "src/sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz",
+  "packaged_license": "src/sourcesql/_resources/tokenizers/TIKTOKEN_LICENSE.txt",
+  "adaptations": [
+    "Lossless gzip compression with fixed timestamp for offline packaging",
+    "Public tiktoken.Encoding construction from hash-verified bundled ranks",
+    "Documented model-to-encoding selection with explicit custom-model configuration",
+    "No runtime download, tiktoken registry mutation, or environment-variable changes"
+  ],
+  "qualification": "Local exact-token and offline package tests; no model API calls"
+}

@@ -5,6 +5,7 @@ export type HostedExaPolicy = {
   secretName: string;
   policyVersion?: string;
   model?: { name: string; secretName: string; reasoningEffort?: string };
+  embedding?: { name: string; secretName: string };
 };
 export const EXA_SEARCH_TYPES = {
   exa: "auto",
@@ -43,6 +44,15 @@ export function exaDescriptor(policy: HostedExaPolicy) {
     return canonical({
       approved_cost_microusd: policy.approvedCostMicrousd,
       limits: exaResearchLimits(policy),
+      ...(policy.embedding
+        ? {
+            embedding: {
+              name: policy.embedding.name,
+              secret_name: policy.embedding.secretName,
+              version: "openai-embeddings.v2",
+            },
+          }
+        : {}),
       model: policy.model
         ? {
             name: policy.model.name,
@@ -93,6 +103,19 @@ export function validateExaPolicy(policy: HostedExaPolicy): void {
     ].includes(policy.policyVersion) ||
     typeof policy.secretName !== "string" ||
     !/^[a-z][a-z0-9_]{0,62}$/.test(policy.secretName) ||
+    (policy.embedding !== undefined &&
+      (!research ||
+        !policy.embedding ||
+        typeof policy.embedding !== "object" ||
+        Array.isArray(policy.embedding) ||
+        Object.keys(policy.embedding).some(
+          (key) => !["name", "secretName"].includes(key),
+        ) ||
+        !["text-embedding-3-small", "text-embedding-3-large"].includes(
+          policy.embedding.name,
+        ) ||
+        typeof policy.embedding.secretName !== "string" ||
+        !/^[a-z][a-z0-9_]{0,62}$/.test(policy.embedding.secretName))) ||
     (policy.model !== undefined &&
       (!research ||
         policy.model === null ||
@@ -151,12 +174,12 @@ export function exaResearchLimits(
     max_candidates: 2500,
     max_fetches: 40,
     max_semantic_documents: policy.model ? 40 : 0,
-    max_model_requests: policy.model ? 96 : 0,
+    max_model_requests: policy.model || policy.embedding ? 96 : 0,
     max_concurrency: 4,
     dispatch_deadline_seconds: 100,
     max_output_rows: 1000,
     max_output_bytes: 4_194_304,
-    max_input_tokens: policy.model ? 200_000 : 0,
+    max_input_tokens: policy.model || policy.embedding ? 200_000 : 0,
     max_output_tokens: policy.model ? 16_000 : 0,
   });
 }
@@ -170,6 +193,7 @@ export function exaOperators(policy: HostedExaPolicy): string[] {
     ...(policy.model
       ? ["SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL", "SEM_NORM"]
       : []),
+    ...(policy.embedding ? ["SEM_SCORE"] : []),
   ];
 }
 
@@ -182,6 +206,12 @@ export function exaConfiguration(
     SOURCESQL_EXA_POLICY_VERSION: descriptor.version,
     SOURCESQL_EXA_APPROVED_COST_MICROUSD: String(policy.approvedCostMicrousd),
     SOURCESQL_EXA_SECRET_NAME: policy.secretName,
+    ...(policy.embedding
+      ? {
+          SOURCESQL_OPENAI_EMBEDDING_MODEL: policy.embedding.name,
+          SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME: policy.embedding.secretName,
+        }
+      : {}),
     ...(policy.model
       ? {
           SOURCESQL_OPENAI_MODEL: policy.model.name,
