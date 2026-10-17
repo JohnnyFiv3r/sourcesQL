@@ -838,6 +838,7 @@ class Engine:
                         "provider_connection_error": "Semantic model connection failed",
                         "provider_http_error": "Semantic model provider rejected the request",
                         "provider_error": "Semantic model request failed",
+                        "provider_unavailable": "Semantic provider is unavailable",
                     }
                     if failure.get("code") in failure_messages:
                         raise SourcesQLError(

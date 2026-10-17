@@ -851,6 +851,10 @@ class OpenAIEmbeddingProvider:
                     raise SourcesQLError(
                         "provider_unavailable", "Unexpected embedding API redirect", "semantic"
                     )
+                if not response.is_success:
+                    raise SourcesQLError(
+                        "provider_http_error", "Embedding provider rejected the request", "semantic"
+                    )
                 return json_object(read_response(response, self.MAX_RESPONSE_BYTES))
         except httpx.TimeoutException:
             raise ProviderTransportError(

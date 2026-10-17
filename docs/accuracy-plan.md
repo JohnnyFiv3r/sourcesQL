@@ -29,6 +29,14 @@ implicit character prefix; inputs beyond the token limit need explicit passage
 handling. Hosted activation, live scoring quality and complete fresh-host
 research acceptance are pending.
 
+Q01a now preserves known provider failure codes through the Python job writer,
+gateway and MCP. Authorized callers receive fixed safe summaries and can inspect
+the failed run when one exists. Unknown codes fall back to `execution_failed`;
+provider bodies, prompts and credentials are excluded. Local failure injection
+exercises the actual embedding adapter, strict engine, Flight runner and job
+writer against the same DuckDB storage reopened by the gateway and MCP. This
+does not yet qualify the live MotherDuck transport or canonical hosted preflight.
+
 No backlog item is complete merely because its instructions were written or
 its mock tests passed. Move an item to live-qualified only with the exercised
 configuration, build identity, task, outcome and limitations recorded.
@@ -58,7 +66,7 @@ Normalization labels are neither canonical identities nor new factual evidence.
 
 | ID | Work and current state | Completion evidence required |
 | --- | --- | --- |
-| Q01 | **Hosted preflight and actionable errors — pending.** Validate signatures, schema, dependencies and bounds with canonical admission before provider dispatch. Preserve authorized stage/code/dispatch-certainty diagnostics through Python storage, gateway and MCP. | Retained invalid-signature, timeout, rejection and unknown-outcome cases traverse the complete hosted route. The caller can inspect a failed run and take the permitted recovery action without operator SQL repair. Provider-free validation must describe any compute it consumes honestly. |
+| Q01 | **Hosted preflight and actionable errors — in progress.** Q01a preserves safe provider codes and failed-run handles through the actual Python writer, gateway and MCP in local injected-failure checks. Canonical admission for signatures, schema, dependencies and bounds, richer dispatch-certainty diagnostics and live qualification remain pending. | Retained invalid-signature, timeout, rejection and unknown-outcome cases traverse the complete hosted route. The caller can inspect a failed run and take the permitted recovery action without operator SQL repair. Provider-free validation must describe any compute it consumes honestly. |
 | Q02 | **Durable successful work — pending.** Retain successful fanout branches and completed extraction stages when siblings fail or a later stage reaches a deadline. Expose reusable intermediate handles and pending coverage. | Failure injection preserves successful siblings and completed batches across process restart. Known no-dispatch, known rejection and uncertain remote outcome permit different recovery actions; uncertain calls are never replayed automatically. Raw discovery is not presented as completed research. |
 | Q03 | **Feasible semantic work and exact accounting — partly local.** Batched embedding scoring, exact model-aware token reservations and token-packed requests are implemented locally; the public wheel passed offline tokenizer checks. Compact Flight build and controlled startup checks passed locally; its live download remains unqualified. Detailed extraction still needs time/output-aware batching and durable continuation; live cost and quality measurements remain pending. Candidate scoring has a separate allowance; `SEM_MATCH`, extraction and `SEM_NORM` share the current semantic-document allowance. Shared request/token/runtime bounds still apply. | Token and input limits cover multilingual and long text; oversized inputs require explicit passage handling. Compact Flight preparation respects package, download and runtime limits and cannot make paid calls after preparation fails. Representative matching, optional scoring, extraction and normalization report actual calls, tokens, elapsed time and coverage. A many-entity request finishes in bounded batches or names what remains without silent truncation. |
 | Q04 | **Query coverage and reusable hit provenance — pending.** Make query/facet/rank/request provenance available to SQL. Distinguish hits, document candidates, immutable versions, entity candidates and independent sources. Surface effective search breadth when caps reduce intake. | Overlapping searches retain their provenance and merge complementary hits without consuming the shortlist as duplicate documents. Coverage shows missing facets and can refill an underperforming shortlist. More hits are not reported as more verified entities. |
@@ -73,6 +81,17 @@ Implement Q01–Q03 first so later accuracy work can finish and recover reliably
 Q04–Q08 form the evidence and coverage work; they should be evaluated on unrelated
 tasks rather than domain-specific templates. Q09 is the acceptance gate for each
 meaningful change, with Q10 keeping adopter behavior aligned with what passed.
+
+## Active slices
+
+- Q01a: safe failure transport and failed-run inspection — locally verified.
+  All 796 Python tests and 357 app/gateway/MCP tests passed, with 44 opt-in
+  Python cases skipped; the app build passed. An independent source review found
+  no blockers. Live MotherDuck transport qualification remains pending.
+- Q01b: canonical hosted preflight — next. Reuse Python admission rather than
+  adding a second SQL validator. Record any validation compute separately.
+- Q01c: complete dispatch-certainty and recovery diagnostics, then qualify the
+  hosted route. An actionable code alone cannot prove whether a remote call ran.
 
 ## Acceptance set and recording
 

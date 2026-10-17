@@ -229,15 +229,18 @@ test("pending MCP job handles are bounded and never manufacture result reference
       const result = response.structuredContent as Record<string, unknown>;
       assert.equal(result.status, state);
       assert.equal(result.pending, !["failed", "cancelled"].includes(state));
-      for (const key of [
-        "result_id",
-        "run_id",
-        "result_ref",
-        "query",
-        "token",
-        "error",
-      ])
+      for (const key of ["result_id", "result_ref", "query", "token"])
         assert.equal(result[key], undefined);
+      if (state === "failed") {
+        assert.equal(result.run_id, "run_job_result");
+        assert.equal(
+          (result.error as Record<string, unknown>).code,
+          "execution_failed",
+        );
+      } else {
+        assert.equal(result.run_id, undefined);
+        assert.equal(result.error, undefined);
+      }
       assert.doesNotMatch(
         JSON.stringify(response),
         /synthetic-secret|private query|do-not-invent|raw diagnostic/,
@@ -253,6 +256,62 @@ test("pending MCP job handles are bounded and never manufacture result reference
       0,
       "Incomplete jobs must not resolve unpublished data",
     );
+  } finally {
+    await session.close();
+  }
+});
+
+test("MCP run diagnostics bound entries and replace arbitrary codes, stages and messages", async () => {
+  const engine = new JobEngine();
+  const originalCall = engine.call.bind(engine);
+  engine.call = async <T>(
+    method: string,
+    params: Record<string, unknown> = {},
+  ) => {
+    if (method !== "run_status") return originalCall<T>(method, params);
+    return {
+      run_id: params.run_id,
+      status: "failed",
+      errors: [
+        {
+          code: "provider_timeout",
+          stage: "semantic",
+          safe_message: "PRIVATE-PROVIDER-BODY",
+          token: "PRIVATE-KEY",
+        },
+        {
+          code: "PRIVATE-ERROR-CODE",
+          stage: "PRIVATE-PROMPT",
+          message: "PRIVATE-RAW-MESSAGE",
+        },
+        { code: "__proto__", stage: {} },
+        ...Array.from({ length: 20 }, () => ({
+          code: "invalid_output",
+          stage: "semantic",
+        })),
+      ],
+      query: "PRIVATE-SQL",
+      provider_events: [{ raw: "PRIVATE-EVENT" }],
+    } as T;
+  };
+  const session = await connect(engine);
+  try {
+    const response = await session.client.callTool({
+      name: "sourcesql_run_status",
+      arguments: { run_id: "run_failed" },
+    });
+    assert.notEqual(response.isError, true);
+    const result = response.structuredContent as Record<string, any>;
+    assert.equal(result.errors.length, 8);
+    assert.equal(result.errors_truncated, true);
+    assert.equal(result.errors[0].code, "provider_timeout");
+    assert.equal(result.errors[0].stage, "semantic");
+    assert.match(result.errors[0].message, /may be unknown/);
+    assert.equal(result.errors[1].code, "execution_failed");
+    assert.equal(result.errors[1].stage, undefined);
+    assert.equal(result.errors[2].code, "execution_failed");
+    assert.doesNotMatch(JSON.stringify(response), /PRIVATE-|__proto__/);
+    assert.equal(engine.dispatches, 0);
   } finally {
     await session.close();
   }

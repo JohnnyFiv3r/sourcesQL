@@ -496,12 +496,16 @@ class MotherDuckStore(Store):
                 "disclosure_required",
                 "evidence_invalid",
                 "provider_unavailable",
+                "provider_timeout",
+                "provider_connection_error",
+                "provider_http_error",
+                "provider_error",
                 "storage_conflict",
                 "storage_unavailable",
                 "invalid_output",
                 "cancelled",
             }
-            code = code if code in allowed else "execution_failed"
+            code = code if isinstance(code, str) and code in allowed else "execution_failed"
             db.execute(
                 "UPDATE jobs SET status='failed',error_code=?,error_message='Research execution failed safely',updated_at=? WHERE id=?::UUID",
                 [code, timestamp(), job_id],
