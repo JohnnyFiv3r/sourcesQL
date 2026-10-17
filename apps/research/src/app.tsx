@@ -44,6 +44,8 @@ import {
   effectiveValue,
   snapshotSchema,
   sourcesForViewSelection,
+  cellDiagnosticSummary,
+  researchGapSummary,
   type ResearchView,
   type Row,
   type ResearchRequestSummary,
@@ -67,6 +69,7 @@ import {
 } from "./job-view.js";
 import "./job-status-panel.css";
 import { HostedViewReconciliation } from "./view-reconciliation.js";
+import { inlineHeightLimitFor } from "./host-sizing.js";
 import { readNavigation } from "./navigation-read.js";
 import {
   UpdateReviewPanel,
@@ -360,19 +363,7 @@ function Workspace() {
     const updateLayoutContext = (context: McpUiHostContext | undefined) => {
       // Pagination uses the host's space budget, not the height we request for
       // this page. Otherwise a short last page would shrink the page size too.
-      const dimensions = context?.containerDimensions;
-      setInlineHeightLimit(
-        context &&
-          (!context.researchPreview || context.researchInlineSizing) &&
-          context.displayMode !== "fullscreen"
-          ? Math.min(
-              560,
-              dimensions && "maxHeight" in dimensions
-                ? (dimensions.maxHeight ?? 560)
-                : 560,
-            )
-          : null,
-      );
+      setInlineHeightLimit(inlineHeightLimitFor(context));
     };
     const updateAgentMessaging = () =>
       setCanAskAgent(Boolean(agentMessenger(app, chatGPTMessaging())));
@@ -1297,6 +1288,8 @@ function Workspace() {
   const researchActionLabel = `View ${researchScopeLabel(selectionResearch, field).toLowerCase()}`;
   const currentValue =
     view && row && field ? effectiveValue(view, row, field) : null;
+  const selectedCellDiagnostic =
+    row && field ? cellDiagnosticSummary(row, field) : undefined;
   const sources = sourceLinksForValue(
     row && view ? sourcesForViewSelection(view, row, field || undefined) : [],
     currentValue,
@@ -2122,6 +2115,10 @@ function Workspace() {
                             (proposal) => !view.update?.decisions[proposal.id],
                           );
                         const rawValue = effectiveValue(view, r, c.key);
+                        const diagnostic = cellDiagnosticSummary(r, c.key);
+                        const diagnosticLabel = diagnostic
+                          ? `${amended ? "Original research: " : ""}${diagnostic}`
+                          : undefined;
                         const missing =
                           rawValue == null ||
                           (typeof rawValue === "string" &&
@@ -2156,11 +2153,11 @@ function Workspace() {
                             <button
                               className={`cell-button ${markerCount ? "has-indicators" : ""} ${markerCount === 2 ? "has-two-indicators" : ""}`}
                               data-cell={`${i}-${ci}`}
-                              aria-label={`${c.label}: ${value}. Result ${pageStart + i + 1}${amended ? (amended.sourceSnapshotId ? ". Updated" : ". Edited") : ""}${cellResearch.length ? `. ${researchLabel} available` : ""}${change ? `. ${change.decision ? "Reviewed" : change.status}` : ""}${pendingProposal ? ". Update proposal available" : ""}`}
+                              aria-label={`${c.label}: ${value}. Result ${pageStart + i + 1}${diagnosticLabel ? `. ${diagnosticLabel}` : ""}${amended ? (amended.sourceSnapshotId ? ". Updated" : ". Edited") : ""}${cellResearch.length ? `. ${researchLabel} available` : ""}${change ? `. ${change.decision ? "Reviewed" : change.status}` : ""}${pendingProposal ? ". Update proposal available" : ""}`}
                               aria-controls="cell-actions"
                               aria-pressed={row?.id === r.id && field === c.key}
                               disabled={busy}
-                              title={`${value}${amended ? (amended.sourceSnapshotId ? " · Updated from research" : " · Edited") : ""}${cellResearch.length ? ` · ${researchLabel} available` : ""}`}
+                              title={`${value}${diagnosticLabel ? ` · ${diagnosticLabel}` : ""}${amended ? (amended.sourceSnapshotId ? " · Updated from research" : " · Edited") : ""}${cellResearch.length ? ` · ${researchLabel} available` : ""}`}
                               onClick={(e) =>
                                 selectCell(r.id, c.key, e.currentTarget)
                               }
@@ -2263,6 +2260,13 @@ function Workspace() {
                   : rows.length === view.snapshot.rows.length
                     ? `${rows.length} ${rows.length === 1 ? "result" : "results"}`
                     : `${rows.length} of ${view.snapshot.rows.length} results`}
+                {researchGapSummary(view.snapshot.researchQuality) && (
+                  <span
+                    title={researchGapSummary(view.snapshot.researchQuality)}
+                  >
+                    {" · Partial research"}
+                  </span>
+                )}
               </span>
               {view.preview &&
                 view.preview.total > view.snapshot.rows.length && (
@@ -2457,6 +2461,9 @@ function Workspace() {
                         {captured}
                       </time>
                     </span>
+                    {selectedCellDiagnostic ? (
+                      <p>Original research: {selectedCellDiagnostic}</p>
+                    ) : null}
                   </div>
                 )}
                 {tab === "correct" &&

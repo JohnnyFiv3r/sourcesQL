@@ -37,6 +37,8 @@ def main():
         "import": engine.import_bundle,
         "run_status": engine.run_status,
         "cancel": engine.cancel,
+        "resume_run": engine.resume_run,
+        "recover_run": engine.recover_run,
     }
     output_lock = threading.Lock()
 

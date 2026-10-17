@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
@@ -52,6 +53,24 @@ class NormalizedEntry(BaseModel):
 class NormalizedOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     entries: list[NormalizedEntry]
+
+
+class FieldOutcome(BaseModel):
+    """A NULL's processing reason, separate from proof of a factual assertion."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    field: str = Field(default="value", min_length=1, max_length=64)
+    item: int | None = Field(default=None, ge=0)
+    status: Literal["not_stated", "unknown", "ambiguous", "conflicting", "not_inspected"]
+
+
+class ModelFieldOutcome(BaseModel):
+    """Parse optional diagnostics without letting a bad reason discard valid facts."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    field: str = "value"
+    item: int | None = None
+    status: str
 
 
 def scalar_type(logical_type: str) -> Any:
@@ -105,6 +124,7 @@ def validate_value(value: Any, logical_type: str) -> Any:
 
 def checked_spans(text: str, spans: list[dict], options: dict) -> list[dict]:
     window_end = min(len(text), options.get("window_chars", 16000))
+    origin = options.get("source_window_start", 0)
     output = []
     for raw in spans:
         try:
@@ -118,10 +138,12 @@ def checked_spans(text: str, spans: list[dict], options: dict) -> list[dict]:
         output.append(
             {
                 **span.model_dump(),
-                "content_sha256": text_hash(text),
+                "start": origin + span.start,
+                "end": origin + span.end,
+                "content_sha256": options.get("source_content_sha256", text_hash(text)),
                 "source_version_id": options.get("source_version_id"),
                 "document_id": options.get("document_id"),
-                "inspected_window": {"start": 0, "end": window_end},
+                "inspected_window": {"start": origin, "end": origin + window_end},
             }
         )
     return output
@@ -166,6 +188,22 @@ def validate_outcome(
     options: dict,
     usage: dict,
 ) -> SemanticOutcome:
+    origin = options.get("source_window_start", 0)
+    source_characters = options.get("source_characters", len(text))
+    window_end = min(len(text), options.get("window_chars", 16000))
+    if (
+        type(origin) is not int
+        or type(source_characters) is not int
+        or origin < 0
+        or source_characters < origin + len(text)
+    ):
+        raise SourcesQLError("evidence_invalid", "Invalid source window context", "semantic")
+    usage.update(
+        inspected_windows=[{"start": origin, "end": origin + window_end}],
+        source_characters=source_characters,
+        input_omitted_characters=max(0, source_characters - window_end),
+        content_sha256=options.get("source_content_sha256", text_hash(text)),
+    )
     support = checked_spans(text, spans, options)
     if value is None:
         if status not in {"not_stated", "unknown", "unprocessed", "failed"}:
@@ -228,13 +266,38 @@ def validate_outcome(
         value = converted if operator == "SEM_EXTRACT_ALL" else converted[0]
         if operator == "SEM_EXTRACT_ALL" and not value:
             status = "no_match"
-    usage.update(
-        inspected_windows=[{"start": 0, "end": min(len(text), options.get("window_chars", 16000))}],
-        source_characters=len(text),
-        input_omitted_characters=max(0, len(text) - options.get("window_chars", 16000)),
-        content_sha256=text_hash(text),
-    )
+        if operator == "SEM_EXTRACT_ALL":
+            usage["extraction_capacity"] = {
+                "max_items": maximum,
+                "returned_items": len(value),
+                "may_have_more": len(value) >= maximum,
+            }
     return SemanticOutcome(value, status, support, usage)
+
+
+def checked_field_outcomes(operator: str, output: dict, fields: dict) -> list[dict]:
+    records, seen = [], set()
+    for raw in output.get("field_outcomes", []):
+        try:
+            record = FieldOutcome.model_validate(raw).model_dump()
+        except ValueError:
+            continue
+        field, item = record["field"], record["item"]
+        if field not in (fields or {"value": "VARCHAR"}):
+            continue
+        value = output["value"]
+        if operator == "SEM_EXTRACT_ALL":
+            if type(item) is not int or not isinstance(value, list) or item >= len(value):
+                continue
+            value = value[item]
+        elif item is not None:
+            continue
+        value = value.get(field) if fields and isinstance(value, dict) else value
+        if value is not None or (item, field) in seen:
+            continue
+        seen.add((item, field))
+        records.append(record)
+    return records
 
 
 def validate_named_outcome(
@@ -443,6 +506,7 @@ def output_schema(operator: str, fields: dict[str, str], options: dict) -> type[
         value=(value_type | None, ...),
         status=(Literal["supported_text", "processed", "not_stated", "unknown", "no_match"], ...),
         support=(list[ModelQuote], ...),
+        field_outcomes=(list[ModelFieldOutcome], Field(default_factory=list)),
     )
 
 
@@ -539,6 +603,11 @@ class PydanticSemanticProvider:
             raise SourcesQLError(
                 "invalid_request", "Named fields cannot combine with scalar type", "semantic"
             )
+        deadline = options.get("deadline_monotonic")
+        if deadline is not None and (
+            type(deadline) not in {int, float} or not math.isfinite(deadline)
+        ):
+            raise SourcesQLError("invalid_request", "Invalid semantic deadline", "semantic")
         if text is None:
             return SemanticOutcome(
                 None, "unprocessed", usage={"requests": 0, "reason": "missing_text"}
@@ -565,6 +634,11 @@ class PydanticSemanticProvider:
 
         class ReservedModel(WrapperModel):
             async def request(self, messages, model_settings, model_request_parameters):
+                remaining_time = None if deadline is None else deadline - monotonic()
+                if remaining_time is not None and remaining_time <= 0:
+                    raise SourcesQLError(
+                        "budget_exhausted", "Semantic dispatch deadline exceeded", "dispatch"
+                    )
                 remaining_output = budget.limits["max_output_tokens"] - budget.counts.get(
                     "output_tokens", 0
                 )
@@ -579,6 +653,23 @@ class PydanticSemanticProvider:
                 model_settings["max_tokens"] = min(
                     model_settings.get("max_tokens", 4096), remaining_output
                 )
+                if remaining_time is not None:
+                    configured = model_settings.get("timeout")
+                    if isinstance(configured, httpx.Timeout):
+                        model_settings["timeout"] = httpx.Timeout(
+                            **{
+                                key: min(value, remaining_time)
+                                if (value := getattr(configured, key)) is not None
+                                else remaining_time
+                                for key in ("connect", "read", "write", "pool")
+                            }
+                        )
+                    else:
+                        model_settings["timeout"] = (
+                            min(configured, remaining_time)
+                            if type(configured) in {int, float}
+                            else remaining_time
+                        )
                 budget.reserve("model_requests", limit="max_model_requests")
                 event = {
                     "kind": "semantic",
@@ -588,9 +679,15 @@ class PydanticSemanticProvider:
                 }
                 events.append(event)
                 try:
-                    response = await super().request(
-                        messages, model_settings, model_request_parameters
-                    )
+                    if remaining_time is None:
+                        response = await super().request(
+                            messages, model_settings, model_request_parameters
+                        )
+                    else:
+                        async with asyncio.timeout(remaining_time):
+                            response = await super().request(
+                                messages, model_settings, model_request_parameters
+                            )
                     event["status"] = "completed"
                     event["usage"] = {
                         "input_tokens": response.usage.input_tokens,
@@ -640,6 +737,9 @@ class PydanticSemanticProvider:
                 "a numeric value from its qualifier only when the field definitions explicitly "
                 "request separate numeric and qualifier fields. Use null if the declared output "
                 "cannot preserve those distinctions. "
+                "For each NULL field, optionally report field_outcomes with its exact field "
+                "and zero-based item for ALL, using not_stated, unknown, ambiguous, conflicting "
+                "or not_inspected. These are processing diagnostics, never factual evidence. "
                 "Every non-null extracted field and every positive match requires a verbatim "
                 "support quote copied exactly from the supplied text. Copy enough surrounding "
                 "text to make each quote unique. Do not calculate or return character offsets. ALL support "
@@ -683,6 +783,7 @@ class PydanticSemanticProvider:
                 "metering": "reported_tokens_after_dispatch",
             }
             output = result.output.model_dump()
+            usage["field_outcomes"] = checked_field_outcomes(operator, output, fields)
             if operator == "SEM_NORM":
                 entries = output["entries"]
                 originals = [e["original"] for e in entries]
@@ -883,6 +984,19 @@ class OpenAIEmbeddingProvider:
             raise SourcesQLError(
                 "invalid_request", "Invalid scoring cancellation check", "semantic"
             )
+        callbacks = {
+            name: options.get(name)
+            for name in (
+                "on_score_batch_start",
+                "on_completed_score",
+                "on_score_batch_failed",
+                "on_score_batch_completed",
+            )
+        }
+        if any(value is not None and not callable(value) for value in callbacks.values()):
+            raise SourcesQLError(
+                "invalid_request", "Invalid scoring checkpoint callback", "semantic"
+            )
         deadline = options.get("deadline_monotonic")
         if deadline is not None and (
             type(deadline) not in {int, float} or not math.isfinite(deadline)
@@ -985,6 +1099,44 @@ class OpenAIEmbeddingProvider:
         ]
         interruption: dict | None = None
         affected: set[str] = set()
+        published: set[int] = set()
+
+        def publish_completed_scores():
+            criterion_vector = self._vectors.get(criterion_key)
+            if criterion_vector is None:
+                return
+            for text, indices in inputs.items():
+                source_vector = self._vectors.get(self._cache_key(text))
+                if source_vector is None:
+                    continue
+                if len(source_vector) != len(criterion_vector):
+                    unresolved(indices, "invalid_output", "Cached embedding dimensions differ")
+                    for index in indices:
+                        outcomes[index].status = "invalid_output"
+                    continue
+                value = max(
+                    -1.0,
+                    min(
+                        1.0,
+                        math.fsum(
+                            a * b for a, b in zip(source_vector, criterion_vector, strict=True)
+                        ),
+                    ),
+                )
+                for index in indices:
+                    outcomes[index].value = value
+                    outcomes[index].status = "processed"
+                    if index not in published:
+                        callback = callbacks["on_completed_score"]
+                        if callback is not None:
+                            callback(index, outcomes[index])
+                        published.add(index)
+
+        # Cached vector pairs also produce durable scores without another request.
+        publish_completed_scores()
+        callback = callbacks["on_score_batch_completed"]
+        if callback is not None:
+            callback()
         while pending or criterion_key not in self._vectors:
             if check_active is not None:
                 check_active()
@@ -1006,8 +1158,43 @@ class OpenAIEmbeddingProvider:
             # unique submitted text. Reported usage remains separate.
             # Actual provider usage is reported separately; unknown outcomes keep
             # their reservation rather than being retried or silently refunded.
-            budget.reserve("input_tokens", reserved_tokens, "max_input_tokens")
-            budget.reserve("model_requests", limit="max_model_requests")
+            batch_indices = sorted({index for text in batch for index in inputs.get(text, [])})
+            if not batch_indices:
+                # A criterion-only request affects every as-yet unresolved score.
+                batch_indices = sorted(
+                    index
+                    for indices in inputs.values()
+                    for index in indices
+                    if index not in published
+                )
+            callback = callbacks["on_score_batch_start"]
+            if callback is not None:
+                callback(batch_indices)
+            prior_requests = budget.counts.get("model_requests", 0)
+            try:
+                budget.reserve("input_tokens", reserved_tokens, "max_input_tokens")
+                budget.reserve("model_requests", limit="max_model_requests")
+            except SourcesQLError as error:
+                if budget.counts.get("model_requests", 0) > prior_requests:
+                    self.events.append(
+                        {
+                            "kind": "embedding",
+                            "model": self.model,
+                            "status": "not_dispatched",
+                            "inputs": len(batch),
+                            "usage": {"requests": 0, "input_tokens": 0},
+                        }
+                    )
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(
+                        batch_indices,
+                        {
+                            "code": error.code,
+                            "remote_outcome_unknown": False,
+                        },
+                    )
+                raise
             batch_id = f"embedding_{len(self.events)}"
             event: dict[str, Any] = {
                 "kind": "embedding",
@@ -1087,30 +1274,33 @@ class OpenAIEmbeddingProvider:
             if interruption is not None:
                 event["failure"] = interruption
                 affected = set(batch)
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(batch_indices, interruption)
                 break
+            # Persist valid completed scores before checking a later deadline,
+            # cancellation or request. Coordinator failures must propagate rather
+            # than being mistaken for malformed provider output.
+            publish_completed_scores()
+            if any(outcomes[index].status != "processed" for index in batch_indices):
+                interruption = {
+                    "code": "invalid_output",
+                    "message": "Embedding batch did not produce valid scores",
+                    "remote_outcome_unknown": False,
+                    "retryable": False,
+                }
+                event.update(status="invalid_output", failure=interruption)
+                affected = set(batch)
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(batch_indices, interruption)
+                break
+            callback = callbacks["on_score_batch_completed"]
+            if callback is not None:
+                callback()
 
-        criterion_vector = self._vectors.get(criterion_key)
         for text, indices in inputs.items():
-            source_vector = self._vectors.get(self._cache_key(text))
-            if source_vector is not None and criterion_vector is not None:
-                if len(source_vector) != len(criterion_vector):
-                    unresolved(indices, "invalid_output", "Cached embedding dimensions differ")
-                    for index in indices:
-                        outcomes[index].status = "invalid_output"
-                    continue
-                value = max(
-                    -1.0,
-                    min(
-                        1.0,
-                        math.fsum(
-                            a * b for a, b in zip(source_vector, criterion_vector, strict=True)
-                        ),
-                    ),
-                )
-                for index in indices:
-                    outcomes[index].value = value
-                    outcomes[index].status = "processed"
-            elif interruption is not None:
+            if interruption is not None and any(index not in published for index in indices):
                 for index in indices:
                     outcomes[index].usage.update(
                         reason=interruption["code"], failure=dict(interruption)

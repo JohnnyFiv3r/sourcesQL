@@ -6,6 +6,50 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased research completion work
+
+The render tool now returns a concise answer-surface handoff alongside saved
+data. Its tool-local description requires the requested row unit and answer
+fields, treats source hit lists as acquisition unless a catalog was requested,
+and keeps follow-up chat brief without duplicating the table. The query tool
+also points to declared research requirements. A successful tool response does
+not establish that the host displayed the app. All 383 app tests and the
+TypeScript production build pass; a recorded 24-source view renders under strict
+CSP in independent headless Chrome. The reported ChatGPT loading failure still
+needs host-side evidence; these checks do not establish ChatGPT acceptance.
+The render tool also mirrors its standard resource URI in ChatGPT's documented
+optional template alias. Resource-read regressions keep both paths on the same
+immutable bundle; data tools remain without a template. This compatibility
+change still needs verification in ChatGPT and is not a confirmed root cause.
+Inline sizing now treats nonpositive initial height budgets as unmeasured,
+using the existing 560 px fallback. A collapsed-frame reproduction previously
+reported zero indefinitely; the fixed bundle requests a positive height and
+renders. Four sizing regressions and five independent headless cases pass,
+including collapsed frames and partial host context. Positive host limits,
+fullscreen and local preview behavior are preserved. Previous public UI
+resources remain available under their original content hashes. The actual
+ChatGPT client context and end-to-end mobile rendering remain unverified.
+
+PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
+The next local implementation covers canonical hosted preflight, bounded durable
+stage journals, explicit restart continuation/source recovery, query-hit
+provenance, retained evidence windows, item-level lineage and explained NULLs.
+Declared output requirements now separate execution success from unresolved
+research obligations and label those gaps in the existing result count. Scoring
+persists completed HTTP batches before strict cell validation or later deadlines;
+failed and uncertain effects cannot authorize replay. Batched storage checks and
+writes reduce per-row cloud overhead while rechecking authorization and cancellation
+before each paid batch and final publication. Guided personal-cloud setup accepts explicit model and
+embedding bindings while preserving search-only defaults.
+
+Targeted injected-failure and source-local evidence checks pass. The diagnostic
+UI keeps selection height stable and uses existing cell/correction affordances.
+Full suites pass: 965 Python/Flight tests (44 opt-in cases skipped), 377
+app/gateway/MCP tests and 59 onboarding checks. Python lint/type checks and the
+Node 24 production build pass. Installed artifacts, Docker, hosted alignment and
+fresh ChatGPT/Claude research remain separate acceptance gates. This work has not
+changed the published 0.2.3 artifacts. See [the working plan](docs/accuracy-plan.md).
+
 ## Unreleased notification UI
 
 Local source replaces in-flow feedback banners with a floating overlay using

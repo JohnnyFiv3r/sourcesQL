@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
@@ -15,11 +16,17 @@ import { join } from "node:path";
 import {
   flightConfiguration,
   flightSQL,
+  flightSecretNames,
   outputSettings,
   parseArguments,
   isRetryableFlightReceipt,
   main,
 } from "./setup.mjs";
+import {
+  exaConfiguration,
+  exaDescriptor,
+  exaFingerprint,
+} from "../apps/research/server/hosted-exa.ts";
 const require = createRequire(
   new URL("../apps/research/package.json", import.meta.url),
 );
@@ -32,6 +39,145 @@ const receipt = {
   flight_source_sha256: "b".repeat(64),
   requirements_sha256: "c".repeat(64),
 };
+
+test("explicit model and embedding setup matches the gateway and Flight research contract", () => {
+  const configurations = [
+    [
+      "--openai-model",
+      "gpt-4.1-mini",
+      "--openai-secret",
+      "personal_openai",
+      "--openai-reasoning-effort",
+      "low",
+    ],
+    [
+      "--embedding-model",
+      "text-embedding-3-small",
+      "--embedding-secret",
+      "personal_openai",
+    ],
+    [
+      "--openai-model",
+      "gpt-4.1-mini",
+      "--openai-secret",
+      "personal_openai",
+      "--embedding-model",
+      "text-embedding-3-large",
+      "--embedding-secret",
+      "personal_openai",
+    ],
+  ].map((flags) =>
+    parseArguments([...base, "--exa-secret", "personal_exa", ...flags], {}),
+  );
+  for (const options of configurations) {
+    assert.deepEqual(options.exa.descriptor, exaDescriptor(options.exa.policy));
+    assert.equal(
+      options.exa.providerPolicySha256,
+      exaFingerprint(options.exa.policy),
+    );
+    const flight = flightConfiguration(options, namespace, schema);
+    const settings = outputSettings(options, receipt);
+    for (const [key, value] of Object.entries(
+      exaConfiguration(options.exa.policy),
+    )) {
+      assert.equal(flight[key], value);
+      assert.equal(settings[key], value);
+    }
+    assert.equal(settings.SOURCESQL_ALLOW_FLIGHT_SUBMISSION, "0");
+    assert.deepEqual(flightSecretNames(options), [
+      "personal_exa",
+      "personal_openai",
+    ]);
+    const sql = flightSQL(
+      options,
+      "reviewed",
+      "pass",
+      "reviewed==1",
+      namespace,
+      schema,
+    );
+    assert.match(
+      sql,
+      /flight_secret_names := \['personal_exa','personal_openai'\]/,
+    );
+    assert.doesNotMatch(sql, /API_KEY|md_run_flight/);
+  }
+  const python =
+    process.env.SOURCESQL_TEST_PYTHON ??
+    process.env.SOURCESQL_PYTHON ??
+    join(import.meta.dirname, "../local/python312/venv/bin/python");
+  const result = spawnSync(
+    python,
+    [
+      "-B",
+      "-c",
+      `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location('setup_policy', sys.argv[1])
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
+print(json.dumps([{'descriptor': policy.load_configuration(env)['descriptor'], 'fingerprint': policy.load_configuration(env)['provider_policy_sha256']} for env in json.load(sys.stdin)]))
+`,
+      join(import.meta.dirname, "flight/exa_profile.py"),
+    ],
+    {
+      input: JSON.stringify(
+        configurations.map((options) => exaConfiguration(options.exa.policy)),
+      ),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout),
+    configurations.map((options) => ({
+      descriptor: options.exa.descriptor,
+      fingerprint: options.exa.providerPolicySha256,
+    })),
+  );
+});
+
+test("partial model configuration and search-secret collisions refuse before provisioning", () => {
+  for (const flags of [
+    ["--openai-model", "gpt-4.1-mini"],
+    ["--openai-secret", "personal_openai"],
+    ["--openai-reasoning-effort", "low"],
+    ["--embedding-secret", "personal_openai"],
+    ["--embedding-model", "text-embedding-3-small"],
+    [
+      "--embedding-model",
+      "unreviewed",
+      "--embedding-secret",
+      "personal_openai",
+    ],
+    ["--openai-model", "gpt-4.1-mini", "--openai-secret", "personal_exa"],
+    [
+      "--embedding-model",
+      "text-embedding-3-small",
+      "--embedding-secret",
+      "personal_exa",
+    ],
+  ])
+    assert.throws(
+      () =>
+        parseArguments([...base, "--exa-secret", "personal_exa", ...flags], {}),
+      /invalid_configuration/,
+    );
+  assert.throws(
+    () =>
+      parseArguments(
+        [
+          ...base,
+          "--embedding-model",
+          "text-embedding-3-small",
+          "--embedding-secret",
+          "personal_openai",
+        ],
+        {},
+      ),
+    /invalid_configuration/,
+  );
+});
 
 for (const provider of ["brave", "serper"]) {
   test(`${provider} setup selects exactly one named Flight secret and records a conservative estimate`, () => {

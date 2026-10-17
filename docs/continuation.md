@@ -4,6 +4,28 @@ A saved table, a compact checkpoint and a manual update check serve different
 purposes. Tables retain observations. Checkpoints retain the context needed to
 continue. Update checks collect new evidence for explicit review.
 
+## Recover interrupted execution
+
+New runs retain completed acquisition and semantic stages in a bounded durable
+journal. Stage payloads are checksum-bound to their journal and operation key;
+retained bytes count toward storage limits. Run inspection exposes bounded stage
+summaries, not their private payloads. These execution records are separate from
+portable research checkpoints.
+
+After a failed run, inspect `sourcesql_run_status`. An explicit
+`sourcesql_resume_run` uses a new caller-generated request UUID and the exact
+retained SQL, parameters, input pins, profile and limits. Completed work can be
+reused across process restart; earlier reservations remain counted. A known
+rejection stays rejected. Pending or uncertain remote outcomes block replay.
+Continuation does not widen limits or repair a request's SQL automatically.
+
+When a stopped or partial run has successful search/fetch stages,
+`sourcesql_recover_run` publishes a bounded page of those source versions as
+explicitly incomplete input data. It makes no search/model calls. Hosted recovery
+still uses an on-demand Flight and configured compute capacity. Author a new,
+corrected query over the recovered result; do not display discovery rows as a
+finished answer. Revoked dependencies and private-data restrictions still apply.
+
 ## Compact checkpoints
 
 Use **Save checkpoint** in the table menu, or call `save_research_checkpoint`

@@ -168,7 +168,7 @@ test("OAuth discovery and denied identities never open storage; the sole owner c
     ]) {
       const listed = await send(server, "/mcp", authorization);
       assert.equal(listed.status, 200);
-      assert.equal(listed.json.result.tools.length, 37);
+      assert.equal(listed.json.result.tools.length, 39);
       assert.ok(
         listed.json.result.tools.every(
           (tool: any) =>

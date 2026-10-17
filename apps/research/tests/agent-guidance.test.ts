@@ -13,6 +13,7 @@ import {
   SOURCESQL_RECOVERY_GUIDANCE,
   SOURCESQL_QUERY_DESCRIPTION,
   SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+  SOURCESQL_OPEN_RESEARCH_HANDOFF,
   SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS,
   SOURCESQL_PRESENTATION_GUIDANCE,
   SOURCESQL_SEARCH_EXAMPLE,
@@ -20,11 +21,20 @@ import {
   SOURCESQL_SEMANTIC_WORKFLOW_GUIDANCE,
   SOURCESQL_SERVER_INSTRUCTIONS,
 } from "../server/agent-guidance.js";
-import { snapshotSchema } from "../src/schema.js";
+import {
+  snapshotSchema,
+  type Snapshot,
+  type ResearchView,
+} from "../src/schema.js";
 import sample from "../fixtures/water-procurement.json";
 
 async function discover(
-  options: { engine?: boolean; capabilities?: object } = {},
+  options: {
+    engine?: boolean;
+    capabilities?: object;
+    open?: boolean;
+    snapshot?: Snapshot;
+  } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-agent-guidance-"));
   const htmlPath = join(directory, "research.html");
@@ -39,7 +49,10 @@ async function discover(
     },
   };
   const server = createServer(
-    new ResearchStore(join(directory, "unused"), snapshotSchema.parse(sample)),
+    new ResearchStore(
+      join(directory, "unused"),
+      options.snapshot ?? snapshotSchema.parse(sample),
+    ),
     htmlPath,
     { engine: options.engine === false ? undefined : engine },
   );
@@ -51,11 +64,15 @@ async function discover(
     const capabilities = options.capabilities
       ? await client.callTool({ name: "sourcesql_capabilities", arguments: {} })
       : undefined;
+    const opened = options.open
+      ? await client.callTool({ name: "open_research", arguments: {} })
+      : undefined;
     return {
       instructions: client.getInstructions(),
       tools: JSON.parse(JSON.stringify(tools)) as typeof tools,
       calls,
       capabilities,
+      opened,
     };
   } finally {
     await client.close();
@@ -367,6 +384,10 @@ test("tools/list describes research capabilities, inputs and side effects concis
     /WEB_SEARCH searches the configured provider/,
   );
   assert.match(query.description!, /stores immutable results and receipts/);
+  assert.match(
+    query.description!,
+    /Declare requested answer fields through research_requirements/,
+  );
   assert.match(query.description!, /may return a durable job/);
   assert.match(
     query.description!,
@@ -383,6 +404,14 @@ test("tools/list describes research capabilities, inputs and side effects concis
     /Reopening saved results performs no search or model work/,
   );
   assert.match(open.description!, /host display can fail independently/);
+  assert.match(open.description!, /requested row unit and answer fields/);
+  assert.match(open.description!, /unless the user requested a source catalog/);
+  assert.match(open.description!, /do not put the actual answer only in chat/);
+  assert.match(open.description!, /do not repeat rows or a Markdown table/);
+  assert.match(
+    open.description!,
+    /retry the same saved snapshot_id without rerunning research/,
+  );
   for (const name of [
     "sourcesql_capabilities",
     "sourcesql_explain",
@@ -421,6 +450,46 @@ test("tools/list describes research capabilities, inputs and side effects concis
       .map((tool) => tool.name),
     ["open_research"],
   );
+  assert.deepEqual(wire.calls, []);
+});
+
+test("opening a table returns its final-answer handoff with the saved rows and no engine dispatch", async () => {
+  const snapshot = snapshotSchema.parse(sample);
+  const wire = await discover({ open: true, snapshot });
+  assert.equal(wire.opened!.isError, undefined);
+  const view = wire.opened!.structuredContent as unknown as ResearchView;
+  assert.equal(view.snapshot.id, snapshot.id);
+  assert.deepEqual(view.snapshot.rows, snapshot.rows);
+  const reply = wire
+    .opened!.content.filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  assert.ok(reply.includes(SOURCESQL_OPEN_RESEARCH_HANDOFF));
+  assert.ok(reply.includes(`Saved snapshot_id: ${snapshot.id}`));
+  assert.deepEqual(wire.calls, []);
+});
+
+test("a requested source catalog remains renderable without answer-field or semantic gates", async () => {
+  const snapshot = snapshotSchema.parse({
+    ...sample,
+    id: "requested-source-catalog",
+    title: "Requested source catalog",
+    columns: [{ key: "title", label: "Source title" }],
+    rows: [
+      {
+        id: "source-1",
+        values: { title: "Synthetic primary reference" },
+        sourceUrl: "https://example.com/reference",
+        evidence: {},
+        verificationNote: "Synthetic catalog fixture",
+      },
+    ],
+  });
+  const wire = await discover({ open: true, snapshot, engine: false });
+  assert.equal(wire.opened!.isError, undefined);
+  const view = wire.opened!.structuredContent as unknown as ResearchView;
+  assert.deepEqual(view.snapshot.columns, snapshot.columns);
+  assert.deepEqual(view.snapshot.rows, snapshot.rows);
   assert.deepEqual(wire.calls, []);
 });
 

@@ -13,12 +13,129 @@ import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
+import {
+  exaOperators,
+  exaResearchLimits,
+  exaSearchTypes,
+  validateExaPolicy,
+} from "../apps/research/server/hosted-exa.ts";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const literal = (value) => "'" + value.replaceAll("'", "''") + "'";
 const fail = (code) => {
   throw Object.assign(new Error(code), { safe: true });
 };
+
+function exaPolicy(provider) {
+  return {
+    approvedCostMicrousd: provider.approved_cost_microusd,
+    dailyCostMicrousd: provider.daily_cost_microusd,
+    secretName: provider.secret_name,
+    policyVersion:
+      provider.model || provider.embedding
+        ? "exa-research.v3"
+        : "exa-research.v2",
+    ...(provider.model
+      ? {
+          model: {
+            name: provider.model.name,
+            secretName: provider.model.secret_name,
+            ...(provider.model.reasoning_effort !== undefined
+              ? { reasoningEffort: provider.model.reasoning_effort }
+              : {}),
+          },
+        }
+      : {}),
+    ...(provider.embedding
+      ? {
+          embedding: {
+            name: provider.embedding.name,
+            secretName: provider.embedding.secret_name,
+          },
+        }
+      : {}),
+  };
+}
+
+export function providerBindings(config) {
+  const provider = config.provider;
+  if (provider.name === "fixture") return [];
+  const bindings = [
+    {
+      name: provider.secret_name,
+      keyName: provider.name.toUpperCase() + "_API_KEY",
+      reuse: provider.reuse_secret === true,
+      statePrefix: "provider",
+    },
+  ];
+  for (const adapter of [provider.model, provider.embedding].filter(Boolean)) {
+    if (bindings.some((binding) => binding.name === adapter.secret_name))
+      continue;
+    bindings.push({
+      name: adapter.secret_name,
+      keyName: "OPENAI_API_KEY",
+      reuse: adapter.reuse_secret === true,
+      statePrefix: "openai_" + adapter.secret_name,
+    });
+  }
+  return bindings;
+}
+
+export function assertCapabilities(config, capabilities) {
+  const provider = config.provider,
+    profiles = capabilities?.profiles,
+    liveNames =
+      provider.name === "fixture"
+        ? []
+        : provider.name === "exa"
+          ? Object.keys(exaSearchTypes(exaPolicy(provider)))
+          : [provider.name];
+  if (
+    !Array.isArray(profiles) ||
+    JSON.stringify(profiles.map((entry) => entry.name).sort()) !==
+      JSON.stringify(["fixture", ...liveNames].sort()) ||
+    capabilities.flight_submission_enabled !==
+      (config.enable_execution === true) ||
+    capabilities.max_flight_runtime_seconds !== 120 ||
+    capabilities.monthly_execution_reserve_seconds !==
+      config.monthly_flight_seconds ||
+    capabilities.monthly_provider_reserve_microusd !==
+      config.monthly_provider_cost_microusd ||
+    capabilities.daily_execution_reserve_seconds !==
+      (config.daily_flight_seconds ?? null)
+  )
+    fail("hosted_capabilities_mismatch");
+  for (const name of liveNames) {
+    const entry = profiles.find((profile) => profile.name === name),
+      operators =
+        provider.name === "exa"
+          ? exaOperators(exaPolicy(provider))
+          : ["WEB_SEARCH"];
+    if (
+      entry.mode !== "live" ||
+      entry.provider !== provider.name ||
+      !Array.isArray(entry.operators) ||
+      JSON.stringify([...entry.operators].sort()) !==
+        JSON.stringify([...operators].sort()) ||
+      entry.model_configured !== !!provider.model ||
+      (entry.model_name ?? null) !== (provider.model?.name ?? null) ||
+      entry.embedding_configured !== !!provider.embedding ||
+      (entry.embedding_model ?? null) !== (provider.embedding?.name ?? null) ||
+      (provider.embedding &&
+        (entry.embedding_adapter_version !== "openai-embeddings.v2" ||
+          entry.embedding_token_encoding !== "cl100k_base" ||
+          entry.score_basis !== "cosine_similarity")) ||
+      entry.search_limits?.max_cost_microusd !==
+        provider.approved_cost_microusd ||
+      (provider.name === "exa" &&
+        (entry.search_type !== exaSearchTypes(exaPolicy(provider))[name] ||
+          Object.entries(exaResearchLimits(exaPolicy(provider))).some(
+            ([key, value]) => entry.search_limits?.[key] !== value,
+          )))
+    )
+      fail("hosted_capabilities_mismatch");
+  }
+}
 const safeIdentifier = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const readJSON = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -142,6 +259,8 @@ export function validateConfig(config) {
     "daily_cost_microusd",
     "request_cost_microusd",
     "reuse_secret",
+    "model",
+    "embedding",
   ]);
   if (!["fixture", "exa", "brave", "serper"].includes(provider.name))
     fail("invalid_provider_configuration");
@@ -149,11 +268,50 @@ export function validateConfig(config) {
     fail("invalid_provider_configuration");
   if (provider.name !== "fixture") {
     if (
+      (provider.model !== undefined || provider.embedding !== undefined) &&
+      provider.name !== "exa"
+    )
+      fail("invalid_provider_configuration");
+    for (const [kind, adapter] of [
+      ["model", provider.model],
+      ["embedding", provider.embedding],
+    ]) {
+      if (adapter === undefined) continue;
+      strictKeys(adapter, [
+        "name",
+        "secret_name",
+        "reuse_secret",
+        ...(kind === "model" ? ["reasoning_effort"] : []),
+      ]);
+      if (
+        !/^[a-z][a-z0-9_]{0,62}$/.test(adapter.secret_name ?? "") ||
+        adapter.secret_name === provider.secret_name ||
+        (adapter.reuse_secret !== undefined &&
+          typeof adapter.reuse_secret !== "boolean")
+      )
+        fail("invalid_provider_configuration");
+    }
+    if (
+      provider.model &&
+      provider.embedding &&
+      provider.model.secret_name === provider.embedding.secret_name &&
+      (provider.model.reuse_secret === true) !==
+        (provider.embedding.reuse_secret === true)
+    )
+      fail("invalid_provider_configuration");
+    if (
       !/^[a-z][a-z0-9_]{0,62}$/.test(provider.secret_name ?? "") ||
       (provider.reuse_secret !== undefined &&
         typeof provider.reuse_secret !== "boolean")
     )
       fail("invalid_provider_configuration");
+    if (provider.name === "exa") {
+      try {
+        validateExaPolicy(exaPolicy(provider));
+      } catch {
+        fail("invalid_provider_configuration");
+      }
+    }
     for (const key of ["approved_cost_microusd", "daily_cost_microusd"])
       if (
         !Number.isSafeInteger(provider[key]) ||
@@ -445,11 +603,10 @@ export function createPlan(config, root, workspace) {
             "create or recover a credential-free static Production placeholder if needed before uploading the app",
           ]
         : []),
-      ...(config.provider.name === "fixture"
-        ? []
-        : [
-            `bind ${config.provider.name} Flight secret (no provider requests)`,
-          ]),
+      ...providerBindings(config).map(
+        (binding) =>
+          `bind ${binding.keyName.replace("_API_KEY", "").toLowerCase()} Flight secret ${binding.name} (no provider requests)`,
+      ),
       "create or recover one unscheduled F4/120-second Flight",
       "encrypt Preview-only owner/database settings",
       "upload reviewed public inputs to one Preview",
@@ -468,7 +625,29 @@ export function createPlan(config, root, workspace) {
       active_jobs: 1,
       queued_jobs: "explicit resume",
       live_search_calls_during_setup: 0,
+      model_calls_during_setup: 0,
       execution_enabled: config.enable_execution === true,
+    },
+    research: {
+      live_operators:
+        config.provider.name === "fixture"
+          ? []
+          : config.provider.name === "exa"
+            ? exaOperators(exaPolicy(config.provider))
+            : ["WEB_SEARCH"],
+      model: config.provider.model?.name ?? null,
+      embedding: config.provider.embedding?.name ?? null,
+      third_party_processors:
+        config.provider.name === "fixture"
+          ? []
+          : [
+              config.provider.name,
+              ...(config.provider.model || config.provider.embedding
+                ? ["openai"]
+                : []),
+            ],
+      reservation_basis:
+        "Configured estimates; provider balances and billing hard stops are not measured",
     },
     manual_steps: [
       "Create accounts and configure OAuth API/PKCE client; no signup or paid feature is automated",
@@ -590,6 +769,23 @@ export function setupArguments(config, workspace) {
         `--${provider.name}-request-cost-microusd`,
         String(provider.request_cost_microusd),
       );
+    if (provider.model)
+      args.push(
+        "--openai-model",
+        provider.model.name,
+        "--openai-secret",
+        provider.model.secret_name,
+        ...(provider.model.reasoning_effort !== undefined
+          ? ["--openai-reasoning-effort", provider.model.reasoning_effort]
+          : []),
+      );
+    if (provider.embedding)
+      args.push(
+        "--embedding-model",
+        provider.embedding.name,
+        "--embedding-secret",
+        provider.embedding.secret_name,
+      );
   }
   return args;
 }
@@ -643,10 +839,13 @@ export async function reconcileFlight(
     Object.entries(expectedConfiguration).some(
       ([key, value]) => observed[key] !== value,
     ) ||
-    (config.provider.name === "fixture"
-      ? boundSecrets.length !== 0
-      : JSON.stringify(boundSecrets) !==
-        JSON.stringify([config.provider.secret_name]))
+    !Array.isArray(boundSecrets) ||
+    JSON.stringify([...boundSecrets].sort()) !==
+      JSON.stringify(
+        providerBindings(config)
+          .map((binding) => binding.name)
+          .sort(),
+      )
   )
     fail("flight_recovery_mismatch");
   Object.assign(receipt, {
@@ -695,17 +894,21 @@ export async function applyPlan(
     injected.retryDeploymentId !== state.deployment_id
   )
     fail("retry_deployment_id_mismatch");
-  const providerKey = config.provider.name.toUpperCase() + "_API_KEY";
   const validProviderKey = (key) =>
     typeof key === "string" && /^[\x21-\x7e]{1,4096}$/.test(key);
-  if (
-    config.provider.name !== "fixture" &&
-    !config.provider.reuse_secret &&
-    !state.provider_secret_ready &&
-    !state.provider_secret_attempted &&
-    !validProviderKey(environment[providerKey])
-  )
-    fail("missing_or_invalid_provider_credential");
+  for (const binding of providerBindings(config)) {
+    if (
+      !binding.reuse &&
+      !state[binding.statePrefix + "_secret_ready"] &&
+      !state[binding.statePrefix + "_secret_attempted"] &&
+      !validProviderKey(environment[binding.keyName])
+    )
+      fail(
+        binding.keyName === "OPENAI_API_KEY"
+          ? "missing_or_invalid_model_credential"
+          : "missing_or_invalid_provider_credential",
+      );
+  }
   if (!environment.VERCEL_TOKEN || !environment.MOTHERDUCK_TOKEN)
     fail("missing_credentials");
   const bearer = ownerBearer(workspace, environment);
@@ -797,36 +1000,37 @@ export async function applyPlan(
       await client.connect();
       return client;
     });
-  if (config.provider.name !== "fixture" && !state.provider_secret_ready) {
-    const provider = config.provider,
-      client = await connect();
+  for (const binding of providerBindings(config)) {
+    const readyKey = binding.statePrefix + "_secret_ready",
+      attemptedKey = binding.statePrefix + "_secret_attempted";
+    if (state[readyKey]) continue;
+    const client = await connect();
     try {
       const existing = (
         await client.query(
           "SELECT name,type,storage FROM duckdb_secrets() WHERE name=" +
-            literal(provider.secret_name),
+            literal(binding.name),
         )
       ).rows;
       if (existing.length) {
         if (
           existing.length !== 1 ||
           String(existing[0].type).toLowerCase() !== "flights" ||
-          (![true].includes(provider.reuse_secret) &&
-            !state.provider_secret_attempted)
+          (!binding.reuse && !state[attemptedKey])
         )
           fail("existing_secret_requires_review");
       } else {
-        const keyName = provider.name.toUpperCase() + "_API_KEY",
+        const keyName = binding.keyName,
           key = environment[keyName];
         if (!validProviderKey(key))
           fail("missing_or_invalid_provider_credential");
-        state.provider_secret_attempted = true;
+        state[attemptedKey] = true;
         save();
         await client.query(
-          `CREATE SECRET "${provider.secret_name}" IN MOTHERDUCK (TYPE FLIGHTS, PARAMS MAP {${literal(keyName)}: ${literal(key)}})`,
+          `CREATE SECRET "${binding.name}" IN MOTHERDUCK (TYPE FLIGHTS, PARAMS MAP {${literal(keyName)}: ${literal(key)}})`,
         );
       }
-      state.provider_secret_ready = true;
+      state[readyKey] = true;
       save();
     } finally {
       await client.end();
@@ -1055,7 +1259,7 @@ export async function verify(
     ])
       if (!tools.tools.some((tool) => tool.name === name))
         fail("missing_mcp_tool");
-    await call("sourcesql_capabilities", {});
+    assertCapabilities(plan.config, await call("sourcesql_capabilities", {}));
     if (runFixture) {
       if (!plan.config.enable_execution)
         fail("fixture_execution_not_in_reviewed_plan");
@@ -1098,6 +1302,7 @@ export async function verify(
       fixture_reopened: state.fixture_reopened === true,
       connected: true,
       tools_discovered: tools.tools.length,
+      configured_capabilities_verified: true,
       flights_submitted: 0,
       provider_calls: 0,
       host_rendering_qualified: false,
@@ -1167,10 +1372,11 @@ export async function main(args = process.argv.slice(2)) {
           secrets_required: [
             "VERCEL_TOKEN",
             "MOTHERDUCK_TOKEN",
-            ...(plan.config.provider.name === "fixture" ||
-            plan.config.provider.reuse_secret
-              ? []
-              : [plan.config.provider.name.toUpperCase() + "_API_KEY"]),
+            ...new Set(
+              providerBindings(plan.config)
+                .filter((binding) => !binding.reuse)
+                .map((binding) => binding.keyName),
+            ),
           ],
         },
         null,

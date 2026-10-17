@@ -355,7 +355,7 @@ def test_runner_binds_trusted_policy_and_explains_every_live_profile(tmp_path, m
     assert captured["claim"]["allowed_profiles"] == ("fixture", *policy.SEARCH_TYPES)
     assert captured["claim"]["provider_policy_sha256"] == settings["provider_policy_sha256"]
     assert captured["profiles"] == settings["profiles"]
-    assert captured.get("explained_profile") == (None if name == "fixture" else name)
+    assert captured.get("explained_profile") == name
     assert captured["verified"] is True and report["status"] == "completed"
 
 
@@ -381,7 +381,7 @@ def test_runner_refuses_a_live_job_bound_to_another_policy_before_engine(
         def bind_job(self, *args):
             pass
 
-        def fail_job(self, identity, token, code, message):
+        def fail_job(self, identity, token, code, message, stage="admission"):
             captured["failure"] = code
 
     report = {}

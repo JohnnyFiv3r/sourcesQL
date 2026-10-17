@@ -52,9 +52,11 @@ class _Executor:
         dispatch: Callable,
         run_sql: Callable,
         score_batch: Callable | None = None,
+        semantic_batch: Callable | None = None,
     ):
         self.plan, self.dispatch, self.run_sql = plan, dispatch, run_sql
         self.score_batch = score_batch
+        self.semantic_batch = semantic_batch
         self.tables: dict[str, Table] = {}
         self.inputs: dict[str, str] = {}
         self.sequence = 0
@@ -103,8 +105,14 @@ class _Executor:
             not isinstance(tree, exp.Select)
             or any(tree.args.get(key) for key in ("distinct", "group", "having"))
             or star_join_identity
+            or any(isinstance(node, (exp.Subquery, exp.Exists)) for node in tree.walk())
             or any(
-                isinstance(node, (exp.Subquery, exp.Exists, exp.Unnest, exp.Explode))
+                isinstance(node, (exp.Unnest, exp.Explode))
+                and not (
+                    node in tree.expressions
+                    or isinstance(node.parent, exp.Alias)
+                    and node.parent in tree.expressions
+                )
                 for node in tree.walk()
             )
             or any(
@@ -167,6 +175,8 @@ class _Executor:
 
         # Relation aliases and alias-column renames determine paths, not values.
         bindings: dict[str, tuple[list[str], dict[tuple[str, ...], str]]] = {}
+        binding_tables: dict[str, tuple[str, dict[str, str]]] = {}
+        exploded_carriers: dict[tuple[str, tuple[str, ...], tuple[str, ...]], str] = {}
         from_ = query.args.get("from_")
         relations = ([from_.this] if from_ else []) + [
             join.this for join in query.args.get("joins", [])
@@ -181,6 +191,7 @@ class _Executor:
             renames = alias_node.args.get("columns", []) if alias_node else []
             visible = [n.name for n in renames] if renames else [c.key for c in table.columns]
             rename = {column.key: name for column, name in zip(table.columns, visible)}
+            binding_tables[alias] = relation.name, {name: key for key, name in rename.items()}
             bindings[alias] = (
                 visible,
                 {
@@ -228,6 +239,56 @@ class _Executor:
         def refs(node: exp.Expr) -> dict[tuple[str, ...], exp.Expr]:
             if isinstance(node, (exp.Alias, exp.Paren)):
                 return refs(node.this)
+            if isinstance(node, (exp.Unnest, exp.Explode)):
+                from .evidence import path_value
+
+                argument = node.this or (
+                    node.expressions[0] if len(node.expressions) == 1 else None
+                )
+                location = address(argument) if argument is not None else None
+                if location is None or node.args.get("recursive"):
+                    return {}
+                alias, prefix = location
+                mapping = bindings[alias][1]
+                prefix = next(
+                    (
+                        path[: len(prefix)]
+                        for path in mapping
+                        if tuple(part.lower() for part in path[: len(prefix)])
+                        == tuple(part.lower() for part in prefix)
+                    ),
+                    prefix,
+                )
+                suffixes = {
+                    path[len(prefix) + 1 :]
+                    for path in mapping
+                    if path[: len(prefix)] == prefix
+                    and len(path) > len(prefix)
+                    and path[len(prefix)].isdigit()
+                }
+                table_name, original_names = binding_tables[alias]
+                original_prefix = (original_names.get(prefix[0], prefix[0]), *prefix[1:])
+                result: dict[tuple[str, ...], exp.Expr] = {}
+                for suffix in sorted(suffixes):
+                    cache_key = alias, prefix, suffix
+                    hidden = exploded_carriers.get(cache_key)
+                    if hidden is None:
+                        hidden = carrier_name()
+                        exploded_carriers[cache_key] = hidden
+                        staged[table_name].columns.append(Column(hidden, "VARCHAR[][]"))
+                        for index, row in enumerate(tables[table_name].rows):
+                            values = path_value(row, original_prefix)
+                            tags = (
+                                tables[table_name].lineage[index]
+                                if tables[table_name].lineage
+                                else {}
+                            )
+                            staged[table_name].rows[index][hidden] = [
+                                tags.get((*original_prefix, str(item + 1), *suffix), [])
+                                for item in range(len(values) if isinstance(values, list) else 0)
+                            ]
+                    result[suffix] = exp.Explode(this=exp.column(hidden, table=alias))
+                return result
             location = address(node)
             if location:
                 alias, prefix = location
@@ -460,11 +521,24 @@ class _Executor:
         query.set("from_", exp.From(this=source.copy()))
         evaluated = self.sql(query)
         name = custom_name(call)
-        required = len(args) if name in {"WEB_SEARCH", "WEB_FETCH"} else 2
+        required = (
+            len(args)
+            if name in {"WEB_SEARCH", "WEB_FETCH"}
+            else 1
+            if name == "SOURCE_WINDOW"
+            else 2
+        )
         types = {c.key: validate_type(c.logical_type) for c in evaluated.columns}
         if any(types.get(f"__arg{i}") != "VARCHAR" for i in range(required)):
             raise SourcesQLError(
                 "invalid_query", "Operator arguments must evaluate to VARCHAR values", "plan"
+            )
+        if name == "SOURCE_WINDOW" and any(
+            types.get(f"__arg{i}") not in {"BIGINT", "INTEGER", "SMALLINT", "TINYINT"}
+            for i in (1, 2)
+        ):
+            raise SourcesQLError(
+                "invalid_query", "Source window bounds must evaluate to integers", "plan"
             )
         if len(evaluated.rows) != len(table.rows):
             raise SourcesQLError(
@@ -558,7 +632,7 @@ class _Executor:
                     "invalid_output", "Scoring must preserve row identity", "semantic"
                 )
         else:
-            values = []
+            calls = []
             for index, (row, args) in enumerate(zip(table.rows, arguments)):
                 # NULL web expressions propagate. Semantic NULLs reach the
                 # coordinator so unprocessed coverage remains in the receipt;
@@ -577,11 +651,25 @@ class _Executor:
                             "_source_url": row.get("url"),
                         }
                     )
-                value = (
+                calls.append((args, context))
+            if self.semantic_batch is not None and name in {
+                "SEM_MATCH",
+                "SEM_EXTRACT",
+                "SEM_EXTRACT_ALL",
+            }:
+                values = self.semantic_batch(name, calls)
+                if not isinstance(values, list) or len(values) != len(calls):
+                    raise SourcesQLError(
+                        "invalid_output", "Semantic batches must preserve row identity", "semantic"
+                    )
+            else:
+                values = [
                     None
                     if args[0] is None and name in {"WEB_SEARCH", "WEB_FETCH"}
                     else self.dispatch(name, args, context)
-                )
+                    for args, context in calls
+                ]
+            for index, (value, (_, context)) in enumerate(zip(values, calls)):
                 if name == "SEM_MATCH" and value is not None and type(value) is not bool:
                     raise SourcesQLError(
                         "invalid_output", "Semantic match must return Boolean or NULL", "semantic"
@@ -596,8 +684,7 @@ class _Executor:
                         "Semantic score must return a finite number or NULL",
                         "semantic",
                     )
-                values.append(value)
-                for path, references in lineage_output.items():
+                for path, references in context["_lineage_output"].items():
                     lineage[index][(key,) + path] = references
         column = Column(key, operator_type(call, self.plan.parameters))
         rows = [{**row, key: value} for row, value in zip(table.rows, values)]
@@ -701,20 +788,32 @@ def _ancestors(node: exp.Expr, stop: exp.Expr | None):
         parent = parent.parent
 
 
-def execute_plan(
+def _binding_result(operator: str, arguments: list[Any], options: dict[str, Any]) -> Any:
+    # Literal relations can produce rows even when every bound input is empty.
+    # Those rows need valid nullable values, without coordinator/provider work.
+    if operator in {"WEB_SEARCH", "WEB_FETCH", "SEM_EXTRACT_ALL"}:
+        return []
+    if operator == "SEM_NORM":
+        return {value: None for value in arguments[0]}
+    if operator in {"SEM_MATCH", "SEM_SCORE", "SEM_EXTRACT", "SOURCE_WINDOW"}:
+        return None
+    raise SourcesQLError(
+        "unsupported_capability", "Unsupported binding-validation operator", "plan"
+    )
+
+
+def validate_plan(
     plan: ParsedQuery,
     inputs: dict[str, Table],
-    dispatch: Callable[[str, list[Any], dict[str, Any]], Any],
     run_sql: Callable[[str, dict[str, Table], dict[str, Any]], Table],
-    score_batch: Callable | None = None,
-) -> Table:
-    """Execute one previously admitted plan using coordinator-owned effects."""
+) -> None:
+    """Check ordinary SQL binding with typed inert operator results and no effects."""
     # DuckDB itself checks ordinary binding, grouping, and expression types over
     # empty typed relations. No source/model provider is present in this pass.
     # Actual-row arithmetic errors remain ordinary execution failures.
     empty = {alias: Table(table.columns, []) for alias, table in inputs.items()}
     try:
-        _Executor(plan, empty, lambda *_: [], run_sql).execute(plan.tree, {})
+        _Executor(plan, empty, _binding_result, run_sql).execute(plan.tree, {})
     except SourcesQLError as error:
         if error.code in {"invalid_query", "execution_error", "invalid_output"}:
             raise SourcesQLError(
@@ -726,4 +825,18 @@ def execute_plan(
         raise SourcesQLError(
             "invalid_query", "SQL failed schema or expression validation before provider dispatch"
         ) from None
-    return _Executor(plan, inputs, dispatch, run_sql, score_batch).execute(plan.tree, {})
+
+
+def execute_plan(
+    plan: ParsedQuery,
+    inputs: dict[str, Table],
+    dispatch: Callable[[str, list[Any], dict[str, Any]], Any],
+    run_sql: Callable[[str, dict[str, Table], dict[str, Any]], Table],
+    score_batch: Callable | None = None,
+    semantic_batch: Callable | None = None,
+) -> Table:
+    """Execute one previously admitted plan using coordinator-owned effects."""
+    validate_plan(plan, inputs, run_sql)
+    return _Executor(plan, inputs, dispatch, run_sql, score_batch, semantic_batch).execute(
+        plan.tree, {}
+    )

@@ -100,6 +100,110 @@ function nestedCell(depth: number): z.ZodType<CellValue> {
       ]);
 }
 export const cell = nestedCell(0);
+export const cellDiagnosticStatusSchema = z.enum([
+  "processed",
+  "supported_text",
+  "no_match",
+  "not_stated",
+  "unknown",
+  "uninspected",
+  "not_inspected",
+  "ambiguous",
+  "conflicting",
+  "evidence_invalid",
+  "invalid_output",
+  "failed",
+  "unprocessed",
+  "not_processed",
+  "budget_exhausted",
+  "cancelled",
+  "provider_unavailable",
+  "provider_timeout",
+  "provider_connection_error",
+  "provider_http_error",
+  "provider_error",
+]);
+export const cellDiagnosticSchema = z
+  .object({
+    status: cellDiagnosticStatusSchema,
+    diagnosticId: id.optional(),
+    sourceVersionId: id.optional(),
+    valuePath: z
+      .array(z.string().regex(/^[A-Za-z0-9_]{1,64}$/))
+      .max(8)
+      .optional(),
+  })
+  .strict();
+export type CellDiagnostic = z.infer<typeof cellDiagnosticSchema>;
+export const researchQualitySchema = z
+  .object({
+    goalStatus: z.enum(["not_evaluated", "partial", "requirements_satisfied"]),
+    requiredCells: z.number().int().min(0).max(36000),
+    unresolvedCells: z.number().int().min(0).max(36000),
+    rowShortfall: z.number().int().min(0).max(1000),
+    gaps: z
+      .array(
+        cellDiagnosticSchema
+          .extend({
+            rowId: id,
+            columnKey: key,
+            diagnosticStatus: z
+              .enum(["processed", "supported_text", "no_match"])
+              .optional(),
+          })
+          .strict(),
+      )
+      .max(256),
+    gapsTotal: z.number().int().min(0).max(1000000),
+    gapsOmitted: z.number().int().min(0).max(1000000),
+    complete: z.boolean(),
+    scope: z.literal("declared_cells_and_minimum_rows"),
+    factualTruthVerified: z.literal(false),
+  })
+  .strict()
+  .superRefine((quality, ctx) => {
+    if (
+      quality.unresolvedCells > quality.requiredCells ||
+      quality.gapsTotal !== quality.gaps.length + quality.gapsOmitted ||
+      quality.complete !== (quality.goalStatus === "requirements_satisfied") ||
+      (quality.complete &&
+        (quality.unresolvedCells > 0 ||
+          quality.rowShortfall > 0 ||
+          quality.gapsTotal > 0)) ||
+      (quality.goalStatus === "partial" &&
+        quality.unresolvedCells === 0 &&
+        quality.rowShortfall === 0) ||
+      (quality.goalStatus === "not_evaluated" &&
+        (quality.requiredCells > 0 ||
+          quality.unresolvedCells > 0 ||
+          quality.rowShortfall > 0 ||
+          quality.gapsTotal > 0))
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Inconsistent declared research obligations",
+      });
+  });
+export type ResearchQuality = z.infer<typeof researchQualitySchema>;
+export function researchGapSummary(
+  quality?: ResearchQuality,
+): string | undefined {
+  if (quality?.goalStatus !== "partial") return undefined;
+  const parts = [];
+  if (quality.rowShortfall)
+    parts.push(
+      `${quality.rowShortfall} more ${quality.rowShortfall === 1 ? "row" : "rows"} required`,
+    );
+  if (quality.unresolvedCells)
+    parts.push(
+      `${quality.unresolvedCells} required ${quality.unresolvedCells === 1 ? "cell is" : "cells are"} unresolved`,
+    );
+  return (
+    "Original research: " +
+    parts.join("; ") +
+    ". Declared requirements only; factual accuracy is not verified."
+  );
+}
 export const v2SnapshotSchema = z
   .object({
     schemaVersion: z.literal(2),
@@ -161,6 +265,9 @@ export const v2SnapshotSchema = z
             sourceUrl: webUrl.nullable(),
             sources: sourceList.optional(),
             cellSources: z.record(key, sourceList).optional(),
+            cellDiagnostics: z
+              .record(key, z.array(cellDiagnosticSchema).max(32))
+              .optional(),
             evidenceRefs: z.array(id).max(1000).default([]),
             evidence: z
               .record(key, z.array(z.string().max(12000)).max(12))
@@ -179,6 +286,7 @@ export const v2SnapshotSchema = z
       .strict()
       .optional(),
     previewOffset: z.number().int().nonnegative().default(0),
+    researchQuality: researchQualitySchema.optional(),
   })
   .strict()
   .superRefine((s, ctx) => {
@@ -210,6 +318,12 @@ export const v2SnapshotSchema = z
     )
       fail("Column keys and row IDs must be unique");
     for (const row of s.rows) {
+      if (
+        Object.keys(row.cellDiagnostics ?? {}).some(
+          (field) => !s.columns.some((column) => column.key === field),
+        )
+      )
+        fail("Unknown diagnostic column");
       if (Object.keys(row.values).length !== s.columns.length)
         fail("Rows must contain exactly the declared columns");
       for (const c of s.columns) {
@@ -221,6 +335,12 @@ export const v2SnapshotSchema = z
         if (error) fail(c.key + ": " + error);
       }
     }
+    if (
+      s.researchQuality?.gaps.some(
+        (gap) => !s.columns.some((column) => column.key === gap.columnKey),
+      )
+    )
+      fail("Unknown research gap column");
     if (new TextEncoder().encode(JSON.stringify(s)).byteLength > 200000)
       fail("Snapshot exceeds 200 KB UTF-8 bytes; use a result reference");
   });
@@ -261,13 +381,76 @@ export type Snapshot = {
     sourceUrl: string | null;
     sources?: z.infer<typeof source>[];
     cellSources?: Record<string, z.infer<typeof source>[]>;
+    cellDiagnostics?: Record<string, CellDiagnostic[]>;
     evidenceRefs?: string[];
     evidence: Record<string, string[]>;
     verificationNote: string;
   }[];
   dataRef?: { resultId: string; contentSha256: string };
   previewOffset?: number;
+  researchQuality?: ResearchQuality;
 };
+
+const diagnosticMessages: Partial<Record<CellDiagnostic["status"], string>> = {
+  not_stated: "Not stated in the inspected evidence.",
+  unknown: "Not established by the inspected evidence.",
+  uninspected: "This field has not been inspected.",
+  not_inspected: "This field has not been inspected.",
+  unprocessed: "Research for this field is incomplete.",
+  not_processed: "Research for this field is incomplete.",
+  ambiguous: "The evidence is ambiguous.",
+  conflicting: "The sources conflict.",
+  evidence_invalid: "Supporting evidence could not be validated.",
+  invalid_output: "The extraction could not be validated.",
+  failed: "Research for this field failed.",
+  provider_error: "Research for this field failed.",
+  provider_unavailable: "The model provider is unavailable.",
+  provider_timeout: "Research for this field timed out.",
+  provider_connection_error: "The model connection failed.",
+  provider_http_error: "The model provider rejected the request.",
+  budget_exhausted: "Capacity was reached before this field was completed.",
+  cancelled: "Research for this field was cancelled.",
+};
+const diagnosticPriority: CellDiagnostic["status"][] = [
+  "evidence_invalid",
+  "invalid_output",
+  "provider_timeout",
+  "provider_connection_error",
+  "provider_http_error",
+  "provider_unavailable",
+  "failed",
+  "provider_error",
+  "budget_exhausted",
+  "cancelled",
+  "conflicting",
+  "ambiguous",
+  "unknown",
+  "not_stated",
+  "unprocessed",
+  "not_processed",
+  "not_inspected",
+  "uninspected",
+];
+export function cellDiagnosticSummary(
+  row: Snapshot["rows"][number],
+  field: string,
+): string | undefined {
+  const diagnostics =
+    row.cellDiagnostics && Object.hasOwn(row.cellDiagnostics, field)
+      ? row.cellDiagnostics[field]
+      : undefined;
+  if (!diagnostics?.length) return undefined;
+  const statuses = new Set(diagnostics.map((diagnostic) => diagnostic.status));
+  const messages = [
+    ...new Set(
+      diagnosticPriority
+        .filter((status) => statuses.has(status))
+        .map((status) => diagnosticMessages[status])
+        .filter((message): message is string => !!message),
+    ),
+  ];
+  return messages.length ? messages.slice(0, 3).join(" ") : undefined;
+}
 export const snapshotSchema: z.ZodType<Snapshot> = z.union([
   v1SnapshotSchema,
   v2SnapshotSchema,

@@ -35,6 +35,8 @@ This choice is bound to the reviewed plan; changing it requires a new plan.
 
 Begin with `fixture`; no search or model API key is needed for that path.
 Exa, Brave and Serper credentials are only needed when choosing a live provider.
+The optional Exa research profile also needs an OpenAI credential for each
+configured model or embedding adapter. These opt-ins appear in the reviewed plan.
 MotherDuck SQL queries, storage and Flights are separate usage; local application limits do not prove a billing hard stop.
 
 ## MotherDuck credentials for a persistent gateway
@@ -193,7 +195,9 @@ MOTHERDUCK_TOKEN=your-private-motherduck-token
 ```
 
 Those two credentials are enough for fixture provisioning. Add `EXA_API_KEY`,
-`BRAVE_API_KEY` or `SERPER_API_KEY` only for the live provider you choose. Create
+`BRAVE_API_KEY` or `SERPER_API_KEY` only for the live provider you choose. Add
+`OPENAI_API_KEY` only when explicitly configuring Exa model or embedding support.
+Create
 this file in an editor or secret manager, keep its directory private, and set
 `chmod 600 local/credentials/.env`.
 Pass its path with `--env-file local/credentials/.env` on `apply` and `verify`.
@@ -347,7 +351,8 @@ sourcesql setup personal-cloud verify \
 ```
 
 This authenticates with the local owner fallback credential, initializes MCP,
-checks tools and capabilities, and reopens a previously completed fixture result
+checks tools and compares advertised profiles, adapters and configured capacity
+with the reviewed plan, and reopens a previously completed fixture result
 when one is available. It starts no Flight or provider calls. With Vercel
 protection still enabled, an independently configured
 `VERCEL_AUTOMATION_BYPASS_SECRET` can be supplied in the environment for this
@@ -427,4 +432,74 @@ overwritten; their validity needs a separately bounded live check.
 The setup process makes no provider requests. It binds the selected secret and
 policy to both gateway and Flight. See [hosted provider limits](providers-hosted.md)
 for the implemented ceilings, estimated usage accounting and qualification
-boundaries. Model inference and hosted private profiles are separate features.
+boundaries.
+
+## Opt into model extraction and embedding ranking
+
+Exa stays search-only when its provider object has no `model` or `embedding`.
+Add either object to explicitly select the research v3 profile. The model enables
+`SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL` and `SEM_NORM`; the embedding adapter
+enables `SEM_SCORE`. Each configured adapter operates only when the authored SQL
+calls it. Embedding-only setup does not advertise extraction or matching.
+This setup currently supports these adapters with Exa; Brave and Serper retain
+their hosted search-only profiles.
+
+For example, replace the provider object with:
+
+```json
+{
+  "name": "exa",
+  "secret_name": "sourcesql_exa",
+  "approved_cost_microusd": 50000,
+  "daily_cost_microusd": 1000000,
+  "model": {
+    "name": "gpt-4.1-mini",
+    "secret_name": "sourcesql_openai"
+  },
+  "embedding": {
+    "name": "text-embedding-3-small",
+    "secret_name": "sourcesql_openai"
+  }
+}
+```
+
+Choose a model available to your OpenAI account and qualify its output before
+relying on research results. The example is configuration, not a quality claim.
+An optional model `reasoning_effort` accepts `low`, `medium`, `high`, `xhigh` or
+`max`; specify it only for a model that supports that setting. Supported embedding
+names are `text-embedding-3-small` and `text-embedding-3-large`.
+
+Setup reads `OPENAI_API_KEY` from the same private dotenv file. It creates named
+MotherDuck `FLIGHTS` secrets containing `OPENAI_API_KEY` and binds their names to
+the Flight; it never copies that key into Vercel, source files, plan JSON or
+command arguments. Model and embedding may share one OpenAI secret, as above, or
+use distinct names created from the supplied key. A search secret cannot share
+either name. To bind an inspected existing OpenAI secret without reading its
+value, add `"reuse_secret": true` to that adapter. Shared names require matching
+reuse choices. Keep setup receipts: interrupted creation reconciles the same
+named secret rather than silently replacing it.
+
+The plan lists OpenAI as an additional processor, each enabled operator, model
+names and configured spending reservations. Semantic calls send the SQL-selected
+source text to OpenAI. Setup itself runs no search, model or embedding requests;
+account signup, payment methods and paid top-ups stay explicit user decisions.
+
+The example retains the same $0.05 per-job and $1 daily application reservations
+as search-only setup. Monthly and Flight reservations also stay as configured.
+These estimates are not a provider balance or billing guarantee, and some
+research jobs will need a deliberately reviewed larger allowance. Setup never
+raises limits to fit a query. Changing adapters or limits requires a new plan;
+completed setup receipts do not upgrade an existing deployment in place.
+
+The source and credential-free provisioning tests verify the v3 policy,
+fingerprints, secret bindings, recovery and Preview environment. A fresh hosted
+deployment and live model research remain separate acceptance checks. Ordinary
+`verify` checks MCP capabilities without model calls; `--run-fixture` remains a
+provider-free execution check.
+
+The lower-level `hosted/setup.mjs` exposes the same opt-in as
+`--openai-model MODEL --openai-secret NAME` and
+`--embedding-model text-embedding-3-small --embedding-secret NAME`, alongside
+`--exa-secret NAME`. It only binds existing secrets and leaves submission
+disabled. Use the guided personal-cloud plan for secret creation and account
+scoping.
