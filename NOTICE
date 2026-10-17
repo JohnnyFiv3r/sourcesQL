@@ -8,3 +8,9 @@ by selected public memoriesQL contracts and tests, Apache-2.0, at commit
 SQLGlot is a separately installed MIT dependency; its source is not bundled.
 The research app derives from the owner's existing Results Demo source; its
 origin and modifications are recorded in provenance/app-reuse.json.
+
+The offline cl100k_base tokenizer preset and merge-rank data are from OpenAI
+tiktoken 0.14.0, MIT License, Copyright (c) 2022 OpenAI, Shantanu Jain.
+The complete MIT notice is bundled at
+sourcesql/_resources/tokenizers/TIKTOKEN_LICENSE.txt. The verified source,
+data checksum and adaptations are recorded in provenance/tokenizer-reuse.json.

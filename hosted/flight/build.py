@@ -21,6 +21,18 @@ import tomllib
 import zipfile
 
 
+TOKENIZER_RESOURCE = "sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz"
+TOKENIZER_HYDRATION = {
+    "resource": TOKENIZER_RESOURCE,
+    "url": "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
+    "raw_sha256": "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7",
+    "max_download_bytes": 2_000_000,
+    "timeout_seconds": 10,
+    "restoration": "gzip-mtime-0",
+}
+EXECUTION_OMISSIONS = ("sourcesql/_resources/personal-cloud.zip", TOKENIZER_RESOURCE)
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -140,6 +152,14 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
             if relative not in names or archive.read(relative) != data:
                 raise ValueError("Engine wheel differs from current source: " + relative)
             source_hashes[relative] = digest(data)
+        for relative in (
+            "sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz",
+            "sourcesql/_resources/tokenizers/TIKTOKEN_LICENSE.txt",
+        ):
+            data = (root / "src" / relative).read_bytes()
+            if relative not in names or archive.read(relative) != data:
+                raise ValueError("Engine wheel differs from current source: " + relative)
+            source_hashes[relative] = digest(data)
         resource_path = "sourcesql/_resources/personal-cloud.zip"
         specification = importlib.util.spec_from_file_location(
             "sourcesql_build_resources", root / "src/sourcesql/resources.py"
@@ -186,22 +206,24 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
 
 
 def execution_wheel(distribution: bytes) -> bytes:
-    """Remove only the validated installer templates, retaining exact runtime code.
+    """Omit setup templates and tokenizer ranks from the size-bounded Flight.
 
-    The public distribution includes its guided provisioning application. Flights
-    execute research and do not need that archive. RECORD is recalculated so the
-    offline installer still validates every retained byte.
+    Public wheels retain both. The runner explicitly restores verified tokenizer
+    ranks only for an admitted scoring plan; no tokenizer helper downloads data.
+    RECORD is recalculated so the offline installer validates retained bytes.
     """
-    removed = "sourcesql/_resources/personal-cloud.zip"
+    removed = set(EXECUTION_OMISSIONS)
     with zipfile.ZipFile(io.BytesIO(distribution)) as original:
         names = original.namelist()
-        if names.count(removed) != 1 or len(names) != len(set(names)):
-            raise ValueError("Expected one reviewed provisioning template archive")
+        if not removed <= set(names) or len(names) != len(set(names)):
+            raise ValueError("Expected the reviewed Flight omission files")
         record_names = [name for name in names if name.endswith(".dist-info/RECORD")]
         if len(record_names) != 1:
             raise ValueError("Expected one wheel RECORD")
         record_name = record_names[0]
-        entries = {name: original.read(name) for name in names if name not in {removed, record_name}}
+        entries = {
+            name: original.read(name) for name in names if name not in removed | {record_name}
+        }
         record = io.StringIO(newline="")
         writer = csv.writer(record, lineterminator="\n")
         for name, content in sorted(entries.items()):
@@ -242,7 +264,11 @@ def build(wheel: Path, output: Path) -> dict:
         "wheel_sha256": digest(execution_bytes),
         "distribution_wheel_sha256": digest(distribution_bytes),
         "execution_wheel_sha256": digest(execution_bytes),
-        "execution_wheel_omitted_files": ["sourcesql/_resources/personal-cloud.zip"],
+        "execution_wheel_omitted_files": list(EXECUTION_OMISSIONS),
+        "tokenizer_hydration": {
+            **TOKENIZER_HYDRATION,
+            "distribution_resource_sha256": source_hashes[TOKENIZER_RESOURCE],
+        },
         "archive_sha256": digest(bundle),
         "archive_bytes": len(bundle),
         "compressed_sha256": digest(compressed),

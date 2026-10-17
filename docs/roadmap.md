@@ -132,16 +132,31 @@ research to repair a display failure.
 
 ## 4. Improve research completion and cell evidence
 
-Add guided setup for a model-capable personal-cloud profile while keeping the
-current search-only default explicit. Qualify bounded follow-ups for unanswered
-cells in actual hosts, reusing saved sources before further discovery and
-preserving completed evidence and budget limits.
+The [accuracy and completion plan](accuracy-plan.md) tracks the unimplemented
+work with stable priority IDs, current evidence and exit checks. First finish
+canonical hosted preflight, actionable errors and durable successful branches
+and stages. Then improve query coverage, source-local entity reconciliation,
+complementary evidence, relevant source windows, claim scope and cell lineage.
+Useful unanswered cells need explicit reasons and bounded follow-up rather
+than causing a whole request to fail or silently becoming negative claims.
 
-Extend direct cell attribution through supported multi-entity expansions.
-Until a transformation has a proven mapping, retain input-set evidence instead
-of assigning a quotation to an unsupported cell. Add durable reservation
-settlement for failures proven to occur before dispatch; unknown submissions
-must retain their holds.
+Local, unreleased changes add batched OpenAI embedding scoring and revised
+host-authored SQL guidance. `SEM_SCORE` is optional criterion-specific ranking;
+`SEM_MATCH` performs semantic predicates before detailed extraction where the
+authored plan supports it. Neither metadata gates nor score-first execution
+are universal prerequisites. Exact model-aware token counting and token-packed
+requests passed local checks; the public wheel also passed offline tokenizer
+checks. The compact Flight path prepares hash-pinned tokenizer data for admitted
+scoring jobs; its compact build and controlled startup checks passed locally.
+Actual hosted download, hosted activation, feasible
+detailed-extraction continuation and representative live cost/quality
+measurement remain pending.
+
+Keep the current search-only adopter default explicit while adding guided setup
+for model-capable profiles. Qualify fresh natural-language requests in ChatGPT
+and Claude separately from saved/synthetic lifecycle checks. Add durable
+reservation settlement only for failures proven to occur before dispatch;
+unknown submissions must retain their holds.
 
 ## 5. Support larger manual updates
 

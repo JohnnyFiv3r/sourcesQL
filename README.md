@@ -32,13 +32,13 @@ See the [research lifecycle](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/
 
 The assistant plans the search terms. sourcesQL executes the query and keeps the data, evidence and execution receipt.
 
-1. **Discover broadly.** Use complementary search terms across terminology, source types and angles. Search results are candidate pages, not verified entities.
-2. **Reduce with SQL.** Merge overlapping results, deduplicate sources, filter available fields and join saved datasets before spending on semantic processing.
-3. **Extract selectively.** Apply semantic matching, extraction, scoring or normalization to candidates that still need it, using explicitly configured models.
+1. **Discover broadly.** The assistant plans complementary searches across terminology, source types and angles. Broad research uses at least six diverse queries when the configured limits and approved budget permit it. Search results are candidate pages, not verified entities.
+2. **Shortlist semantically.** Use SQL to preserve useful source versions and remove equivalent duplicates, then `SEM_MATCH` to identify relevant sources. `SEM_SCORE` adds embedding relevance ranking when a more specific criterion is useful. Ordinary SQL filters are available for task-specific exclusions; missing metadata does not make a source irrelevant.
+3. **Extract and reconcile.** Run `SEM_EXTRACT` or `SEM_EXTRACT_ALL` on relevant sources. Use `SEM_NORM` to group equivalent extracted values, then SQL to combine evidence, join saved data and evaluate the requested conditions. Keep missing facts and unresolved identities explicit.
 4. **Present the finished table.** Keep intermediate work behind the scenes. Open the final selection with readable labels, useful source links and an intentional row order.
 5. **Continue from saved research.** Reopen, query, correct, expand or refresh a result without repeating discovery unnecessarily.
 
-SQL filters run before semantic work where the admitted query plan permits it. A final `LIMIT` bounds returned rows; it does not make earlier search or model work cheaper.
+The assistant composes this workflow in SQL for each question. There are no fixed topical filters or required score cutoffs. `SEM_MATCH` uses the configured language model; `SEM_SCORE` uses a separately configured embedding model. A final `LIMIT` bounds returned rows, not earlier search or model work.
 
 This query runs against the included **fictional fixtures**, with no API keys or network calls:
 
@@ -175,7 +175,7 @@ Start with the [provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/ma
 | --- | --- |
 | Local live search | Exa, Brave or Serper adapter; its API key, live permission and finite budget |
 | Semantic extraction / matching / normalization | An explicitly named model and its credential |
-| Semantic scoring | An explicitly configured embedding adapter |
+| Semantic scoring | OpenAI embeddings with an explicitly selected model, such as `text-embedding-3-small` |
 | Hosted Exa, Brave or Serper | Choose one live provider per reviewed Flight; bind its secret and matching gateway policy |
 
 For search-only work, omit model and embedding settings. An Exa API key does not enable semantic operators or authorize spending. Request budgets must fit the trusted profile; source fetching also requires approved destination hosts.

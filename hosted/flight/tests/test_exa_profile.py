@@ -27,6 +27,58 @@ policy = load("exa_profile")
 runner = load("runner")
 
 
+def test_explicit_embedding_policy_and_secret_are_enforced_before_dispatch():
+    env = environment(
+        SOURCESQL_EXA_POLICY_VERSION="exa-research.v3",
+        SOURCESQL_OPENAI_EMBEDDING_MODEL="text-embedding-3-small",
+        SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME="sourcesql_openai",
+        sourcesql_openai_OPENAI_API_KEY="synthetic-key",
+    )
+    settings = policy.load_configuration(env)
+    profile = settings["profiles"]["exa"]
+    assert profile["embedding"] == {
+        "name": "text-embedding-3-small",
+        "api_key_env": "sourcesql_openai_OPENAI_API_KEY",
+    }
+    assert "model" not in profile
+    caps = settings["descriptor"]["limits"]
+    assert caps["max_semantic_documents"] == 0 and caps["max_input_tokens"] == 200_000
+    req = request(budgets={**caps, "max_cost_microusd": 50_000})
+    policy.validate_request(req, settings, env)
+    policy.validate_explain(
+        {"plan": {"stages": [{"stage": "external", "operator": "SEM_SCORE"}]}}, settings
+    )
+    with pytest.raises(SourcesQLError, match="Operator is not enabled"):
+        policy.validate_explain(
+            {"plan": {"stages": [{"stage": "external", "operator": "SEM_MATCH"}]}}, settings
+        )
+    with pytest.raises(SourcesQLError, match="Embedding credentials"):
+        policy.validate_request(
+            req, settings, {k: v for k, v in env.items() if k != "sourcesql_openai_OPENAI_API_KEY"}
+        )
+    profile["embedding"]["api_key_env"] = "OTHER_KEY"
+    with pytest.raises(SourcesQLError, match="policy mismatch"):
+        policy.validate_request(req, settings, env)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"SOURCESQL_OPENAI_EMBEDDING_MODEL": "text-embedding-3-small"},
+        {"SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME": "sourcesql_openai"},
+        {
+            "SOURCESQL_OPENAI_EMBEDDING_MODEL": "unreviewed",
+            "SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME": "sourcesql_openai",
+        },
+    ],
+)
+def test_invalid_embedding_configuration_is_refused(overrides):
+    with pytest.raises(ValueError):
+        policy.load_configuration(
+            environment(SOURCESQL_EXA_POLICY_VERSION="exa-research.v3", **overrides)
+        )
+
+
 def environment(**overrides):
     return {
         "SOURCESQL_ALLOW_LIVE_EXA": "1",

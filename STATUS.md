@@ -6,6 +6,69 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased notification UI
+
+Local source replaces in-flow feedback banners with a floating overlay using
+the selection toolbar's motion and neutral surface. Success messages dismiss
+after six seconds, pause while hovered or focused, and errors stay until
+explicitly dismissed. Saved-navigation progress shares the overlay. Hidden
+notifications retain their exit animation without remaining interactive.
+
+The standalone build and three resource checks passed. A synthetic fixture
+through the actual local MCP bridge verified slide/fade dismissal, interaction
+pause, saved-navigation completion, persistent errors, neutral dark styling and
+reduced motion. The embedded frame remained 240 px on desktop and 246 px on
+mobile before, during and after the notification. No provider calls or hosted
+jobs ran. This UI change is not deployed or released; the 0.2.3 tag and hosted
+application remain unchanged.
+
+## Unreleased semantic workflow and embedding batches
+
+Local MCP instructions and product documentation now put semantic shortlisting
+in host-authored SQL: broad discovery, conservative deduplication, `SEM_MATCH`,
+detailed extraction and collection-scoped `SEM_NORM`. Embedding `SEM_SCORE`
+ranking is optional for a more specific criterion; metadata gates and
+score-first execution are not mandatory.
+
+The OpenAI scorer batches unique inputs, reuses the criterion and vectors within
+a run, and preserves row positions, NULLs and unavailable outcomes. Exact score
+results can also reuse the existing durable semantic cache. Input allowance is
+reserved before dispatch; actual usage is recorded separately and once per
+batch. Deadlines and cancellation stop later batches, and cache events cannot
+settle an uncertain request. Model-aware tokenization replaces the conservative
+byte guard and counts full scoring inputs up to the 8,192-token model window.
+Genuinely oversized sources need explicitly selected passages or highlights;
+valid sibling rows continue. The public package bundles tokenizer data for
+offline cold starts. The compact Flight prepares the same checksum-pinned
+public data before live scoring to fit the existing source-size guard.
+Scoring uses the candidate allowance separately from generative document work;
+shared model-request, token and runtime limits still apply.
+
+Hosted research v3 supports an explicit OpenAI embedding model and bound secret,
+with matching gateway/Flight policy fingerprints and advertised capabilities.
+Absent embedding settings preserve existing policy fingerprints. This
+configuration is prepared locally, not enabled on the deployed Flight.
+
+Verification: 788 Python tests passed, 44 opt-in tests skipped; all 352
+app/gateway/MCP checks passed before committing this update. TypeScript and Python type checking,
+Python lint and the frozen lock check passed. Tests cover authored SQL ordering,
+token boundaries, multilingual inputs, mock HTTP batches, duplicate usage,
+persisted scores, unknown outcomes, cancellation and hosted configuration drift.
+Installed public-wheel tokenization passed with network/cache access blocked.
+The compact Flight built to 159,589 bytes, below its retained 200,000-byte
+application guard. Its stripped execution wheel passed installed tokenization
+after explicit mocked restoration; timeout, checksum, size and request-identity
+checks passed. A real Flight's download path remains unqualified. No paid calls
+or live ranking comparisons ran. These changes are not deployed or released.
+
+The [accuracy and completion plan](docs/accuracy-plan.md) records the remaining
+work with stable priorities and completion evidence. Canonical hosted preflight
+and safe errors, durable successful branches/stages, feasible extraction
+continuation, query/source coverage, entity reconciliation, source windows,
+claim/cell evidence and bounded gap follow-up remain incomplete. Fresh
+natural-language host acceptance and model-capable adopter setup are separate
+gates; local regressions do not establish first-attempt research accuracy.
+
 ## Release qualification: 0.2.3
 
 The final tag pipeline qualified both Python distributions on Linux Python

@@ -17,7 +17,7 @@ From the repository root:
 ```sh
 uv build --wheel --out-dir artifacts/hosted-wheel
 uv run --frozen python hosted/flight/build.py \
-  artifacts/hosted-wheel/sourcesql-0.1.2-py3-none-any.whl \
+  artifacts/hosted-wheel/sourcesql-0.2.3-py3-none-any.whl \
   --output artifacts/hosted-flight
 ```
 
@@ -40,6 +40,28 @@ process installs the validated wheel using PyPA `installer` into temporary
 storage. Its environment excludes database and provider credentials. The driver
 then imports that installed engine; each research SQL worker uses the qualified
 Linux Landlock and seccomp protections and a sanitized environment.
+
+The checked-in builder retains its 200,000-byte Flight source limit. Public
+wheels and Docker images include the complete offline tokenizer. The Flight
+execution wheel omits the provisioning archive and compressed tokenizer ranks,
+while retaining the tokenizer code and MIT license. Its manifest records the
+public distribution hashes, deliberate omissions and exact restoration contract.
+
+For an admitted live plan containing `SEM_SCORE`, the trusted runner downloads
+only OpenAI's public `cl100k_base` rank file, before any search or model request.
+It permits one direct HTTPS request, disables environment proxies and redirects,
+limits the response to 2 MB and bounds the complete asynchronous download to ten
+seconds. It checks the official raw SHA256 before restoring a local gzip copy.
+Compression bytes may differ by Python/zlib version; the verified raw ranks
+remain identical. Tokenization itself performs no network requests. Plans
+without scoring, fixture jobs, imports and restores skip this download.
+
+Hydration uses the Flight's existing setup-time allowance; it does not change the
+durable query or reset its dispatch deadline. Its elapsed time is reported
+separately. A failed download, timeout or checksum prevents research dispatch;
+there is no tokenizer/model fallback. This is an additional cold-Flight network
+dependency for scoring, while public package and Docker execution stay offline
+for token counting.
 
 ## Job ownership and recovery
 

@@ -19,7 +19,7 @@ classifiers = [
   "Operating System :: POSIX :: Linux",
   "Topic :: Database",
 ]
-dependencies = ["sqlglot==30.19.0", "duckdb==1.5.0", "pyarrow==23.0.1", "pydantic==2.13.3", "httpx==0.28.1", "pydantic-ai-slim[openai]==2.27.0"]
+dependencies = ["sqlglot==30.19.0", "duckdb==1.5.0", "pyarrow==23.0.1", "pydantic==2.13.3", "httpx==0.28.1", "pydantic-ai-slim[openai]==2.27.0", "tiktoken==0.14.0"]
 
 [project.optional-dependencies]
 motherduck = ["psycopg[binary]==3.3.3"]
@@ -64,6 +64,7 @@ include = [
   "NOTICE",
   "AGENTS.md",
   "provenance/reuse-manifest.json",
+  "provenance/tokenizer-reuse.json",
   "hosted/setup.mjs",
   "hosted/personal-cloud.mjs",
   "hosted/flight/*.py",

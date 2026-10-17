@@ -46,9 +46,15 @@ def _and(values: list[exp.Expr]) -> exp.Expr | None:
 
 class _Executor:
     def __init__(
-        self, plan: ParsedQuery, inputs: dict[str, Table], dispatch: Callable, run_sql: Callable
+        self,
+        plan: ParsedQuery,
+        inputs: dict[str, Table],
+        dispatch: Callable,
+        run_sql: Callable,
+        score_batch: Callable | None = None,
     ):
         self.plan, self.dispatch, self.run_sql = plan, dispatch, run_sql
+        self.score_batch = score_batch
         self.tables: dict[str, Table] = {}
         self.inputs: dict[str, str] = {}
         self.sequence = 0
@@ -530,6 +536,27 @@ class _Executor:
                 raise SourcesQLError(
                     "invalid_output", "Normalization keys must be strings or NULL", "semantic"
                 )
+        elif name == "SEM_SCORE" and self.score_batch is not None:
+            values = self.score_batch(
+                [
+                    (
+                        args,
+                        {
+                            **kwargs,
+                            "_output_field": field,
+                            "_input_lineage": argument_lineage[index],
+                        },
+                    )
+                    for index, args in enumerate(arguments)
+                ]
+            )
+            if len(values) != len(arguments) or any(
+                value is not None and (type(value) not in (int, float) or not math.isfinite(value))
+                for value in values
+            ):
+                raise SourcesQLError(
+                    "invalid_output", "Scoring must preserve row identity", "semantic"
+                )
         else:
             values = []
             for index, (row, args) in enumerate(zip(table.rows, arguments)):
@@ -679,6 +706,7 @@ def execute_plan(
     inputs: dict[str, Table],
     dispatch: Callable[[str, list[Any], dict[str, Any]], Any],
     run_sql: Callable[[str, dict[str, Table], dict[str, Any]], Table],
+    score_batch: Callable | None = None,
 ) -> Table:
     """Execute one previously admitted plan using coordinator-owned effects."""
     # DuckDB itself checks ordinary binding, grouping, and expression types over
@@ -698,4 +726,4 @@ def execute_plan(
         raise SourcesQLError(
             "invalid_query", "SQL failed schema or expression validation before provider dispatch"
         ) from None
-    return _Executor(plan, inputs, dispatch, run_sql).execute(plan.tree, {})
+    return _Executor(plan, inputs, dispatch, run_sql, score_batch).execute(plan.tree, {})

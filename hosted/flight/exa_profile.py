@@ -79,7 +79,28 @@ def _model_configuration(environment: Mapping[str, str]) -> dict | None:
     }
 
 
-def _research_limits(model: dict | None) -> dict:
+def _embedding_configuration(environment: Mapping[str, str]) -> dict | None:
+    name = environment.get("SOURCESQL_OPENAI_EMBEDDING_MODEL")
+    secret_name = environment.get("SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME")
+    if name is None and secret_name is None:
+        return None
+    if (
+        name not in {"text-embedding-3-small", "text-embedding-3-large"}
+        or not isinstance(secret_name, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", secret_name)
+    ):
+        raise ValueError("Configure a supported OpenAI embedding model and Flight secret together")
+    return {"name": name, "secret_name": secret_name, "version": "openai-embeddings.v2"}
+
+
+def _embedding_profile(embedding: dict) -> dict:
+    return {
+        "name": embedding["name"],
+        "api_key_env": embedding["secret_name"] + "_OPENAI_API_KEY",
+    }
+
+
+def _research_limits(model: dict | None, embedding: dict | None = None) -> dict:
     limits = dict(RESEARCH_LIMITS)
     if model is None:
         for name in (
@@ -89,6 +110,9 @@ def _research_limits(model: dict | None) -> dict:
             "max_output_tokens",
         ):
             limits[name] = 0
+    if embedding is not None:
+        for name in ("max_model_requests", "max_input_tokens"):
+            limits[name] = RESEARCH_LIMITS[name]
     return limits
 
 
@@ -186,10 +210,16 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     if version not in {"exa-search.v1", POLICY_VERSION, RESEARCH_POLICY_VERSION}:
         raise ValueError("Unknown hosted Exa policy version")
     research = version == RESEARCH_POLICY_VERSION
+    if not research and any(
+        key in environment
+        for key in ("SOURCESQL_OPENAI_EMBEDDING_MODEL", "SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME")
+    ):
+        raise ValueError("Embedding scoring requires the hosted Exa research v3 policy")
     if not research and "SOURCESQL_OPENAI_REASONING_EFFORT" in environment:
         raise ValueError("Reasoning effort requires the hosted Exa research v3 policy")
     search_types = SEARCH_TYPES if version != "exa-search.v1" else {"exa": "auto"}
     model = _model_configuration(environment) if research else None
+    embedding = _embedding_configuration(environment) if research else None
     approval = environment.get(
         "SOURCESQL_EXA_APPROVED_COST_MICROUSD", str(DEFAULT_APPROVED_COST_MICROUSD)
     )
@@ -205,7 +235,8 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     secret_environment = "EXA_API_KEY" if secret_name is None else secret_name + "_EXA_API_KEY"
     descriptor = {
         "approved_cost_microusd": approved,
-        **({"limits": _research_limits(model), "model": model} if research else {}),
+        **({"limits": _research_limits(model, embedding), "model": model} if research else {}),
+        **({"embedding": embedding} if embedding is not None else {}),
         **({"search_types": search_types} if version != "exa-search.v1" else {}),
         "secret_name": secret_name,
         "version": version,
@@ -227,6 +258,7 @@ def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
         "hosted_profile_fingerprint": fingerprint,
         **({"allow_public_source_hosts": True} if research else {}),
         **({"model": _model_profile(model)} if model is not None else {}),
+        **({"embedding": _embedding_profile(embedding)} if embedding is not None else {}),
     }
     return {
         "profiles": {
@@ -285,6 +317,7 @@ def validate_request(
     if research:
         descriptor = settings["descriptor"]
         model = descriptor["model"]
+        embedding = descriptor.get("embedding")
         descriptor_fingerprint = hashlib.sha256(
             json.dumps(descriptor, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode(
                 "ascii"
@@ -297,7 +330,7 @@ def validate_request(
         )
         if (
             descriptor_fingerprint != settings["provider_policy_sha256"]
-            or descriptor["limits"] != _research_limits(model)
+            or descriptor["limits"] != _research_limits(model, embedding)
             or profile.get("approved_cost_microusd") != descriptor["approved_cost_microusd"]
             or profile.get("api_key_env") != expected_secret
             or profile.get("allow_live") is not True
@@ -306,6 +339,8 @@ def validate_request(
             or profile.get("fetch_adapter") != "exa"
             or profile.get("allowed_source_hosts") != []
             or profile.get("model") != (_model_profile(model) if model is not None else None)
+            or profile.get("embedding")
+            != (_embedding_profile(embedding) if embedding is not None else None)
         ):
             raise SourcesQLError("unauthorized", "Hosted research policy mismatch", "dispatch")
     if not _credential_available(environment, profile["api_key_env"]):
@@ -321,6 +356,14 @@ def validate_request(
             "provider_unavailable", "Semantic model credentials are not configured", "dispatch"
         )
     source_modes = {"allow_excerpt", "require_document"} if research else {"allow_excerpt"}
+    if (
+        research
+        and embedding is not None
+        and not _credential_available(environment, profile["embedding"]["api_key_env"])
+    ):
+        raise SourcesQLError(
+            "provider_unavailable", "Embedding credentials are not configured", "dispatch"
+        )
     source_mode = request.get("source_mode")
     if not isinstance(source_mode, str) or source_mode not in source_modes:
         raise SourcesQLError(
@@ -354,6 +397,8 @@ def validate_explain(explanation: dict, settings: dict | None = None) -> None:
         allowed.add("WEB_FETCH")
         if descriptor["model"] is not None:
             allowed.update(SEMANTIC_OPERATORS)
+        if descriptor.get("embedding") is not None:
+            allowed.add("SEM_SCORE")
     stages = explanation.get("plan", {}).get("stages", [])
     if any(
         stage.get("stage") == "external" and stage.get("operator") not in allowed

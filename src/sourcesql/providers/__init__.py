@@ -88,6 +88,7 @@ class ProviderRegistry:
                         key,
                         client=config.get("client"),
                         endpoint=config.get("endpoint", "https://api.openai.com/v1/embeddings"),
+                        encoding_name=config.get("encoding"),
                     )
 
     @property
@@ -127,6 +128,17 @@ class ProviderRegistry:
                 "basis": "fixture_lookup_only"
                 if self.mode == "fixture"
                 else "configured_embeddings",
+                **(
+                    {
+                        "input_max_tokens": OpenAIEmbeddingProvider.MAX_INPUT_TOKENS,
+                        "batch_max_tokens": OpenAIEmbeddingProvider.MAX_BATCH_TOKENS,
+                        "batch_max_inputs": OpenAIEmbeddingProvider.MAX_BATCH_INPUTS,
+                        "adapter_version": OpenAIEmbeddingProvider.CONTRACT_VERSION,
+                        "token_accounting": "model_tokenizer_before_dispatch",
+                    }
+                    if isinstance(self.embedding_provider, OpenAIEmbeddingProvider)
+                    else {}
+                ),
             },
             "metering": "fixture" if self.mode == "fixture" else "estimated_only",
             "token_limits": "output_per_request_and_reported_totals",
@@ -174,6 +186,10 @@ class ProviderRegistry:
             raise SourcesQLError(
                 "unsupported_capability", "No embedding scorer is configured", "semantic"
             )
+        if "SEM_SCORE" in operators and isinstance(
+            self.embedding_provider, OpenAIEmbeddingProvider
+        ):
+            self.embedding_provider.preflight()
         if (
             operators.intersection({"SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL", "SEM_NORM"})
             and self.semantic_provider is None
@@ -265,7 +281,9 @@ class ProviderRegistry:
                 )
             for url in urls:
                 host = urlsplit(normalized_url(url)).hostname
-                if not public_sources and host not in allowed:
+                if not public_sources and host not in (
+                    allowed if isinstance(allowed, list) else []
+                ):
                     raise SourcesQLError(
                         "unauthorized", "Source destination is not permitted", "acquisition"
                     )
@@ -314,3 +332,19 @@ class ProviderRegistry:
                 "unsupported_capability", "No semantic model is configured", "semantic"
             )
         return self.semantic_provider.semantic(operator, text, instruction, fields, options, budget)
+
+    def score_many(self, texts: list, criterion: str, options: dict, budget: Budget):
+        """One admitted scoring stage; a scorer must preserve every input position."""
+        self._authorize(budget)
+        if not isinstance(criterion, str) or not criterion.strip() or len(criterion) > 4000:
+            raise SourcesQLError(
+                "invalid_request", "Semantic instruction must be bounded nonempty text", "semantic"
+            )
+        if self.embedding_provider is None:
+            raise SourcesQLError(
+                "unsupported_capability", "No embedding scorer is configured", "semantic"
+            )
+        batch = getattr(self.embedding_provider, "score_many", None)
+        if self.mode != "fixture" and callable(batch):
+            return batch(texts, criterion, options, budget)
+        return [self.semantic("SEM_SCORE", text, criterion, {}, options, budget) for text in texts]
