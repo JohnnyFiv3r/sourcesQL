@@ -8,6 +8,16 @@ and [release notes](docs/releases/0.2.3.md).
 
 ## Unreleased research completion work
 
+The render tool now returns a concise answer-surface handoff alongside saved
+data. Its tool-local description requires the requested row unit and answer
+fields, treats source hit lists as acquisition unless a catalog was requested,
+and keeps follow-up chat brief without duplicating the table. The query tool
+also points to declared research requirements. A successful tool response does
+not establish that the host displayed the app. All 379 app tests and the
+TypeScript production build pass; a recorded 24-source view renders under strict
+CSP in independent headless Chrome. The reported ChatGPT loading failure still
+needs host-side evidence; these checks do not establish ChatGPT acceptance.
+
 PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
 The next local implementation covers canonical hosted preflight, bounded durable
 stage journals, explicit restart continuation/source recovery, query-hit

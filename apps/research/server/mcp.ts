@@ -71,6 +71,7 @@ import {
   SOURCESQL_CAPABILITIES_DESCRIPTION,
   SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS,
   SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+  SOURCESQL_OPEN_RESEARCH_HANDOFF,
 } from "./agent-guidance.js";
 
 const appVersion: string = JSON.parse(
@@ -446,7 +447,12 @@ export function createServer(
           : (offset ?? 0);
         if (start < 0 || start > full.snapshot.rows.length)
           throw new Error("Research row or window not found");
-        return viewResult(full, start);
+        const result = viewResult(full, start);
+        result.content.push({
+          type: "text",
+          text: SOURCESQL_OPEN_RESEARCH_HANDOFF,
+        });
+        return result;
       }),
   );
   tools.registerTool(
