@@ -135,8 +135,11 @@ research to repair a display failure.
 The [accuracy and completion plan](accuracy-plan.md) tracks the unimplemented
 work with stable priority IDs, current evidence and exit checks. First finish
 canonical hosted preflight, actionable errors and durable successful branches
-and stages. Then improve query coverage, source-local entity reconciliation,
-complementary evidence, relevant source windows, claim scope and cell lineage.
+and stages. Q01a now preserves safe failure codes and failed-run inspection
+through local Python-writer/gateway/MCP checks; canonical preflight and live
+qualification remain pending. Then improve query coverage, source-local entity
+reconciliation, complementary evidence, relevant source windows, claim scope
+and cell lineage.
 Useful unanswered cells need explicit reasons and bounded follow-up rather
 than causing a whole request to fail or silently becoming negative claims.
 

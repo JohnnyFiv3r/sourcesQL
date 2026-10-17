@@ -69,6 +69,33 @@ claim/cell evidence and bounded gap follow-up remain incomplete. Fresh
 natural-language host acceptance and model-capable adopter setup are separate
 gates; local regressions do not establish first-attempt research accuracy.
 
+## Unreleased hosted failure diagnostics (Q01a)
+
+The notification and token-aware scoring work above merged in
+[PR #1](https://github.com/JohnnyFiv3r/sourcesQL/pull/1) at
+`d0bdfbea0c3454afccfa33a3d6abdadb443c388a`. The published 0.2.3 artifacts and
+deployed workers are unchanged. External Codex review was requested but has not
+acknowledged the request; two independent local source reviews found no blockers.
+
+Q01a now retains known provider failure codes in the Python job writer and
+returns fixed safe summaries through the native gateway and MCP. Failed jobs
+include an inspectable run handle when execution created one. Run inspection
+returns at most eight safe code/stage/message summaries and explicitly flags
+truncation. Provider bodies, prompts and arbitrary diagnostic strings stay out
+of these responses. Embedding HTTP rejection retains its provider error code
+instead of becoming a generic validation error.
+
+Local failure-injection checks exercise the actual embedding adapter, strict
+engine, Flight runner and MotherDuckStore writer against one DuckDB file,
+then reopen through native gateway and MCP connections. Timeout, connection
+failure, HTTP 429 and invalid vectors retain distinct codes without publishing
+a result. Another owner cannot inspect their job or run; inspection, replay
+and explicit start do not redispatch a terminal job. Full regression passed:
+796 Python tests (44 opt-in cases skipped), all 357 app/gateway/MCP tests and
+the app build. An independent source review found no blockers. No live or paid
+provider calls ran. Canonical hosted preflight, richer dispatch-certainty
+diagnostics and live transport qualification remain pending in Q01.
+
 ## Release qualification: 0.2.3
 
 The final tag pipeline qualified both Python distributions on Linux Python

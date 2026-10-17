@@ -60,6 +60,7 @@ import {
   type ResearchCheckpoint,
 } from "./checkpoints.js";
 import { researchJobView } from "../src/job-view.js";
+import { safeExecutionError, safeRunErrors } from "./execution-errors.js";
 import {
   SOURCESQL_SERVER_INSTRUCTIONS,
   SOURCESQL_QUERY_DESCRIPTION,
@@ -310,7 +311,6 @@ export function createServer(
       "updated_at",
       "started_at",
       "finished_at",
-      "error_code",
       "dispatch_blocked",
       "capacity",
       "can_resume",
@@ -321,6 +321,16 @@ export function createServer(
         .filter((key) => Object.hasOwn(receipt, key))
         .map((key) => [key, receipt[key]]),
     );
+    if (receipt.status === "failed") {
+      const error = safeExecutionError(receipt.error_code);
+      result.error_code = error.code;
+      result.error = error;
+      if (
+        typeof receipt.run_id === "string" &&
+        id.safeParse(receipt.run_id).success
+      )
+        result.run_id = receipt.run_id;
+    }
     result.pending = pending;
     const guidance =
       receipt.status === "submission_unknown"
@@ -337,7 +347,7 @@ export function createServer(
                   : "Poll sourcesql_job_status with this job_id. Reuse the same request_id to recover this job; a new ID starts different work. No result is available yet."
             : completed
               ? "Query execution completed and the result is stored. Further SQL can reuse its result_id; open_research displays the final table. This response does not render a component."
-              : "This job is terminal. No result was published; inspect this job before deciding whether to start new work.";
+              : `This job is terminal. No result was published; ${result.run_id ? "inspect sourcesql_run_status with this run_id" : "inspect this job"} before deciding whether to start new work.`;
     return {
       content: [
         {
@@ -1976,13 +1986,16 @@ export function createServer(
               "result_id",
               "plan_complete",
             ];
-            return engineResult(
-              Object.fromEntries(
-                keys
-                  .filter((k) => Object.hasOwn(receipt, k))
-                  .map((k) => [k, receipt[k]]),
-              ),
+            const result = Object.fromEntries(
+              keys
+                .filter((k) => Object.hasOwn(receipt, k))
+                .map((k) => [k, receipt[k]]),
             );
+            if (Array.isArray(receipt.errors)) {
+              result.errors = safeRunErrors(receipt.errors);
+              result.errors_truncated = receipt.errors.length > 8;
+            }
+            return engineResult(result);
           }),
       );
   }

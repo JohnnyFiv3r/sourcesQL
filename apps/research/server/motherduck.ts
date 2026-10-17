@@ -27,6 +27,7 @@ import {
 } from "./hosted-search.js";
 
 import type { ResearchCapacity } from "../src/job-view.js";
+import { safeExecutionError } from "./execution-errors.js";
 
 type Row = Record<string, any>;
 export interface SqlClient {
@@ -480,6 +481,7 @@ export class MotherDuckEngine implements ResearchEngine {
     return row;
   }
   private envelope(job: Row): Row {
+    const error = safeExecutionError(job.error_code);
     return {
       job_id: job.id,
       request_id: job.request_id,
@@ -497,28 +499,9 @@ export class MotherDuckEngine implements ResearchEngine {
         : {}),
       ...(job.status === "failed"
         ? {
-            error_code: job.error_code ?? "execution_failed",
+            error_code: error.code,
             ...(job.engine_run_id ? { run_id: job.engine_run_id } : {}),
-            error: {
-              code: job.error_code ?? "execution_failed",
-              message:
-                (
-                  {
-                    provider_timeout:
-                      "The model request timed out; its remote outcome is unknown. Saved results are retained. Inspect the run before authorizing another extraction.",
-                    provider_connection_error:
-                      "The model connection failed; its remote outcome is unknown. Saved results are retained. Inspect the run before authorizing another extraction.",
-                    provider_http_error:
-                      "The model provider rejected the request. Saved results are retained; inspect the run before continuing.",
-                    provider_error:
-                      "The model request failed. Saved results are retained; inspect the run before continuing.",
-                    invalid_output:
-                      "Research output failed validation. Saved results are retained.",
-                    evidence_invalid:
-                      "Source evidence failed validation. Saved results are retained.",
-                  } as Record<string, string>
-                )[job.error_code] ?? "Research execution failed safely",
-            },
+            error,
           }
         : {}),
     };

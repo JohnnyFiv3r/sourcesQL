@@ -2399,7 +2399,7 @@ test("MCP reopens an admission-failed job with its safe code and no result or ex
       job_id: submitted.job_id,
     });
     assert.equal(direct.error.code, "unsupported_query");
-    assert.equal(direct.error.message, "Research execution failed safely");
+    assert.match(direct.error.message, /query is not supported/i);
     assert.equal(h.submissions, 1);
     for (const table of ["results", "runs"]) {
       const rows = (
@@ -2780,6 +2780,8 @@ test("failed hosted model jobs reopen with distinct safe errors and never redisp
       ["provider_http_error", "provider rejected"],
       ["invalid_output", "output failed validation"],
       ["evidence_invalid", "evidence failed validation"],
+      ["PRIVATE-UNKNOWN-CODE", "execution failed safely"],
+      ["__proto__", "execution failed safely"],
     ]) {
       await engine.connection((connection) =>
         connection.query(
@@ -2789,7 +2791,12 @@ test("failed hosted model jobs reopen with distinct safe errors and never redisp
       );
       const view = await engine.call<Row>("job_status", { job_id: job.job_id });
       assert.equal(view.status, "failed");
-      assert.equal(view.error.code, code);
+      assert.equal(
+        view.error.code,
+        ["PRIVATE-UNKNOWN-CODE", "__proto__"].includes(code)
+          ? "execution_failed"
+          : code,
+      );
       assert.ok(view.error.message.toLowerCase().includes(message));
       assert.ok(!JSON.stringify(view).includes("PRIVATE-RAW"));
       assert.equal(view.result_id, undefined);
@@ -2799,3 +2806,127 @@ test("failed hosted model jobs reopen with distinct safe errors and never redisp
     await h.close();
   }
 });
+
+for (const [failure, code] of [
+  ["timeout", "provider_timeout"],
+  ["connection_error", "provider_connection_error"],
+  ["http_429", "provider_http_error"],
+  ["invalid_output", "invalid_output"],
+]) {
+  test(`real Python ${failure} survives the job writer, gateway reopening and authorized MCP diagnostics`, async () => {
+    const h = await harness();
+    const client = new Client({ name: "failed-run-test", version: "1" });
+    const otherClient = new Client({ name: "other-owner-test", version: "1" });
+    const servers: ReturnType<typeof createServer>[] = [];
+    try {
+      const original = h.engine("owner-a", { allowSubmission: true });
+      await original.initialize();
+      const request = {
+        ...query(),
+        query:
+          "SELECT SEM_SCORE(content, 'specific criterion') AS relevance FROM WEB_SEARCH('aurora', per_query_limit := 1)",
+        partial_policy: "strict",
+      };
+      const submitted = await original.call<Row>("query", request);
+      const [written] = await h.sql.request(
+        randomUUID(),
+        "execute_failing_job",
+        undefined,
+        [original.namespace, submitted.job_id, failure],
+      );
+      assert.deepEqual(written, {
+        status: "failed",
+        error_code: code,
+        result_id: null,
+        provider_requests: 1,
+      });
+      h.runs[0].status = "RUN_STATUS_FAILED";
+      h.runs[0].exit_code = 1;
+
+      const reopened = h.engine("owner-a", { allowSubmission: true });
+      const other = h.engine("owner-b", { allowSubmission: true });
+      await other.initialize();
+      for (const [engine, mcpClient, principal] of [
+        [reopened, client, "owner-a"],
+        [other, otherClient, "owner-b"],
+      ] as const) {
+        const store = new ResearchStore(h.directory, seed, undefined, 3000, {
+          backend: new MotherDuckStateBackend(engine),
+        });
+        const server = createServer(
+          store,
+          join(root, "apps/research/dist/research.html"),
+          {
+            engine,
+            access: {
+              mode: "protected",
+              principal,
+              allowPrivateDisclosure: false,
+            },
+          },
+        );
+        servers.push(server);
+        const [a, b] = InMemoryTransport.createLinkedPair();
+        await Promise.all([server.connect(a), mcpClient.connect(b)]);
+      }
+      for (let inspection = 0; inspection < 2; inspection++) {
+        const response = await client.callTool({
+          name: "sourcesql_job_status",
+          arguments: { job_id: submitted.job_id },
+        });
+        assert.notEqual(response.isError, true);
+        const job = response.structuredContent as Row;
+        assert.equal(job.status, "failed");
+        assert.equal(job.pending, false);
+        assert.equal(job.error_code, code);
+        assert.equal(job.error.code, code);
+        assert.equal(job.result_id, undefined);
+        assert.equal(typeof job.run_id, "string");
+        const runResponse = await client.callTool({
+          name: "sourcesql_run_status",
+          arguments: { run_id: job.run_id },
+        });
+        assert.notEqual(runResponse.isError, true);
+        const run = runResponse.structuredContent as Row;
+        assert.equal(run.status, "failed");
+        assert.equal(run.result_id, null);
+        assert.equal(run.errors[0].code, code);
+        assert.equal(run.errors[0].stage, "semantic");
+        assert.equal(run.errors[0].safe_message, undefined);
+        assert.doesNotMatch(
+          JSON.stringify([response, runResponse]),
+          /PRIVATE-|synthetic-not-a-key|specific criterion|SEM_SCORE/,
+        );
+        for (const [name, args] of [
+          ["sourcesql_job_status", { job_id: job.job_id }],
+          ["sourcesql_run_status", { run_id: job.run_id }],
+        ] as const) {
+          const denied = await otherClient.callTool({ name, arguments: args });
+          assert.equal(denied.isError, true);
+          assert.doesNotMatch(JSON.stringify(denied), new RegExp(code));
+        }
+      }
+      assert.equal(
+        (await reopened.call<Row>("query", request)).job_id,
+        submitted.job_id,
+      );
+      await reopened.call("start_job", { job_id: submitted.job_id });
+      assert.equal(
+        h.submissions,
+        1,
+        "Inspections, replay and start must not redispatch a terminal job",
+      );
+      const rows = await reopened.connection((connection) =>
+        connection.query(
+          `SELECT count(*) AS count FROM ${reopened.table("results")}`,
+        ),
+      );
+      assert.equal(Number(rows.rows[0].count), 0);
+    } finally {
+      await client.close();
+      await otherClient.close();
+      for (const server of servers) await server.close();
+      await h.close();
+    }
+  });
+}

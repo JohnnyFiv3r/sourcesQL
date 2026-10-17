@@ -262,6 +262,28 @@ def test_nonfinite_json_response_is_invalid_and_not_cached():
     assert scorer._vectors == {}
 
 
+def test_http_rejection_keeps_its_safe_code_with_known_outcome_and_no_response_body():
+    requests = []
+
+    def reject(request):
+        requests.append(request)
+        return httpx.Response(
+            429,
+            json={"error": "PRIVATE-PROVIDER-BODY-AND-KEY"},
+            headers={"retry-after": "60"},
+        )
+
+    scorer, budget = provider(reject), Budget()
+    outcome = scorer.score("source", "criterion", {}, budget)
+    assert outcome.value is None
+    assert outcome.usage["failure"]["code"] == "provider_http_error"
+    assert outcome.usage["failure"]["remote_outcome_unknown"] is False
+    assert outcome.usage["failure"]["retryable"] is False
+    assert len(requests) == 1 and budget.counts["model_requests"] == 1
+    assert scorer._vectors == {}
+    assert "PRIVATE" not in json.dumps({"usage": outcome.usage, "events": scorer.events})
+
+
 def test_new_criterion_dimensions_must_match_already_cached_documents():
     requests = []
 

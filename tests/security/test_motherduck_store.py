@@ -286,6 +286,48 @@ def test_admission_failure_retains_its_code_without_a_run_result_or_private_mess
     assert job(reopened, job_id)["error_code"] == "unsupported_query"
 
 
+@pytest.mark.parametrize(
+    "provider_code",
+    ["provider_timeout", "provider_connection_error", "provider_http_error", "provider_error"],
+)
+def test_provider_failure_code_survives_reopen_without_retaining_provider_text(
+    make_store, provider_code
+):
+    store = make_store()
+    job_id, context = seed_job(store)
+    token, _ = claim(store, job_id, context)
+    store.fail_job(job_id, token, provider_code, "PRIVATE-PROVIDER-BODY-AND-KEY")
+
+    reopened = make_store()
+    saved = job(reopened, job_id)
+    assert saved["status"] == "failed"
+    assert saved["error_code"] == provider_code
+    assert saved["error_message"] == "Research execution failed safely"
+    assert saved["result_id"] is None and saved["engine_run_id"] is None
+    assert "PRIVATE" not in json.dumps(saved, default=str)
+    assert counts(reopened) == (0, 0)
+
+    reopened.fail_job(job_id, token, "provider_unavailable", "LATER-PRIVATE-ERROR")
+    final = job(reopened, job_id)
+    assert final["error_code"] == provider_code
+    assert final["error_message"] == saved["error_message"]
+
+
+@pytest.mark.parametrize("unreviewed_code", ["unknown_provider_code", "", None])
+def test_unreviewed_failure_codes_fall_back_without_retaining_raw_details(
+    make_store, unreviewed_code
+):
+    store = make_store()
+    job_id, context = seed_job(store)
+    token, _ = claim(store, job_id, context)
+    store.fail_job(job_id, token, unreviewed_code, "PRIVATE-RAW-DETAILS")
+    saved = job(make_store(), job_id)
+    assert saved["status"] == "failed"
+    assert saved["error_code"] == "execution_failed"
+    assert saved["error_message"] == "Research execution failed safely"
+    assert "PRIVATE" not in json.dumps(saved, default=str)
+
+
 def test_identical_import_completes_second_job_without_duplicate_result(make_store, tmp_path):
     first = make_store()
     request = import_request()
