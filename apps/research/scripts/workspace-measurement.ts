@@ -761,7 +761,7 @@ export async function measureWorkspaceCase(
 /** Direct boundary seeds are local backend-only fixtures. Each synthetic history
  * state is <16 MiB; their aggregate straddles the real 100 MiB allowance. */
 export async function measureWorkspaceBoundaries() {
-  const h = await WorkspaceHarness.create();
+  let h = await WorkspaceHarness.create();
   try {
     const base: ResearchState = {
       snapshots: [],
@@ -794,17 +794,18 @@ export async function measureWorkspaceBoundaries() {
         "2",
       ),
     );
-    // Replace synthetic boundary state through direct SQL only; this resets no
-    // production/user ledger and changes none of the real backend allowances.
+    // Each independent history boundary gets a fresh local database lifetime.
+    // Keeping all large fixture phases in one DuckDB file retains prior pages
+    // and WAL beyond the hardened container's 256 MiB /tmp allocation. This
+    // removes no production data and changes neither application allowance.
     const smallBytes = Buffer.byteLength(canonicalJson(base));
     const historyCases: OperationSample[] = [];
     for (const delta of [-1, 1]) {
+      await h.close();
+      h = await WorkspaceHarness.create();
       await h.engine.transaction(true, async (client) => {
         await client.query(
-          `DELETE FROM ${h.engine.table("app_state_history")}`,
-        );
-        await client.query(
-          `UPDATE ${h.engine.table("app_state")} SET revision=7,state_json=$1 WHERE id=1`,
+          `INSERT INTO ${h.engine.table("app_state")} VALUES(1,7,$1)`,
           [canonicalJson(base)],
         );
         const target = workspaceLimits.historyBytes - smallBytes + delta,
