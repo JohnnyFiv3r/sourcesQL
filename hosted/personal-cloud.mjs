@@ -15,10 +15,19 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import {
   exaOperators,
+  exaDescriptor,
+  exaFingerprint,
   exaResearchLimits,
   exaSearchTypes,
   validateExaPolicy,
 } from "../apps/research/server/hosted-exa.ts";
+import {
+  hostedSearchDescriptor,
+  hostedSearchFingerprint,
+  hostedSearchBudgets,
+  hostedSearchOperators,
+  validateHostedSearchPolicy,
+} from "../apps/research/server/hosted-search.ts";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const literal = (value) => "'" + value.replaceAll("'", "''") + "'";
@@ -58,6 +67,32 @@ function exaPolicy(provider) {
   };
 }
 
+function searchPolicy(provider) {
+  return {
+    ...exaPolicy(provider),
+    provider: provider.name,
+    requestCostMicrousd: provider.request_cost_microusd,
+    policyVersion: `${provider.name}-${provider.model || provider.embedding ? "research.v2" : "search.v1"}`,
+  };
+}
+
+function researchPolicy(provider) {
+  if (provider.name === "fixture") return null;
+  return provider.name === "exa"
+    ? {
+        descriptor: exaDescriptor(exaPolicy(provider)),
+        fingerprint: exaFingerprint(exaPolicy(provider)),
+        operators: exaOperators(exaPolicy(provider)),
+        limits: exaResearchLimits(exaPolicy(provider)),
+      }
+    : {
+        descriptor: hostedSearchDescriptor(searchPolicy(provider)),
+        fingerprint: hostedSearchFingerprint(searchPolicy(provider)),
+        operators: hostedSearchOperators(searchPolicy(provider)),
+        limits: hostedSearchBudgets({}, searchPolicy(provider), 100),
+      };
+}
+
 export function providerBindings(config) {
   const provider = config.provider;
   if (provider.name === "fixture") return [];
@@ -84,6 +119,7 @@ export function providerBindings(config) {
 
 export function assertCapabilities(config, capabilities) {
   const provider = config.provider,
+    research = researchPolicy(provider),
     profiles = capabilities?.profiles,
     liveNames =
       provider.name === "fixture"
@@ -106,10 +142,7 @@ export function assertCapabilities(config, capabilities) {
     fail("hosted_capabilities_mismatch");
   for (const name of liveNames) {
     const entry = profiles.find((profile) => profile.name === name),
-      operators =
-        provider.name === "exa"
-          ? exaOperators(exaPolicy(provider))
-          : ["WEB_SEARCH"];
+      operators = research.operators;
     if (
       entry.mode !== "live" ||
       entry.provider !== provider.name ||
@@ -126,11 +159,11 @@ export function assertCapabilities(config, capabilities) {
           entry.score_basis !== "cosine_similarity")) ||
       entry.search_limits?.max_cost_microusd !==
         provider.approved_cost_microusd ||
+      Object.entries(research.limits).some(
+        ([key, value]) => entry.search_limits?.[key] !== value,
+      ) ||
       (provider.name === "exa" &&
-        (entry.search_type !== exaSearchTypes(exaPolicy(provider))[name] ||
-          Object.entries(exaResearchLimits(exaPolicy(provider))).some(
-            ([key, value]) => entry.search_limits?.[key] !== value,
-          )))
+        entry.search_type !== exaSearchTypes(exaPolicy(provider))[name])
     )
       fail("hosted_capabilities_mismatch");
   }
@@ -261,11 +294,6 @@ export function validateConfig(config) {
   if (provider.name === "fixture" && Object.keys(provider).length !== 1)
     fail("invalid_provider_configuration");
   if (provider.name !== "fixture") {
-    if (
-      (provider.model !== undefined || provider.embedding !== undefined) &&
-      provider.name !== "exa"
-    )
-      fail("invalid_provider_configuration");
     for (const [kind, adapter] of [
       ["model", provider.model],
       ["embedding", provider.embedding],
@@ -305,13 +333,24 @@ export function validateConfig(config) {
       } catch {
         fail("invalid_provider_configuration");
       }
+    } else {
+      try {
+        validateHostedSearchPolicy(searchPolicy(provider));
+      } catch {
+        fail("invalid_provider_configuration");
+      }
     }
     for (const key of ["approved_cost_microusd", "daily_cost_microusd"])
       if (
         (key === "approved_cost_microusd" || provider[key] !== undefined) &&
         (!Number.isSafeInteger(provider[key]) ||
           provider[key] < 1 ||
-          provider[key] > 1000000)
+          provider[key] >
+            (provider.model || provider.embedding
+              ? key === "daily_cost_microusd"
+                ? 50000000
+                : 2000000
+              : 1000000))
       )
         fail("invalid_provider_configuration");
     if (
@@ -323,7 +362,8 @@ export function validateConfig(config) {
       ["brave", "serper"].includes(provider.name) &&
       (!Number.isSafeInteger(provider.request_cost_microusd) ||
         provider.request_cost_microusd < 1 ||
-        provider.request_cost_microusd > provider.approved_cost_microusd)
+        provider.request_cost_microusd > provider.approved_cost_microusd ||
+        provider.request_cost_microusd > 1000000)
     )
       fail("invalid_provider_configuration");
   }
@@ -567,6 +607,7 @@ export async function uploadDeploymentFiles(plan, root, state, save, api) {
 
 export function createPlan(config, root, workspace) {
   config = validateConfig(config);
+  const research = researchPolicy(config.provider);
   const manifest = readJSON(join(workspace, "bundle/manifest.json"));
   if (
     digest(readFileSync(join(workspace, "bundle/flight.py"))) !==
@@ -639,12 +680,15 @@ export function createPlan(config, root, workspace) {
       execution_enabled: config.enable_execution === true,
     },
     research: {
-      live_operators:
-        config.provider.name === "fixture"
-          ? []
-          : config.provider.name === "exa"
-            ? exaOperators(exaPolicy(config.provider))
-            : ["WEB_SEARCH"],
+      live_operators: research?.operators ?? [],
+      provider_policy: research?.descriptor ?? null,
+      provider_policy_sha256: research?.fingerprint ?? null,
+      search_limits: research
+        ? {
+            ...research.limits,
+            max_cost_microusd: config.provider.approved_cost_microusd,
+          }
+        : null,
       model: config.provider.model?.name ?? null,
       embedding: config.provider.embedding?.name ?? null,
       third_party_processors:

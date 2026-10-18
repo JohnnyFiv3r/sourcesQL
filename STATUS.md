@@ -8,6 +8,27 @@ and [release notes](docs/releases/0.2.3.md).
 
 ## Unreleased research completion work
 
+Brave and Serper now support optional language-model matching, extraction and
+normalization plus independently configured embedding scoring in hosted
+research policies (`brave-research.v2` and `serper-research.v2`). Guided setup
+shares the same model/embedding configuration across all three search providers;
+named OpenAI secrets may be shared by those two adapters. The reviewed plan,
+gateway and worker bind the same policy, model names, secret references and
+effective execution limits. Search-only legacy policies and fingerprints remain
+unchanged, and no existing deployment is migrated automatically. Brave/Serper
+research fetches public HTML/text directly through the guarded fetcher; rendered
+JavaScript and PDF extraction are unavailable on that path. Mocked HTTP with the
+real SQL engine exercises qualified answer cells, citations, semantic operators
+and saved-source reuse without another search or fetch. This implementation has
+not been deployed or live-qualified with those providers.
+
+Provider-independent validation passes 1,284 Python/Flight tests (44 opt-in
+cases skipped), 475 app/MCP tests and 69 setup/onboarding checks, plus lint,
+typing and the Node 24 build. The built wheel passes 129 installed regressions;
+its materialized adopter templates load the shared policies with native Node 24.
+The compact Flight source is 194,570 bytes under the unchanged 200,000-byte
+guard. No provider requests or cloud jobs run during this qualification.
+
 PR #3 review repairs distinguish proven pre-dispatch stops, known provider
 refusals, unknown outcomes and completed responses whose payload could not be
 retained. Explicit continuation can rearm only proven undispatched stages;

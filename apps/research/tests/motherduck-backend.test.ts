@@ -10,6 +10,7 @@ import { createInterface } from "node:readline";
 import {
   MotherDuckEngine,
   MotherDuckStateBackend,
+  createMotherDuckBackend,
   BackendError,
   type SqlClient,
 } from "../server/motherduck.js";
@@ -21,6 +22,7 @@ import {
 import {
   hostedSearchConfiguration,
   hostedSearchFingerprint,
+  hostedSearchOperators,
   type HostedSearchPolicy,
 } from "../server/hosted-search.js";
 import { ResearchStore } from "../server/store.js";
@@ -1911,11 +1913,241 @@ function searchPolicy(
 
 function configureSearch(h: Harness, policy: HostedSearchPolicy) {
   h.flightConfig = hostedSearchConfiguration(policy);
-  h.flightSecrets = [policy.secretName];
+  h.flightSecrets = [
+    policy.secretName,
+    ...(policy.model ? [policy.model.secretName] : []),
+    ...(policy.embedding ? [policy.embedding.secretName] : []),
+  ];
 }
 
 for (const provider of ["brave", "serper"] as const) {
   const providerQuery = () => ({ ...liveQuery(), profile: provider });
+
+  test(`${provider} malformed research environment returns a structured configuration error before database access`, async () => {
+    const prefix = `SOURCESQL_${provider.toUpperCase()}`;
+    const environment = {
+      [`SOURCESQL_ALLOW_LIVE_${provider.toUpperCase()}`]: "1",
+      [`${prefix}_POLICY_VERSION`]: `${provider}-research.v2`,
+      [`${prefix}_SECRET_NAME`]: `sourcesql_${provider}`,
+      [`${prefix}_APPROVED_COST_MICROUSD`]: "50000",
+      [`${prefix}_REQUEST_COST_MICROUSD`]: "5000",
+    };
+    for (const change of [
+      { [`${prefix}_POLICY_VERSION`]: "unknown.v1" },
+      { SOURCESQL_OPENAI_MODEL: "gpt-4.1-mini" },
+      { SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME: "sourcesql_openai" },
+      { SOURCESQL_OPENAI_REASONING_EFFORT: "low" },
+      {
+        [`${prefix}_POLICY_VERSION`]: `${provider}-search.v1`,
+        SOURCESQL_OPENAI_MODEL: "gpt-4.1-mini",
+        SOURCESQL_OPENAI_SECRET_NAME: "sourcesql_openai",
+      },
+    ])
+      await assert.rejects(
+        createMotherDuckBackend({ ...environment, ...change }, "owner-a"),
+        { code: "invalid_request" },
+      );
+  });
+
+  for (const configured of ["model", "embedding", "both"] as const) {
+    test(`${provider} research with ${configured} advertises and queues only configured semantic capabilities`, async () => {
+      const h = await harness();
+      try {
+        const model = configured !== "embedding";
+        const embedding = configured !== "model";
+        const policy = searchPolicy(provider, {
+          policyVersion: `${provider}-research.v2`,
+          ...(model
+            ? {
+                model: {
+                  name: "gpt-4.1-mini",
+                  secretName: "sourcesql_openai",
+                  reasoningEffort: "low",
+                },
+              }
+            : {}),
+          ...(embedding
+            ? {
+                embedding: {
+                  name: "text-embedding-3-small",
+                  secretName: "sourcesql_openai",
+                },
+              }
+            : {}),
+        });
+        configureSearch(h, policy);
+        const engine = h.engine("owner-a", { search: policy });
+        await engine.initialize();
+        const caps = await engine.call<Row>("capabilities");
+        assert.deepEqual(
+          caps.profiles.map((p: Row) => p.name),
+          ["fixture", provider],
+        );
+        assert.ok(
+          !caps.limitations.some((text: string) => /search-only/.test(text)),
+        );
+        assert.match(caps.limitations[0], /text support/);
+        const selected = caps.profiles[1];
+        assert.deepEqual(selected.operators, hostedSearchOperators(policy));
+        assert.equal(selected.model_configured, model);
+        assert.equal(selected.model_name, model ? "gpt-4.1-mini" : null);
+        assert.equal(selected.embedding_configured, embedding);
+        assert.equal(
+          selected.embedding_model,
+          embedding ? "text-embedding-3-small" : null,
+        );
+        assert.equal(
+          selected.score_basis,
+          embedding ? "cosine_similarity" : null,
+        );
+        assert.equal(
+          selected.embedding_token_encoding,
+          embedding ? "cl100k_base" : null,
+        );
+        assert.match(selected.fetched_text_coverage, /Public HTML\/text/);
+        assert.equal(selected.search_limits.max_fetches, 40);
+        assert.equal(
+          selected.search_limits.max_semantic_documents,
+          model ? 40 : 0,
+        );
+        assert.equal(selected.search_limits.max_model_requests, 96);
+        assert.equal(selected.search_limits.max_input_tokens, 200_000);
+        assert.equal(
+          selected.search_limits.max_output_tokens,
+          model ? 16_000 : 0,
+        );
+        assert.equal(selected.search_limits.dispatch_deadline_seconds, 100);
+        assert.equal(selected.live_qualified, false);
+        const queued = await engine.call<Row>("query", {
+          ...providerQuery(),
+          source_mode: "require_document",
+          budgets: {
+            max_search_requests: 3,
+            max_search_queries: 3,
+            max_fetches: 2,
+            max_model_requests: 4,
+          },
+        });
+        const saved = (
+          await engine.connection((client) =>
+            client.query(
+              `SELECT request_json,provider_policy_sha256 FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+              [queued.job_id],
+            ),
+          )
+        ).rows[0];
+        const request = JSON.parse(saved.request_json);
+        assert.equal(request.source_mode, "require_document");
+        assert.equal(request.budgets.max_search_requests, 3);
+        assert.equal(request.budgets.max_model_requests, 4);
+        assert.equal(
+          saved.provider_policy_sha256,
+          hostedSearchFingerprint(policy),
+        );
+        await assert.rejects(
+          engine.call("query", { ...providerQuery(), source_mode: "guess" }),
+          { code: "unsupported_capability" },
+        );
+        for (const budgets of [
+          { max_fetches: 41 },
+          { max_model_requests: 97 },
+          { max_search_requests: 49 },
+          ...(!model
+            ? [{ max_semantic_documents: 1 }, { max_output_tokens: 1 }]
+            : []),
+        ])
+          await assert.rejects(
+            engine.call("query", { ...providerQuery(), budgets }),
+            { code: "invalid_request" },
+          );
+        assert.equal(h.submissions, 0);
+      } finally {
+        await h.close();
+      }
+    });
+  }
+
+  test(`${provider} research attests exact model, embedding, effort, policy and secret bindings before dispatch`, async () => {
+    const h = await harness();
+    try {
+      const policy = searchPolicy(provider, {
+        policyVersion: `${provider}-research.v2`,
+        model: {
+          name: "gpt-4.1-mini",
+          secretName: "sourcesql_openai",
+          reasoningEffort: "low",
+        },
+        embedding: {
+          name: "text-embedding-3-small",
+          secretName: "sourcesql_openai",
+        },
+      });
+      configureSearch(h, policy);
+      const queue = h.engine("owner-a", { search: policy });
+      await queue.initialize();
+      const queued = await queue.call<Row>("query", providerQuery());
+      const engine = h.engine("owner-a", {
+        search: policy,
+        allowSubmission: true,
+      });
+      const expected = { ...h.flightConfig };
+      for (const change of [
+        { SOURCESQL_OPENAI_MODEL: "another-model" },
+        { SOURCESQL_OPENAI_SECRET_NAME: "other_openai" },
+        { SOURCESQL_OPENAI_REASONING_EFFORT: "high" },
+        { SOURCESQL_OPENAI_EMBEDDING_MODEL: "text-embedding-3-large" },
+        { SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME: "other_openai" },
+        {
+          [`SOURCESQL_${provider.toUpperCase()}_POLICY_VERSION`]: `${provider}-search.v1`,
+        },
+      ]) {
+        h.flightConfig = { ...expected, ...change };
+        await assert.rejects(
+          engine.call("start_job", { job_id: queued.job_id }),
+          { code: "unsupported_capability" },
+        );
+        assert.equal(h.submissions, 0);
+      }
+      h.flightConfig = expected;
+      h.flightSecrets = [policy.secretName];
+      await assert.rejects(
+        engine.call("start_job", { job_id: queued.job_id }),
+        { code: "unsupported_capability" },
+      );
+      assert.equal(h.submissions, 0);
+      h.flightSecrets = [policy.secretName, "sourcesql_openai"];
+      await engine.call("start_job", { job_id: queued.job_id });
+      assert.equal(h.submissions, 1);
+      assert.equal(await providerReserve(engine), "0");
+    } finally {
+      await h.close();
+    }
+  });
+
+  test(`${provider} search-only Flight cannot silently acquire unapproved model configuration`, async () => {
+    const h = await harness();
+    try {
+      const policy = searchPolicy(provider);
+      configureSearch(h, policy);
+      const queue = h.engine("owner-a", { search: policy });
+      await queue.initialize();
+      const queued = await queue.call<Row>("query", providerQuery());
+      const engine = h.engine("owner-a", {
+        search: policy,
+        allowSubmission: true,
+      });
+      h.flightConfig.SOURCESQL_OPENAI_MODEL = "gpt-4.1-mini";
+      h.flightConfig.SOURCESQL_OPENAI_SECRET_NAME = "sourcesql_openai";
+      h.flightSecrets.push("sourcesql_openai");
+      await assert.rejects(
+        engine.call("start_job", { job_id: queued.job_id }),
+        { code: "unsupported_capability" },
+      );
+      assert.equal(h.submissions, 0);
+    } finally {
+      await h.close();
+    }
+  });
 
   test(`${provider} capabilities expose only the selected live search profile and leave fixture jobs unchanged`, async () => {
     const h = await harness();

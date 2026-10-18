@@ -27,6 +27,11 @@ import {
   exaDescriptor,
   exaFingerprint,
 } from "../apps/research/server/hosted-exa.ts";
+import {
+  hostedSearchConfiguration,
+  hostedSearchDescriptor,
+  hostedSearchFingerprint,
+} from "../apps/research/server/hosted-search.ts";
 const require = createRequire(
   new URL("../apps/research/package.json", import.meta.url),
 );
@@ -179,7 +184,207 @@ test("partial model configuration and search-secret collisions refuse before pro
   );
 });
 
+test("research limits require explicit opt-in and the selected provider's bounded grant", () => {
+  for (const provider of ["exa", "brave", "serper"]) {
+    const providerFlags = [
+      `--${provider}-secret`,
+      `personal_${provider}`,
+      ...(provider === "exa"
+        ? []
+        : [`--${provider}-request-cost-microusd`, "5000"]),
+    ];
+    const grant = [
+      `--${provider}-approved-cost-microusd`,
+      "2000000",
+      `--${provider}-daily-cost-microusd`,
+      "50000000",
+    ];
+    assert.throws(
+      () => parseArguments([...base, ...providerFlags, ...grant], {}),
+      /invalid_configuration/,
+    );
+    const semantic = [
+      "--embedding-model",
+      "text-embedding-3-small",
+      "--embedding-secret",
+      "personal_openai",
+    ];
+    const options = parseArguments(
+      [...base, ...providerFlags, ...semantic, ...grant],
+      {},
+    );
+    assert.equal(
+      (options.exa ?? options.search).descriptor.approved_cost_microusd,
+      2000000,
+    );
+    assert.equal((options.exa ?? options.search).dailyCostMicrousd, 50000000);
+    for (const [kind, amount] of [
+      ["approved", "2000001"],
+      ["daily", "50000001"],
+    ]) {
+      const changed = [...grant];
+      changed[changed.indexOf(`--${provider}-${kind}-cost-microusd`) + 1] =
+        amount;
+      assert.throws(
+        () =>
+          parseArguments(
+            [...base, ...providerFlags, ...semantic, ...changed],
+            {},
+          ),
+        /invalid_configuration/,
+      );
+    }
+  }
+});
+
 for (const provider of ["brave", "serper"]) {
+  test(`${provider} model, embedding and shared-secret research configurations match gateway and Flight`, () => {
+    const configurations = [
+      [
+        "--openai-model",
+        "configured-model",
+        "--openai-secret",
+        "personal_openai",
+        "--openai-reasoning-effort",
+        "low",
+      ],
+      [
+        "--embedding-model",
+        "text-embedding-3-small",
+        "--embedding-secret",
+        "personal_openai",
+      ],
+      [
+        "--openai-model",
+        "configured-model",
+        "--openai-secret",
+        "personal_openai",
+        "--embedding-model",
+        "text-embedding-3-large",
+        "--embedding-secret",
+        "personal_openai",
+      ],
+    ].map((flags) =>
+      parseArguments(
+        [
+          ...base,
+          `--${provider}-secret`,
+          `personal_${provider}`,
+          `--${provider}-request-cost-microusd`,
+          "5000",
+          ...flags,
+        ],
+        {},
+      ),
+    );
+    for (const options of configurations) {
+      const { policy, descriptor } = options.search;
+      assert.equal(descriptor.version, `${provider}-research.v2`);
+      assert.deepEqual(descriptor, hostedSearchDescriptor(policy));
+      assert.equal(
+        options.search.providerPolicySha256,
+        hostedSearchFingerprint(policy),
+      );
+      const flight = flightConfiguration(options, namespace, schema);
+      const settings = outputSettings(options, receipt);
+      for (const [key, value] of Object.entries(
+        hostedSearchConfiguration(policy),
+      )) {
+        assert.equal(flight[key], value);
+        assert.equal(settings[key], value);
+      }
+      assert.deepEqual(flightSecretNames(options), [
+        `personal_${provider}`,
+        "personal_openai",
+      ]);
+      assert.equal(settings.SOURCESQL_ALLOW_FLIGHT_SUBMISSION, "0");
+      assert.doesNotMatch(
+        flightSQL(
+          options,
+          "reviewed",
+          "pass",
+          "reviewed==1",
+          namespace,
+          schema,
+        ),
+        /API_KEY|md_run_flight/,
+      );
+    }
+    const result = spawnSync(
+      process.env.SOURCESQL_TEST_PYTHON ??
+        process.env.SOURCESQL_PYTHON ??
+        join(import.meta.dirname, "../local/python312/venv/bin/python"),
+      [
+        "-B",
+        "-c",
+        `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location('setup_policy', sys.argv[1])
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
+print(json.dumps([{'descriptor': policy.load_configuration(env)['descriptor'], 'fingerprint': policy.load_configuration(env)['provider_policy_sha256']} for env in json.load(sys.stdin)]))
+`,
+        join(import.meta.dirname, "flight/exa_profile.py"),
+      ],
+      {
+        input: JSON.stringify(
+          configurations.map((options) =>
+            hostedSearchConfiguration(options.search.policy),
+          ),
+        ),
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(
+      JSON.parse(result.stdout),
+      configurations.map((options) => ({
+        descriptor: options.search.descriptor,
+        fingerprint: options.search.providerPolicySha256,
+      })),
+    );
+  });
+  test(`${provider} semantic opt-ins reject partial adapters, collisions and mixed providers`, () => {
+    const search = [
+      ...base,
+      `--${provider}-secret`,
+      `personal_${provider}`,
+      `--${provider}-request-cost-microusd`,
+      "5000",
+    ];
+    for (const flags of [
+      ["--openai-model", "configured-model"],
+      ["--openai-secret", "personal_openai"],
+      ["--openai-reasoning-effort", "low"],
+      ["--embedding-model", "text-embedding-3-small"],
+      ["--embedding-secret", "personal_openai"],
+      ["--embedding-model", "unknown", "--embedding-secret", "personal_openai"],
+      [
+        "--openai-model",
+        "configured-model",
+        "--openai-secret",
+        `personal_${provider}`,
+      ],
+      [
+        "--embedding-model",
+        "text-embedding-3-small",
+        "--embedding-secret",
+        `personal_${provider}`,
+      ],
+      [
+        "--openai-model",
+        "configured-model",
+        "--openai-secret",
+        "personal_openai",
+        "--exa-secret",
+        "personal_exa",
+      ],
+    ])
+      assert.throws(
+        () => parseArguments([...search, ...flags], {}),
+        /invalid_configuration/,
+      );
+  });
   test(`${provider} setup selects exactly one named Flight secret and records a conservative estimate`, () => {
     const options = parseArguments(
       [

@@ -16,13 +16,15 @@ import {
   type HostedExaPolicy,
 } from "./hosted-exa.js";
 import { tableDefinitions, tableMigrations } from "./motherduck-schema.js";
+import type { HostedResearchOptions } from "./hosted-research.js";
 import {
   isHostedSearchProfile,
   validateHostedSearchPolicy,
   hostedSearchFingerprint,
   hostedSearchBudgets,
   hostedSearchConfiguration,
-  HOSTED_SEARCH_POLICY_VERSIONS,
+  hostedSearchOperators,
+  isHostedSearchResearch,
   type HostedSearchPolicy,
 } from "./hosted-search.js";
 
@@ -813,7 +815,10 @@ export class MotherDuckEngine implements ResearchEngine {
               ? ["openai" as const]
               : []),
           ]
-        : [this.options.search!.provider];
+        : [
+            this.options.search!.provider,
+            ...(policy.model || policy.embedding ? ["openai" as const] : []),
+          ];
       for (const [period, limit] of [
         ["month", this.monthlyProviderCostMicrousd],
         ["day", policy.dailyCostMicrousd],
@@ -948,13 +953,16 @@ export class MotherDuckEngine implements ResearchEngine {
         }
         request.source_mode = params.source_mode ?? "allow_excerpt";
       } else if (isHostedSearchProfile(request.profile)) {
+        const research = isHostedSearchResearch(this.options.search!);
         if (
           params.source_mode !== undefined &&
-          params.source_mode !== "allow_excerpt"
+          !(
+            research ? ["allow_excerpt", "require_document"] : ["allow_excerpt"]
+          ).includes(params.source_mode)
         )
           throw new BackendError(
             "unsupported_capability",
-            "Hosted search supports retained excerpts only",
+            "Source mode is unavailable in the configured hosted search policy",
           );
         try {
           request.budgets = hostedSearchBudgets(
@@ -968,7 +976,7 @@ export class MotherDuckEngine implements ResearchEngine {
             "Hosted search budget exceeds operator approval",
           );
         }
-        request.source_mode = "allow_excerpt";
+        request.source_mode = params.source_mode ?? "allow_excerpt";
       }
     } else {
       if (!["import_table", "import", "recover_run"].includes(operation))
@@ -1227,8 +1235,19 @@ export class MotherDuckEngine implements ResearchEngine {
           Object.entries(required).some(
             ([key, value]) => config[key] !== value,
           ) ||
+          (!policy.model?.reasoningEffort &&
+            config.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined) ||
+          (!policy.model &&
+            (config.SOURCESQL_OPENAI_MODEL !== undefined ||
+              config.SOURCESQL_OPENAI_SECRET_NAME !== undefined ||
+              config.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined)) ||
+          (!policy.embedding &&
+            (config.SOURCESQL_OPENAI_EMBEDDING_MODEL !== undefined ||
+              config.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME !== undefined)) ||
           !Array.isArray(secrets) ||
-          !secrets.includes(policy.secretName)
+          !secrets.includes(policy.secretName) ||
+          (policy.model && !secrets.includes(policy.model.secretName)) ||
+          (policy.embedding && !secrets.includes(policy.embedding.secretName))
         )
           throw new BackendError(
             "unsupported_capability",
@@ -1623,10 +1642,35 @@ export class MotherDuckEngine implements ResearchEngine {
                   mode: "live",
                   provider: this.options.search.provider,
                   live_qualified: false,
-                  operators: ["WEB_SEARCH"],
+                  operators: hostedSearchOperators(this.options.search),
                   source_mode: "allow_excerpt",
-                  model_configured: false,
-                  embedding_configured: false,
+                  model_configured: !!this.options.search.model,
+                  model_name: this.options.search.model?.name ?? null,
+                  embedding_configured: !!this.options.search.embedding,
+                  embedding_model: this.options.search.embedding?.name ?? null,
+                  embedding_adapter_version: this.options.search.embedding
+                    ? "openai-embeddings.v2"
+                    : null,
+                  score_basis: this.options.search.embedding
+                    ? "cosine_similarity"
+                    : null,
+                  embedding_input_max_tokens: this.options.search.embedding
+                    ? 8192
+                    : null,
+                  embedding_batch_max_tokens: this.options.search.embedding
+                    ? 300_000
+                    : null,
+                  embedding_token_encoding: this.options.search.embedding
+                    ? "cl100k_base"
+                    : null,
+                  embedding_batch_max_inputs: this.options.search.embedding
+                    ? 128
+                    : null,
+                  fetched_text_coverage: isHostedSearchResearch(
+                    this.options.search,
+                  )
+                    ? "Public HTML/text fetched directly; rendered JavaScript and PDF extraction are unavailable"
+                    : null,
                   search_limits: hostedSearchBudgets(
                     {},
                     this.options.search,
@@ -1662,8 +1706,9 @@ export class MotherDuckEngine implements ResearchEngine {
         reservation_period: "UTC calendar month; optional UTC day",
         flight_submission_enabled: !!this.options.allowSubmission,
         limitations: [
-          this.options.exa?.policyVersion === "exa-research.v3"
-            ? "Live research uses retained provider text; exact quotes establish text support, not source completeness or factual truth"
+          this.options.exa?.policyVersion === "exa-research.v3" ||
+          (this.options.search && isHostedSearchResearch(this.options.search))
+            ? "Live research uses retained source text; exact quotes establish text support, not source completeness or factual truth"
             : "Hosted private profiles are not configured; optional live providers are search-only",
           "Hosted explain runs canonical admission in a provider-free Flight and consumes configured Flight capacity",
           "Queued jobs require explicit start; status never dispatches",
@@ -1848,20 +1893,40 @@ export async function createMotherDuckBackend(
       "Choose one live search provider per Flight",
     );
   const selected = enabledProviders[0]?.toLowerCase();
+  const researchAdapters: HostedResearchOptions = {
+    ...(environment.SOURCESQL_OPENAI_EMBEDDING_MODEL !== undefined ||
+    environment.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME !== undefined
+      ? {
+          embedding: {
+            name: environment.SOURCESQL_OPENAI_EMBEDDING_MODEL ?? "",
+            secretName:
+              environment.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME ?? "",
+          },
+        }
+      : {}),
+    ...(environment.SOURCESQL_OPENAI_MODEL !== undefined ||
+    environment.SOURCESQL_OPENAI_SECRET_NAME !== undefined ||
+    environment.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined
+      ? {
+          model: {
+            name: environment.SOURCESQL_OPENAI_MODEL ?? "",
+            secretName: environment.SOURCESQL_OPENAI_SECRET_NAME ?? "",
+            ...(environment.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined
+              ? {
+                  reasoningEffort:
+                    environment.SOURCESQL_OPENAI_REASONING_EFFORT,
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
   let search: HostedSearchPolicy | undefined;
   if (selected === "brave" || selected === "serper") {
     const prefix = `SOURCESQL_${selected.toUpperCase()}`;
-    if (
-      environment[`${prefix}_POLICY_VERSION`] !== undefined &&
-      environment[`${prefix}_POLICY_VERSION`] !==
-        HOSTED_SEARCH_POLICY_VERSIONS[selected]
-    )
-      throw new BackendError(
-        "invalid_request",
-        "Unsupported hosted search policy version",
-      );
     search = {
       provider: selected,
+      policyVersion: environment[`${prefix}_POLICY_VERSION`],
       secretName: environment[`${prefix}_SECRET_NAME`] ?? "",
       approvedCostMicrousd: Number(
         environment[`${prefix}_APPROVED_COST_MICROUSD`],
@@ -1873,7 +1938,16 @@ export async function createMotherDuckBackend(
       requestCostMicrousd: Number(
         environment[`${prefix}_REQUEST_COST_MICROUSD`],
       ),
+      ...researchAdapters,
     };
+    try {
+      validateHostedSearchPolicy(search);
+    } catch {
+      throw new BackendError(
+        "invalid_request",
+        "Invalid hosted search configuration",
+      );
+    }
   }
   const engine = new MotherDuckEngine({
     database: environment.MOTHERDUCK_DB ?? "",
@@ -1918,33 +1992,7 @@ export async function createMotherDuckBackend(
             secretName: environment.SOURCESQL_EXA_SECRET_NAME ?? "",
             policyVersion:
               environment.SOURCESQL_EXA_POLICY_VERSION ?? "exa-search.v1",
-            ...(environment.SOURCESQL_OPENAI_EMBEDDING_MODEL !== undefined ||
-            environment.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME !== undefined
-              ? {
-                  embedding: {
-                    name: environment.SOURCESQL_OPENAI_EMBEDDING_MODEL ?? "",
-                    secretName:
-                      environment.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME ?? "",
-                  },
-                }
-              : {}),
-            ...(environment.SOURCESQL_OPENAI_MODEL !== undefined ||
-            environment.SOURCESQL_OPENAI_SECRET_NAME !== undefined ||
-            environment.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined
-              ? {
-                  model: {
-                    name: environment.SOURCESQL_OPENAI_MODEL ?? "",
-                    secretName: environment.SOURCESQL_OPENAI_SECRET_NAME ?? "",
-                    ...(environment.SOURCESQL_OPENAI_REASONING_EFFORT !==
-                    undefined
-                      ? {
-                          reasoningEffort:
-                            environment.SOURCESQL_OPENAI_REASONING_EFFORT,
-                        }
-                      : {}),
-                  },
-                }
-              : {}),
+            ...researchAdapters,
           }
         : undefined,
   });

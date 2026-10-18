@@ -52,7 +52,11 @@ class ProviderRegistry:
             self.search_provider = providers[provider](**kwargs)
             self.fetch_provider = SafeFetcher(
                 client=self.profile.get("fetch_client"),
-                allowed_hosts=self.profile.get("allowed_source_hosts"),
+                allowed_hosts=(
+                    None
+                    if self.profile.get("allow_public_source_hosts") is True
+                    else self.profile.get("allowed_source_hosts")
+                ),
                 **({"resolver": self.profile["resolver"]} if self.profile.get("resolver") else {}),
             )
             if self.profile.get("fetch_adapter") == "exa" and provider == "exa":

@@ -18,12 +18,12 @@ This command reads configuration and creates a local store; it does not contact 
 | `allow_live` | Must be `true` in trusted configuration before live dispatch. |
 | `approved_cost_microusd` | Positive integer approval ceiling for a run request. One million micro-USD equals USD 1. This is not a debited account balance or an enforced billing cap. |
 | `metering_policy` | These adapters require explicit `estimated`. `strict` refuses before dispatch because hard total cash/token enforcement is unavailable. |
-| `allowed_source_hosts` | Exact lowercase hostnames approved for fetching, including redirects. Empty means live fetch is unavailable. Public DNS and permitted HTTP ports are also checked. |
+| `allowed_source_hosts` | Exact lowercase hostnames approved for fetching, including redirects. Empty means live fetch is unavailable unless an explicit public-source grant is configured. Public DNS and permitted HTTP ports are also checked. |
 | `model` | `{ "name": "approved-model", "api_key_env": "OPENAI_API_KEY", "retries": 0 }` configures PydanticAI leaf inference. Optional `base_url` selects a trusted OpenAI-compatible destination. |
 | `embedding` | `{ "name": "text-embedding-3-small", "api_key_env": "OPENAI_API_KEY" }` configures `SEM_SCORE`. Optional `endpoint` selects a trusted compatible destination. An unfamiliar compatible model also needs an explicit supported `encoding`, currently `cl100k_base`. Known model/encoding conflicts refuse. No scorer means refusal; there is no lexical substitute. |
+| `allow_public_source_hosts` | Exact `true` opts into public HTTP(S) source fetching. Public DNS, standard ports and redirects are still checked. This does not authorize private-source disclosure. |
 
 Both `model` and `embedding` can be omitted for search-only work. Credentials, destination permissions and a spending grant are separate requirements. Private inputs additionally require exact trusted disclosure permissions; query text cannot grant them.
-
 
 ## Semantic matching, ranking and normalization
 
@@ -59,7 +59,13 @@ credential can serve both model adapters, but both capabilities must be opted
 into separately. The OpenAI adapter returns cosine similarity of the bounded
 source text and criterion. It does not score truth or establish source support.
 Inspect omissions and unavailable outcomes instead of interpreting them as a
-zero score. Hosted configuration is described in the [Exa research guide](exa-research.md).
+zero score. Hosted Exa, Brave and Serper can independently opt into the same model
+and embedding adapters; see the [hosted provider guide](providers-hosted.md) and
+[guided onboarding](personal-cloud-setup.md#opt-into-model-extraction-and-embedding-ranking).
+The search provider remains responsible for discovery: hosted Brave/Serper
+research can fetch public pages through the engine's guarded fetcher, while Exa
+research uses Contents fetching.
+No semantic adapter establishes evidence missing from the acquired material.
 
 Scoring batches unique source inputs sharing a criterion and embeds that criterion
 once. The adapter caches exact submitted text by model and endpoint for its own

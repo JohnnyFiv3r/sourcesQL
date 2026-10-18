@@ -1,16 +1,29 @@
 import { createHash } from "node:crypto";
+import {
+  canonical,
+  hostedResearchConfiguration,
+  hostedResearchLimits,
+  hostedResearchOperators,
+  validHostedResearchOptions,
+  type HostedResearchOptions,
+} from "./hosted-research.ts";
 
 /** One operator-selected search provider per reviewed Flight. */
-export type HostedSearchPolicy = {
+export type HostedSearchPolicy = HostedResearchOptions & {
   provider: "brave" | "serper";
   secretName: string;
   approvedCostMicrousd: number;
   dailyCostMicrousd: number;
   requestCostMicrousd: number;
+  policyVersion?: string;
 };
 export const HOSTED_SEARCH_POLICY_VERSIONS = {
   brave: "brave-search.v1",
   serper: "serper-search.v1",
+} as const;
+export const HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS = {
+  brave: "brave-research.v2",
+  serper: "serper-research.v2",
 } as const;
 export const HOSTED_SEARCH_LIMITS = {
   max_search_queries: 2,
@@ -34,26 +47,61 @@ export function isHostedSearchProfile(
 }
 
 export function validateHostedSearchPolicy(policy: HostedSearchPolicy): void {
+  const research = isHostedSearchResearch(policy);
   if (
     !isHostedSearchProfile(policy.provider) ||
     typeof policy.secretName !== "string" ||
     !/^[a-z][a-z0-9_]{0,62}$/.test(policy.secretName) ||
     ![
-      policy.approvedCostMicrousd,
-      policy.dailyCostMicrousd,
-      policy.requestCostMicrousd,
+      [policy.approvedCostMicrousd, research ? 2_000_000 : 1_000_000],
+      [policy.dailyCostMicrousd, research ? 50_000_000 : 1_000_000],
+      [policy.requestCostMicrousd, 1_000_000],
     ].every(
-      (value) =>
-        Number.isSafeInteger(value) && value >= 1 && value <= 1_000_000,
+      ([value, maximum]) =>
+        Number.isSafeInteger(value) && value >= 1 && value <= maximum,
     ) ||
     policy.dailyCostMicrousd < policy.approvedCostMicrousd ||
-    policy.requestCostMicrousd > policy.approvedCostMicrousd
+    policy.requestCostMicrousd > policy.approvedCostMicrousd ||
+    (policy.policyVersion !== undefined &&
+      ![
+        HOSTED_SEARCH_POLICY_VERSIONS[policy.provider],
+        HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[policy.provider],
+      ].some((version) => version === policy.policyVersion)) ||
+    !validHostedResearchOptions(policy, research)
   )
     throw Error("Invalid hosted search policy");
 }
 
 export function hostedSearchDescriptor(policy: HostedSearchPolicy) {
   validateHostedSearchPolicy(policy);
+  if (isHostedSearchResearch(policy))
+    return canonical({
+      approved_cost_microusd: policy.approvedCostMicrousd,
+      provider: policy.provider,
+      request_cost_microusd: policy.requestCostMicrousd,
+      secret_name: policy.secretName,
+      version: HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[policy.provider],
+      limits: hostedResearchLimits(policy),
+      model: policy.model
+        ? {
+            name: policy.model.name,
+            secret_name: policy.model.secretName,
+            version: "openai-structured.v1",
+            ...(policy.model.reasoningEffort !== undefined
+              ? { reasoning_effort: policy.model.reasoningEffort }
+              : {}),
+          }
+        : null,
+      ...(policy.embedding
+        ? {
+            embedding: {
+              name: policy.embedding.name,
+              secret_name: policy.embedding.secretName,
+              version: "openai-embeddings.v2",
+            },
+          }
+        : {}),
+    });
   // Key order is canonical and matches the trusted Python Flight helper.
   return {
     approved_cost_microusd: policy.approvedCostMicrousd,
@@ -62,6 +110,30 @@ export function hostedSearchDescriptor(policy: HostedSearchPolicy) {
     secret_name: policy.secretName,
     version: HOSTED_SEARCH_POLICY_VERSIONS[policy.provider],
   };
+}
+
+export function isHostedSearchResearch(policy: HostedSearchPolicy): boolean {
+  return (
+    policy.policyVersion !== undefined &&
+    policy.policyVersion ===
+      HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[policy.provider]
+  );
+}
+
+export function hostedSearchLimits(
+  policy: HostedSearchPolicy,
+): Record<string, number> {
+  validateHostedSearchPolicy(policy);
+  return isHostedSearchResearch(policy)
+    ? hostedResearchLimits(policy)
+    : { ...HOSTED_SEARCH_LIMITS };
+}
+
+export function hostedSearchOperators(policy: HostedSearchPolicy): string[] {
+  validateHostedSearchPolicy(policy);
+  return isHostedSearchResearch(policy)
+    ? hostedResearchOperators(policy)
+    : ["WEB_SEARCH"];
 }
 
 export function hostedSearchFingerprint(policy: HostedSearchPolicy): string {
@@ -76,9 +148,15 @@ export function hostedSearchBudgets(
   deadline: number,
 ): Record<string, number> {
   validateHostedSearchPolicy(policy);
+  if (!Number.isSafeInteger(deadline) || deadline < 1)
+    throw Error("Invalid hosted search deadline");
+  const limits = hostedSearchLimits(policy);
   const caps: Record<string, number> = {
-    ...HOSTED_SEARCH_LIMITS,
-    dispatch_deadline_seconds: Math.min(60, deadline),
+    ...limits,
+    dispatch_deadline_seconds: Math.min(
+      limits.dispatch_deadline_seconds,
+      deadline,
+    ),
     max_cost_microusd: policy.approvedCostMicrousd,
   };
   if (Object.keys(input).some((key) => !Object.hasOwn(caps, key)))
@@ -95,7 +173,8 @@ export function hostedSearchBudgets(
   if (caps.max_cost_microusd < policy.requestCostMicrousd)
     throw Error("Hosted search budget cannot cover one estimated request");
   // API billing is unavailable. Bound attempts by the operator's conservative
-  // per-request estimate and reserve the complete job grant before dispatch.
+  // per-search-request estimate and reserve the complete job grant before
+  // dispatch. This bounds search attempts, not model or embedding billing.
   const affordable = Math.floor(
     caps.max_cost_microusd / policy.requestCostMicrousd,
   );
@@ -118,5 +197,6 @@ export function hostedSearchConfiguration(
     [`${prefix}_SECRET_NAME`]: policy.secretName,
     [`${prefix}_APPROVED_COST_MICROUSD`]: String(policy.approvedCostMicrousd),
     [`${prefix}_REQUEST_COST_MICROUSD`]: String(policy.requestCostMicrousd),
+    ...hostedResearchConfiguration(policy),
   };
 }

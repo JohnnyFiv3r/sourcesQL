@@ -32,12 +32,33 @@ Existing `exa-search.v1` Flights retain their Auto-only profile, fingerprint and
 limits. Adding these options does not enable a new provider, add deep profiles to
 a v1 Flight or replace an existing Flight definition.
 
-The reviewed hosted search profiles currently allow at most two queries, two
+The legacy hosted search profiles allow at most two queries, two
 provider requests and ten acquired candidates per job. Brave, Serper and Exa v1
 use at most 60 seconds of dispatch time; Exa v2 allows at most 100 seconds. All
-profiles disable page fetching, semantic/model requests and hidden retries. A
+search-only profiles disable page fetching, semantic/model requests and hidden retries. A
 request may lower those limits. Large research needs a separately reviewed
 execution policy; splitting jobs to evade a limit is not supported.
+
+Optional `model` and `embedding` settings select reviewed research policies:
+`exa-research.v3`, `brave-research.v2` or `serper-research.v2`. A language model
+enables `SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL` and `SEM_NORM`; an embedding
+adapter enables `SEM_SCORE`. Either may be enabled independently. Search keys
+alone never enable semantic work, and existing `brave-search.v1` and
+`serper-search.v1` approvals and fingerprints stay unchanged.
+
+Research policies admit up to 32 search queries, 48 search requests, 2,500
+candidates, 40 fetches, 96 model/embedding requests and 100 seconds of dispatch time. With a
+model, they admit up to 40 semantic documents and 16,000 output tokens; either
+semantic adapter admits up to 200,000 input tokens. These are per-job upper bounds,
+not automatic calls or promised coverage. Requests may lower them. Brave/Serper
+research uses the engine's guarded public-page fetcher for `WEB_FETCH`, including
+public-host and redirect checks. Exa uses its Contents fetch path. Excerpts stay
+marked incomplete; semantic processing cannot establish evidence absent from the
+acquired material.
+
+Credential-free tests verify research policy, gateway/Flight agreement and
+synthetic semantic dispatch. Those tests do not extend the dated search-only live
+checks above into qualification of live Brave/Serper semantic research or host UI.
 
 Brave and Serper publication-date filtering is a local post-filter, requiring
 explicit `allow_post_filter` and `undated_policy`. Missing publication dates stay
@@ -66,11 +87,26 @@ Replace the four `brave` flags with `serper` to select Serper. The per-request
 estimate is mandatory and must cover the account's current rate for a search
 returning up to ten results. It is a reservation input, not a reported charge.
 Check your own provider plan before setting it. One USD is 1,000,000 micro-USD.
-The approved per-job and daily reservations may be lowered and cannot exceed
-1,000,000 micro-USD in these profiles.
+The approved per-job bound may be lowered and cannot exceed
+1,000,000 micro-USD in the legacy search-only profiles. Explicit research setup
+supports at most 2,000,000 micro-USD per job; the default stays 50,000. The daily
+field is deprecated metadata in provider-managed usage and does not add a daily
+research gate.
 
-The coordinator reserves the complete job grant before dispatch and does not
-release it merely because a response is lost. The attempt limit is also bounded
+To opt into semantic work, add existing OpenAI Flight secret references to the
+same command:
+
+```sh
+  --openai-model YOUR_APPROVED_MODEL --openai-secret sourcesql_openai \
+  --embedding-model text-embedding-3-small --embedding-secret sourcesql_openai
+```
+
+Both adapters may share one OpenAI secret. That secret must be different from the
+search secret. The generated gateway and Flight settings bind the same research
+policy, model names, limits and secret references. Guided setup creates or reuses
+these named secrets within the reviewed account; see [semantic onboarding](personal-cloud-setup.md#opt-into-model-extraction-and-embedding-ranking).
+
+The worker applies the complete per-job grant before dispatch. The attempt limit is also bounded
 by the job grant divided by the per-request estimate. Provider attempts count
 even if they fail or the remote outcome is unknown. Missing billing data never
 appears as a zero charge. These controls do not cancel or modify a provider's

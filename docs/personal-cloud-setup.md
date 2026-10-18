@@ -35,7 +35,7 @@ This choice is bound to the reviewed plan; changing it requires a new plan.
 
 Begin with `fixture`; no search or model API key is needed for that path.
 Exa, Brave and Serper credentials are only needed when choosing a live provider.
-The optional Exa research profile also needs an OpenAI credential for each
+The optional research profiles also need an OpenAI credential for each
 configured model or embedding adapter. These opt-ins appear in the reviewed plan.
 MotherDuck SQL queries, storage and Flights are separate usage. Provider account
 settings determine whether further usage is available or billed; sourcesQL's
@@ -208,7 +208,8 @@ MOTHERDUCK_TOKEN=your-private-motherduck-token
 
 Those two credentials are enough for fixture provisioning. Add `EXA_API_KEY`,
 `BRAVE_API_KEY` or `SERPER_API_KEY` only for the live provider you choose. Add
-`OPENAI_API_KEY` only when explicitly configuring Exa model or embedding support.
+`OPENAI_API_KEY` only when explicitly configuring model or embedding support with
+Exa, Brave or Serper.
 Create
 this file in an editor or secret manager, keep its directory private, and set
 `chmod 600 local/credentials/.env`.
@@ -446,13 +447,17 @@ boundaries.
 
 ## Opt into model extraction and embedding ranking
 
-Exa stays search-only when its provider object has no `model` or `embedding`.
-Add either object to explicitly select the research v3 profile. The model enables
+Each live provider stays search-only when its provider object has no `model` or
+`embedding`. Add either object to explicitly select `exa-research.v3`,
+`brave-research.v2` or `serper-research.v2`. The model enables
 `SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL` and `SEM_NORM`; the embedding adapter
 enables `SEM_SCORE`. Each configured adapter operates only when the authored SQL
 calls it. Embedding-only setup does not advertise extraction or matching.
-This setup currently supports these adapters with Exa; Brave and Serper retain
-their hosted search-only profiles.
+These semantic adapters are independent of the search provider. Research policies
+also enable `WEB_FETCH`: Brave and Serper use the engine's guarded public-page
+fetcher, while Exa uses its reviewed Contents fetch path. Missing information in
+an excerpt remains unknown until acquired evidence supports it; semantic processing
+does not turn an excerpt into full-document evidence.
 
 For example, replace the provider object with:
 
@@ -472,6 +477,31 @@ For example, replace the provider object with:
 }
 ```
 
+To use Brave or Serper, change `name` and `secret_name` and add the mandatory
+`request_cost_microusd` estimate for that search provider. The `model` and
+`embedding` objects stay the same:
+
+```json
+{
+  "name": "brave",
+  "secret_name": "sourcesql_brave",
+  "approved_cost_microusd": 50000,
+  "request_cost_microusd": 5000,
+  "model": {
+    "name": "gpt-4.1-mini",
+    "secret_name": "sourcesql_openai"
+  },
+  "embedding": {
+    "name": "text-embedding-3-small",
+    "secret_name": "sourcesql_openai"
+  }
+}
+```
+
+The 5,000 micro-USD request estimate is illustrative; choose a conservative
+estimate using the adopter's own current search plan. It is not measured billing.
+For Serper use `"name": "serper"` and its own named search secret.
+
 Choose a model available to your OpenAI account and qualify its output before
 relying on research results. The example is configuration, not a quality claim.
 An optional model `reasoning_effort` accepts `low`, `medium`, `high`, `xhigh` or
@@ -489,7 +519,11 @@ reuse choices. Keep setup receipts: interrupted creation reconciles the same
 named secret rather than silently replacing it.
 
 The plan lists OpenAI as an additional processor, each enabled operator, model
-names and configured per-job spending bounds. Semantic calls send the SQL-selected
+names, the canonical policy and its fingerprint, secret references and configured
+per-job execution limits. For Brave and Serper the displayed search limits also
+reflect how many estimated search requests fit the selected spending grant; the
+policy fingerprint still binds the complete reviewed research policy. Changes
+require a new reviewed plan digest. Semantic calls send the SQL-selected
 source text to OpenAI. Setup itself runs no search, model or embedding requests;
 account signup, payment methods and paid top-ups stay explicit user decisions.
 
@@ -500,7 +534,7 @@ deliberately reviewed larger per-job bound. Setup never raises execution bounds
 to fit a query. Changing adapters or per-job limits requires a new plan;
 completed setup receipts do not upgrade an existing deployment in place.
 
-The source and credential-free provisioning tests verify the v3 policy,
+The source and credential-free provisioning tests verify all three research policies,
 fingerprints, secret bindings, recovery and Preview environment. A fresh hosted
 deployment and live model research remain separate acceptance checks. Ordinary
 `verify` checks MCP capabilities without model calls; `--run-fixture` remains a
@@ -509,6 +543,8 @@ provider-free execution check.
 The lower-level `hosted/setup.mjs` exposes the same opt-in as
 `--openai-model MODEL --openai-secret NAME` and
 `--embedding-model text-embedding-3-small --embedding-secret NAME`, alongside
-`--exa-secret NAME`. It only binds existing secrets and leaves submission
+the selected `--exa-secret NAME`, `--brave-secret NAME` or `--serper-secret NAME`.
+Brave and Serper also require their `--PROVIDER-request-cost-microusd` estimate.
+It only binds existing secrets and leaves submission
 disabled. Use the guided personal-cloud plan for secret creation and account
 scoping.

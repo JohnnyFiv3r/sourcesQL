@@ -133,13 +133,21 @@ def test_hosted_query_owns_one_binding_pass_and_sandbox_without_explain(tmp_path
     ]
 
 
-def test_binding_failure_precedes_hosted_hydration_and_provider_effects(tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["exa", "brave", "serper"])
+def test_binding_failure_precedes_hosted_hydration_and_provider_effects(
+    tmp_path, monkeypatch, provider
+):
     sessions, events = tracked_execution(monkeypatch)
+    prefix = "SOURCESQL_" + provider.upper()
     environment = {
-        "SOURCESQL_ALLOW_LIVE_EXA": "1",
-        "SOURCESQL_EXA_POLICY_VERSION": "exa-research.v3",
-        "SOURCESQL_EXA_SECRET_NAME": "sourcesql_exa",
-        "sourcesql_exa_EXA_API_KEY": "SYNTHETIC-EXA-KEY",
+        "SOURCESQL_ALLOW_LIVE_" + provider.upper(): "1",
+        prefix + "_POLICY_VERSION": provider + "-research.v3"
+        if provider == "exa"
+        else provider + "-research.v2",
+        prefix + "_SECRET_NAME": "sourcesql_" + provider,
+        prefix + "_APPROVED_COST_MICROUSD": "1000000",
+        prefix + "_REQUEST_COST_MICROUSD": "5000",
+        "sourcesql_" + provider + "_" + provider.upper() + "_API_KEY": "SYNTHETIC-SEARCH-KEY",
         "SOURCESQL_OPENAI_EMBEDDING_MODEL": "text-embedding-3-small",
         "SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME": "sourcesql_openai",
         "sourcesql_openai_OPENAI_API_KEY": "SYNTHETIC-MODEL-KEY",
@@ -151,9 +159,9 @@ def test_binding_failure_precedes_hosted_hydration_and_provider_effects(tmp_path
         "query": "WITH candidate AS (SELECT 'not_a_number' AS content), "
         "scored AS (SELECT content,SEM_SCORE(content,'criterion') AS score FROM candidate) "
         "SELECT CAST(content AS BIGINT) AS count,score FROM scored",
-        "profile": "exa",
+        "profile": provider,
         "source_mode": "allow_excerpt",
-        "budgets": {**settings["descriptor"]["limits"], "max_cost_microusd": 50_000},
+        "budgets": {**settings["descriptor"]["limits"], "max_cost_microusd": 1_000_000},
     }
 
     def forbidden(*args, **kwargs):
