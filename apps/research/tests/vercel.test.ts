@@ -709,6 +709,10 @@ const historicalBundles = [
     filename: "research-f2cf065f35e39de4.html",
     sha256: "f2cf065f35e39de4a492634732fb7c32381d64451b2531302724721fd6ca4948",
   },
+  {
+    filename: "research-cf775e01f999f8db.html",
+    sha256: "cf775e01f999f8db08d9084d93f664a5bef6f39045bbd6ec58e2c9f5f5c7baa7",
+  },
 ] as const;
 
 test("serverless assets contain only current and explicitly retained public widgets plus declared synthetic files", async () => {

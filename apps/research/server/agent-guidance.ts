@@ -23,6 +23,9 @@ export const SOURCESQL_SEMANTIC_RELIABILITY_GUIDANCE =
 export const SOURCESQL_RECOVERY_GUIDANCE =
   "Keep recovery inside sourcesQL. Do not fall back to ChatGPT web search, browser research or another research provider for a sourcesQL task unless the user explicitly approves that fallback, including after validation errors, timeouts, provider failures or capacity blocks. Inspect the actual returned error code, job state and available receipts before choosing a recovery step. Distinguish invalid_output, which reports failed output validation such as the extraction item limit, from a timeout or provider failure; a timeout does not prove invalid output or that remote work did not run. Preserve completed result_id handles and the failed or blocked job_id. When that job_id exists, call open_research with that exact job_id to surface the app's returned failure or capacity status; do not replace it with invented rows or a different job. If no job handle was returned, report the exact available error without fabricating a widget or identifier. For a confirmed validation failure with no uncertain remote work, correct the admitted SQL, schema or bounded extraction scope using saved input.sources, and continue only within the existing approved coverage and budget. A timeout or provider failure requires inspection of status and receipts before any safe, authorized retry; never assume a retry is free. For remote_outcome_unknown or submission_unknown, do not automatically replay the failed query, restart its batch, submit a new request_id or switch tools. Check the existing job with its original handle, retain uncertain work and completed batches, and stop for explicit recovery authorization if its outcome cannot be established. Report what completed, what remains blocked and the exact returned reason; do not present blocked or partial research as a completed final table.";
 
+export const SOURCESQL_IDENTIFIER_GUIDANCE =
+  "Request and mutation IDs are internal bookkeeping, not a user-facing research step. When a tool requires a new UUID, choose a fresh valid UUID directly in its arguments; do not invoke Python, code execution, web search or a separate UUID-generator tool just to make an ID, and do not narrate its creation. Use IDs returned by sourcesQL where provided. Keep every existing request, job and mutation ID unchanged when inspecting or recovering that operation; never substitute a fresh ID for uncertain work.";
+
 export const SOURCESQL_SEARCH_EXAMPLE = `SELECT title AS source_title, url AS source_url, content AS source_excerpt
 FROM WEB_SEARCH(
   $q1,
@@ -37,6 +40,8 @@ FROM WEB_SEARCH(
 export const SOURCESQL_SERVER_INSTRUCTIONS = `sourcesQL researches the web with SQL and preserves cited, typed results in an interactive workspace. Use sourcesQL for user-requested web research that needs a structured table, comparisons, entity discovery, evidence-backed fields, or follow-up research on saved results. Use sourcesql_query and its configured search provider for discovery requested through sourcesQL.
 
 Research tool map: sourcesql_capabilities describes available syntax, profiles and budgets; sourcesql_explain checks canonical admission without search/model dispatch (asynchronous hosted validation consumes Flight capacity); sourcesql_query executes research; sourcesql_job_status reads hosted progress; sourcesql_read_result and sourcesql_inspect_evidence inspect saved results; open_research presents the final table. The research entrypoint is sourcesql_query, with WEB_SEARCH in its SQL, after inspecting sourcesql_capabilities. For a saved job blocked by capacity, open_research with its job_id displays the app capacity notice; the model can leave the explanation to that widget. Capacity status is not a final research table, and reset periods come from the returned capacity record.
+
+${SOURCESQL_IDENTIFIER_GUIDANCE}
 
 Choose capabilities before execution. Call sourcesql_capabilities at the start of a new research task and after a configuration change. Inspect the configured profiles, search types, operators, content support, model availability and budgets. The SQL grammar's operator list is not a promise that every profile can execute every operator. Select a configured live profile explicitly in sourcesql_query; omitting profile selects the safe synthetic fixture default. Never present fixture output as live research. Credentials, permission and a positive approved provider budget must already be configured. Do not request secrets in chat or increase budgets to bypass a refusal.
 
@@ -103,7 +108,7 @@ export const SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS = {
   query:
     "One admitted DuckDB-style SELECT or nonrecursive WITH. Use WEB_SEARCH for discovery, supported WEB_FETCH/SEM_* only after capability discovery, explicit snake_case aliases and $name value parameters.",
   request_id:
-    "New UUID for genuinely new hosted work. Reuse this exact UUID and identical arguments to recover a lost submission response; a different UUID starts different work.",
+    "New UUID for genuinely new hosted work. Choose it directly in the arguments without a separate code/UUID tool or narration. Reuse this exact UUID and identical arguments to recover a lost submission response; a different UUID starts different work.",
   profile:
     "Explicit configured profile name returned by sourcesql_capabilities. Choose a supported live Auto profile for broad retrieval; deep profiles are selective escalations. Fixture is the safe synthetic default and is not live research.",
   source_mode:

@@ -8,7 +8,8 @@ and [release notes](docs/releases/0.2.3.md).
 
 ## Unreleased research completion work
 
-Advisory SQL feedback is implemented locally. Each new query records an
+Advisory SQL feedback is implemented and deployed on the existing Preview.
+Each new query records an
 AST-derived description independently of optional intended answer metadata,
 alongside exact SQL/parameter/input-pin hashes, missing intended columns and
 full-result row/NULL counts. Descriptions retain scoped CTEs, joins, aggregates,
@@ -24,7 +25,16 @@ window; full feedback remains retained in engine storage and result inspection.
 Offline qualification passes 846 Python tests (44 opt-in cases skipped), 186
 Flight tests and 408 app/MCP tests, plus Python typing and the Node 24 build.
 Desktop and mobile headless checks cover dialog navigation, focus, escaping and
-read-only behavior. Fresh ChatGPT acceptance is still outstanding.
+read-only behavior. A user-run fresh ChatGPT mobile research pass subsequently
+displayed the requested qualified answer table successfully. This is acceptance
+of that research/presentation path, not a general factual-quality benchmark.
+Its expansion was blocked by the configured monthly search/model reservation
+allowance; it did not establish an expansion execution defect. The user also
+reported that ChatGPT's Always allow button leaves the approval card unchanged,
+while Allow once starts the tool. A read-only settings inspection found the
+plugin-specific permission already set to Allow all actions. Persistent host
+approval remains unresolved; tool annotation or connection changes are not a
+verified fix.
 
 The agent workflow now explicitly requires reviewing actual saved rows and
 supporting evidence, interpreting findings against the requested row unit and
@@ -34,8 +44,23 @@ answer from the conversation. Query and render descriptions repeat this handoff
 so it is available through tool discovery as well as server instructions.
 Missing cells remain valid in honest partial answers, and explicit reopening
 does not trigger new research or transformations. This instruction change is
-local and still needs fresh-host research acceptance; it introduces no new
-validation gates or provider calls.
+deployed and has the above bounded fresh-host research acceptance; it introduces
+no new validation gates or provider calls.
+
+Agent instructions now keep request/mutation IDs internal and avoid separate
+code-tool calls solely to generate UUIDs. Existing IDs and idempotent recovery
+contracts remain unchanged. Host-generated activity captions and persistent
+approval controls remain outside the widget's styling and authorization policy.
+
+Pending expansion/refresh status now uses a compact animated overlay alongside
+other notifications instead of a row inside the table. It no longer changes
+the frame, table viewport or page sizing. Check, cancellation, error recovery
+and cancelled-status dismissal remain available. Isolated synthetic browser
+checks pass at desktop and 420/320 px mobile widths, including reduced motion,
+stable table/pagination geometry and selected-cell toolbar clearance. This UI
+change passes the Node 24 production build and all 412 app/MCP tests; the new
+immutable widget also passes archive/upload and package-resource checks. It
+still needs fresh ChatGPT acceptance.
 
 The render tool now returns a concise answer-surface handoff alongside saved
 data. Its tool-local description requires the requested row unit and answer

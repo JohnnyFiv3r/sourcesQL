@@ -34,7 +34,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowLeft,
-  LoaderCircle,
   ListTree,
   ListChecks,
   FileText,
@@ -61,6 +60,7 @@ import {
 } from "./research-links.js";
 import "./styles.css";
 import { FeedbackToast } from "./feedback-toast.js";
+import { ResearchStatusOverlay } from "./research-status-overlay.js";
 import { ResearchTreePanel } from "./research-tree-panel.js";
 import { ResearchJobStatusPanel } from "./job-status-panel.js";
 import {
@@ -1251,8 +1251,6 @@ function Workspace() {
         (footer?.offsetHeight ?? 0) -
         parseFloat(padding.paddingTop) -
         parseFloat(padding.paddingBottom) -
-        (viewport.querySelector<HTMLElement>(".research-status")
-          ?.offsetHeight ?? 0) -
         (viewport.querySelector<HTMLElement>(".refresh-context")
           ?.offsetHeight ?? 0);
       const rowHeight = firstRow.offsetHeight;
@@ -2011,11 +2009,56 @@ function Workspace() {
         {/* Mount the view toggle here only when a visualization is available. */}
       </header>
       <div className="workspace-content">
-        <FeedbackToast
-          message={feedbackMessage}
-          kind={feedbackKind}
-          onDismiss={dismissFeedback}
-        />
+        <div className="workspace-notifications">
+          <FeedbackToast
+            message={feedbackMessage}
+            kind={feedbackKind}
+            onDismiss={dismissFeedback}
+          />
+          <ResearchStatusOverlay
+            key={view.snapshot.id}
+            status={
+              pending.length > 0 ||
+              latestRequest?.status === "failed" ||
+              showCancelledRequest ||
+              pollError
+                ? {
+                    message:
+                      pollError ||
+                      (pending.length
+                        ? "Waiting for results…"
+                        : showCancelledRequest
+                          ? "Research cancelled. No results were added."
+                          : latestRequest?.error ||
+                            "Research could not finish."),
+                    kind:
+                      pollError || (!pending.length && !showCancelledRequest)
+                        ? "error"
+                        : pending.length
+                          ? "pending"
+                          : "cancelled",
+                    pendingRequestIds: pending.map((request) => request.id),
+                    canCheck: Boolean(
+                      pending.length ||
+                      pollError ||
+                      latestRequest?.status === "failed",
+                    ),
+                    canDismiss: Boolean(
+                      !pending.length && showCancelledRequest && !pollError,
+                    ),
+                  }
+                : undefined
+            }
+            busy={busy}
+            onCheck={() => void perform(checkResearch)}
+            onCancel={(requestId) =>
+              void perform(() => cancelResearch(requestId))
+            }
+            onDismiss={() => {
+              if (latestRequest) setDismissedRequestStatus(latestRequest.id);
+            }}
+          />
+        </div>
         <section
           className="records-surface"
           aria-label="Research results"
@@ -2027,56 +2070,6 @@ function Workspace() {
             tabIndex={0}
             aria-label="Scrollable results table"
           >
-            {(pending.length > 0 ||
-              latestRequest?.status === "failed" ||
-              showCancelledRequest ||
-              pollError) && (
-              <div className="research-status" role="status">
-                {pending.length > 0 && !pollError && (
-                  <LoaderCircle className="research-spinner" size={14} />
-                )}
-                <span>
-                  {pollError ||
-                    (pending.length
-                      ? "Waiting for agent results…"
-                      : showCancelledRequest
-                        ? "Research cancelled. No results were added."
-                        : latestRequest?.error)}
-                </span>
-                {(pending.length > 0 ||
-                  pollError ||
-                  latestRequest?.status === "failed") && (
-                  <Button
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => void perform(checkResearch)}
-                  >
-                    Check
-                  </Button>
-                )}
-                {pending.map((r) => (
-                  <Button
-                    key={r.id}
-                    variant="ghost"
-                    aria-label="Cancel research request"
-                    title="Cancel this request and stop accepting its results"
-                    disabled={busy}
-                    onClick={() => void perform(() => cancelResearch(r.id))}
-                  >
-                    Cancel research
-                  </Button>
-                ))}
-                {!pending.length && showCancelledRequest && !pollError && (
-                  <Button
-                    variant="ghost"
-                    aria-label="Dismiss cancelled research status"
-                    onClick={() => setDismissedRequestStatus(latestRequest.id)}
-                  >
-                    <X />
-                  </Button>
-                )}
-              </div>
-            )}
             {view.refresh && (
               <div className="refresh-context">
                 <span>
