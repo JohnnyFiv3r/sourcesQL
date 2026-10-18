@@ -426,6 +426,15 @@ export function boundedPreview(snapshot: Snapshot, offset = 0): Snapshot {
     rows: snapshot.rows.slice(offset, offset + count),
     ...(snapshot.dataRef ? { previewOffset: offset } : {}),
   };
+  if (
+    preview.queryFeedback !== undefined &&
+    new TextEncoder().encode(JSON.stringify(preview)).byteLength > 195000
+  ) {
+    // A descriptive sidecar must not displace otherwise valid saved cells.
+    // Canonical feedback stays in storage and sourcesql_read_result.
+    const { queryFeedback: _feedback, ...cells } = preview;
+    preview = cells;
+  }
   while (
     new TextEncoder().encode(JSON.stringify(preview)).byteLength > 195000 &&
     count > 1

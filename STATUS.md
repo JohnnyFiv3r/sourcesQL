@@ -19,8 +19,10 @@ through query/result/evidence tools, and Table options opens a read-only
 explanation without another model call or Flight. Compatibility metadata stays
 outside legacy snapshot wire fields. Local, hosted and user acceptance evidence
 are recorded separately; see [query feedback](docs/query-feedback.md).
+Large valid rows take priority over optional explanation metadata in the app
+window; full feedback remains retained in engine storage and result inspection.
 Offline qualification passes 846 Python tests (44 opt-in cases skipped), 186
-Flight tests and 407 app/MCP tests, plus Python typing and the Node 24 build.
+Flight tests and 408 app/MCP tests, plus Python typing and the Node 24 build.
 Desktop and mobile headless checks cover dialog navigation, focus, escaping and
 read-only behavior. Fresh ChatGPT acceptance is still outstanding.
 

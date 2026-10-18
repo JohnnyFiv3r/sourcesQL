@@ -5,7 +5,7 @@ export function QueryFeedbackPanel({ feedback }: { feedback?: QueryFeedback }) {
   if (!feedback)
     return (
       <div className="query-feedback">
-        <p>No query description was recorded for this saved table.</p>
+        <p>A query description is not available in this view.</p>
         <p className="muted-note">
           You can still explore its results and sources.
         </p>

@@ -53,6 +53,8 @@ It makes no host or provider call. Older saved tables show an unavailable state;
 reopening does not manufacture a description or rerun their query. Wire metadata
 is separate from the stable snapshot fields so cached widgets can keep displaying
 their original cells.
+When explanation metadata would crowd the app's bounded data window, the app
+omits that optional metadata first. It remains available through result inspection.
 
 Normal query execution generates feedback in the same operation, with no extra
 model call, provider request or Flight. Explicit hosted preflight still consumes

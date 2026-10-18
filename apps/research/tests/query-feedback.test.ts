@@ -8,6 +8,7 @@ import { createServer } from "../server/mcp.js";
 import { ResearchStore } from "../server/store.js";
 import {
   resultSnapshot,
+  boundedPreview,
   resolveResult,
   type EngineResult,
   type ResearchEngine,
@@ -153,6 +154,57 @@ test("feedback schema accepts missing requested columns but rejects contradictor
       },
     }).success,
     false,
+  );
+});
+
+test("advisory metadata never crowds a valid large row out of the app window", () => {
+  const columns = Array.from({ length: 25 }, (_, index) => ({
+    key: `field_${index}`,
+    label: `Field ${index}`,
+    logicalType: "VARCHAR",
+    nullable: false,
+  }));
+  const snapshot = {
+    ...view().snapshot,
+    columns,
+    rowCount: 1,
+    rows: [
+      {
+        id: "large_row",
+        values: Object.fromEntries(
+          columns.map((column) => [column.key, "x".repeat(7600)]),
+        ),
+        sourceUrl: null,
+        evidence: {},
+        verificationNote: "",
+      },
+    ],
+  };
+  const largeFeedback = {
+    ...feedback,
+    description: {
+      summary: "Large but bounded advisory description",
+      steps: Array.from({ length: 10 }, (_, index) => ({
+        scope: "main",
+        kind: "projection",
+        text: `Expression ${index}: ` + "d".repeat(900),
+        sql: "s".repeat(900),
+      })),
+      omitted_steps: 0,
+    },
+  };
+  snapshot.queryFeedback = queryFeedbackSchema.parse(largeFeedback);
+  assert.doesNotThrow(() =>
+    boundedPreview({ ...snapshot, queryFeedback: undefined }),
+  );
+  const preview = boundedPreview(snapshot);
+  assert.equal(preview.rows.length, 1);
+  assert.deepEqual(preview.rows[0].values, snapshot.rows[0].values);
+  assert.equal(preview.queryFeedback, undefined);
+  assert.deepEqual(
+    snapshot.queryFeedback,
+    largeFeedback,
+    "Canonical feedback must stay retained",
   );
 });
 

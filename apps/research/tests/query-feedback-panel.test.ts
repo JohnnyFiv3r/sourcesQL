@@ -64,7 +64,7 @@ test("query review contrasts the recorded answer with actual document rows, with
 
 test("old tables and unavailable descriptions remain usable without an invented explanation", () => {
   const old = render();
-  assert.match(old, /No query description was recorded/);
+  assert.match(old, /A query description is not available in this view/);
   assert.match(old, /You can still explore its results and sources/);
   assert.doesNotMatch(old, /Intended answer|Query identifiers|Actual query/);
 
