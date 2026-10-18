@@ -60,6 +60,7 @@ import {
   type ResearchCheckpoint,
 } from "./checkpoints.js";
 import { researchJobView } from "../src/job-view.js";
+import { encodeResearchView, type ResearchViewWire } from "../src/view-wire.js";
 import {
   safeExecutionError,
   safeRunErrors,
@@ -184,7 +185,7 @@ export function createServer(
       },
       options.access,
     );
-  const presentation = (view: ResearchView, offset = 0): ResearchView => {
+  const presentation = (view: ResearchView, offset = 0): ResearchViewWire => {
     authorizeSnapshot(
       {
         ...view.snapshot,
@@ -197,7 +198,7 @@ export function createServer(
     const snapshot = boundedPreview(view.snapshot, offset);
     const rows = snapshot.rows;
     const total = view.snapshot.rows.length;
-    return {
+    return encodeResearchView({
       ...view,
       snapshots: view.snapshots.filter(
         (s) =>
@@ -221,7 +222,7 @@ export function createServer(
         total,
         nextOffset: offset + rows.length < total ? offset + rows.length : null,
       },
-    };
+    });
   };
   const viewResult = (fullView: ResearchView, offset = 0): CallToolResult => {
     const view = presentation(fullView, offset);
@@ -446,6 +447,19 @@ export function createServer(
             ? (authorizeSnapshot(snapshot, options.access),
               await store.import(snapshot))
             : await store.open(snapshot_id);
+        if (
+          !result_ref &&
+          !snapshot &&
+          !snapshot_id &&
+          full.snapshots.filter(
+            (saved) =>
+              options.access?.allowPrivateDisclosure !== false ||
+              !saved.dataClassification?.startsWith("private_"),
+          ).length !== 1
+        )
+          throw new Error(
+            "Choose the saved research explicitly with snapshot_id. Recovery cannot select a default table when several tables are available.",
+          );
         const start = row_id
           ? full.snapshot.rows.findIndex((row) => row.id === row_id)
           : (offset ?? 0);
@@ -2115,17 +2129,35 @@ export function createServer(
       {
         description:
           "Recover a bounded page of successful source acquisitions retained by a stopped or partial run. No search or model calls. Hosted recovery can start a provider-free Flight and consume configured Flight capacity. The result is explicitly incomplete input data; author corrected SQL over it and do not present raw recovery as finished research. Poll any pending job and repeat the same arguments to recover its result.",
-        inputSchema: z.object({ run_id: id, offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(1000).default(1000) }).strict(),
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        inputSchema: z
+          .object({
+            run_id: id,
+            offset: z.number().int().nonnegative().default(0),
+            limit: z.number().int().min(1).max(1000).default(1000),
+          })
+          .strict(),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
       },
-      (args) => safe(async () => {
-        authorizeRunReceipt(await engine.call("run_status", { run_id: args.run_id }));
-        const result = await engine.call("recover_run", args);
-        if (Object.hasOwn(result, "job_id")) return jobResult(result);
-        const page = await engine.call<EngineResult>("read_result", { result_id: result.result_id, offset: 0, limit: 1 });
-        authorizeSnapshot(resultSnapshotForAccess(page), options.access);
-        return engineResult(result);
-      }),
+      (args) =>
+        safe(async () => {
+          authorizeRunReceipt(
+            await engine.call("run_status", { run_id: args.run_id }),
+          );
+          const result = await engine.call("recover_run", args);
+          if (Object.hasOwn(result, "job_id")) return jobResult(result);
+          const page = await engine.call<EngineResult>("read_result", {
+            result_id: result.result_id,
+            offset: 0,
+            limit: 1,
+          });
+          authorizeSnapshot(resultSnapshotForAccess(page), options.access);
+          return engineResult(result);
+        }),
     );
     tools.registerTool(
       "sourcesql_resume_run",

@@ -12,11 +12,8 @@ import {
   type EngineResult,
   type ResearchEngine,
 } from "../server/engine.js";
-import {
-  effectiveValue,
-  snapshotSchema,
-  type ResearchView,
-} from "../src/schema.js";
+import { effectiveValue, snapshotSchema } from "../src/schema.js";
+import { decodeResearchView } from "../src/view-wire.js";
 
 const reference = {
   result_id: "wq_canonical_diagnostics",
@@ -236,13 +233,15 @@ test("actual fixture extraction with toString alias opens, corrects and exports/
       profile: "fixture",
       request_id: randomUUID(),
     });
-    const opened = (await call(origin.client, "open_research", {
-      result_ref: {
-        result_id: result.result_id,
-        snapshot_id: "alias_roundtrip",
-        title: "Quoted alias fixture",
-      },
-    })) as unknown as ResearchView;
+    const opened = decodeResearchView(
+      await call(origin.client, "open_research", {
+        result_ref: {
+          result_id: result.result_id,
+          snapshot_id: "alias_roundtrip",
+          title: "Quoted alias fixture",
+        },
+      }),
+    );
     const row = opened.snapshot.rows.find(
       (item) => item.values[alias] === "Aurora Campus",
     )!;
@@ -250,14 +249,16 @@ test("actual fixture extraction with toString alias opens, corrects and exports/
     assert.ok(row.evidence[alias].length > 0);
     assert.ok(row.cellSources?.[alias].length);
     assert.equal(row.cellDiagnostics?.[alias][0].status, "supported_text");
-    const corrected = (await call(origin.client, "amend_observation", {
-      snapshot_id: opened.snapshot.id,
-      row_id: row.id,
-      field: "toString",
-      value: "Reviewed Aurora Campus",
-      expected_revision: opened.revision,
-      mutation_id: randomUUID(),
-    })) as unknown as ResearchView;
+    const corrected = decodeResearchView(
+      await call(origin.client, "amend_observation", {
+        snapshot_id: opened.snapshot.id,
+        row_id: row.id,
+        field: "toString",
+        value: "Reviewed Aurora Campus",
+        expected_revision: opened.revision,
+        mutation_id: randomUUID(),
+      }),
+    );
     assert.equal(
       effectiveValue(
         corrected,

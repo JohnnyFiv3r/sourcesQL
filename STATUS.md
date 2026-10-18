@@ -46,6 +46,17 @@ added to the checksum-pinned archive and upload list. This repairs that missing
 resource without replacing its contents or changing saved research. Actual host
 rendering after the repair remains an acceptance check.
 
+The restored mobile widget then exposed a second compatibility problem: its
+strict snapshot parser predates quality metadata and per-cell diagnostics. The
+gateway now puts those additions in versioned presentation metadata outside the
+stable snapshot layout. Current widgets validate and restore them; older widgets
+can still show the original cells. Canonical storage, imports and exports retain
+strict validation and complete metadata. Bootstrap recovery preserves the exact
+table ID, makes at most one automatic saved-state read and rejects another
+table. Ambiguous calls without a saved identity no longer choose a default
+sample. Recorded-data checks reproduce the old failure and exercise same-table
+recovery without provider work. All 399 app tests and the production build pass; both the archived and current widgets render the recorded saved table, and six isolated startup/recovery cases pass. Actual mobile acceptance remains separate.
+
 PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
 The next local implementation covers canonical hosted preflight, bounded durable
 stage journals, explicit restart continuation/source recovery, query-hit

@@ -70,6 +70,12 @@ import {
 import "./job-status-panel.css";
 import { HostedViewReconciliation } from "./view-reconciliation.js";
 import { inlineHeightLimitFor } from "./host-sizing.js";
+import {
+  SAVED_TABLE_LOAD_ERROR,
+  SAVED_TABLE_TARGET_MISSING,
+  SavedTableRecovery,
+} from "./saved-table-recovery.js";
+import { decodeResearchView } from "./view-wire.js";
 import { readNavigation } from "./navigation-read.js";
 import {
   UpdateReviewPanel,
@@ -101,13 +107,19 @@ function extractView(result: CallToolResult): ResearchView {
         .map((c) => c.text)
         .join("\n"),
     );
-  const payload = result.structuredContent as ResearchView | undefined;
-  if (!payload?.snapshot || !Array.isArray(payload.amendments))
-    throw new Error(
-      "The host returned an unexpected result. Reopen the research tool.",
+  return decodeResearchView(result.structuredContent);
+}
+async function readSavedResearch(snapshotId: string): Promise<ResearchView> {
+  try {
+    return extractView(
+      await app.callServerTool({
+        name: "research_status",
+        arguments: { snapshot_id: snapshotId },
+      }),
     );
-  snapshotSchema.parse(payload.snapshot);
-  return payload;
+  } catch {
+    throw new Error(SAVED_TABLE_LOAD_ERROR);
+  }
 }
 function needsReview(row: Row): boolean {
   return /unverified|failed|unavailable|conflict/i.test(
@@ -125,6 +137,8 @@ function isSourceUrl(value: unknown): value is string {
 }
 
 function Workspace() {
+  const bootstrapRecovery = useRef(new SavedTableRecovery());
+  const [recoverySnapshotId, setRecoverySnapshotId] = useState<string>();
   const [view, setView] = useState<ResearchView>();
   const [jobView, setJobView] = useState<ResearchJobView>();
   const [ready, setReady] = useState(false);
@@ -258,6 +272,7 @@ function Workspace() {
   }
 
   function accept(next: ResearchView, preserveWindow = true) {
+    bootstrapRecovery.current.markAccepted();
     setJobView(undefined);
     const previous = viewRef.current;
     if (
@@ -387,7 +402,30 @@ function Workspace() {
       onError: reportError,
     });
     reconciliation.current = reconciler;
+    let connected = false;
+    const retryBootstrap = () => {
+      if (!connected || !app.getHostCapabilities()?.serverTools) return;
+      void bootstrapRecovery.current.retry(readSavedResearch).then(
+        (next) => {
+          if (next && !bootstrapRecovery.current.hasAccepted) {
+            accept(next, false);
+            setError("");
+          }
+        },
+        () => {
+          if (!bootstrapRecovery.current.hasAccepted)
+            setError(SAVED_TABLE_LOAD_ERROR);
+        },
+      );
+    };
+    app.ontoolinput = ({ arguments: input }) => {
+      bootstrapRecovery.current.captureInput(input);
+      setRecoverySnapshotId(bootstrapRecovery.current.snapshotId);
+      retryBootstrap();
+    };
     app.ontoolresult = (result) => {
+      bootstrapRecovery.current.captureResult(result);
+      setRecoverySnapshotId(bootstrapRecovery.current.snapshotId);
       try {
         if (
           result.structuredContent &&
@@ -398,14 +436,22 @@ function Workspace() {
           if (result.isError)
             throw new Error("Unable to read the saved research job.");
           const job = researchJobViewSchema.parse(result.structuredContent);
+          bootstrapRecovery.current.markAccepted();
           reconciler.invalidate();
           setJobView(job);
           setError("");
           return;
         }
-        if (reconciler.hostResult(extractView(result))) setError("");
+        const next = extractView(result);
+        if (!bootstrapRecovery.current.hasAccepted)
+          bootstrapRecovery.current.assertTarget(next);
+        if (reconciler.hostResult(next)) setError("");
       } catch (e) {
-        reportError(e);
+        if (!viewRef.current && !bootstrapRecovery.current.hasAccepted) {
+          bootstrapRecovery.current.markFailed();
+          setError(SAVED_TABLE_LOAD_ERROR);
+          retryBootstrap();
+        } else reportError(e);
       }
     };
     app.onhostcontextchanged = (context) => {
@@ -421,6 +467,7 @@ function Workspace() {
     void app
       .connect()
       .then(() => {
+        connected = true;
         setReady(true);
         const context = app.getHostContext();
         updateLayoutContext(context);
@@ -430,11 +477,13 @@ function Workspace() {
           !!app.getHostCapabilities()?.serverTools &&
             context?.researchPreview !== true,
         );
+        retryBootstrap();
       })
       .catch((e) =>
         setError(`Unable to connect to the MCP Apps host: ${String(e)}`),
       );
     return () => {
+      connected = false;
       reconciler.dispose();
       window.removeEventListener("openai:set_globals", updateAgentMessaging);
       window.removeEventListener("focus", updateAgentMessaging);
@@ -1461,10 +1510,22 @@ function Workspace() {
         <h1>Opening your research</h1>
         <p>Connecting to the MCP Apps host…</p>
         {error && <p role="alert">{error}</p>}
-        {ready && (
-          <Button onClick={() => void perform(() => open())}>
+        {ready && recoverySnapshotId && (
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void perform(async () => {
+                const next =
+                  await bootstrapRecovery.current.readSaved(readSavedResearch);
+                accept(next, false);
+              })
+            }
+          >
             Load saved research
           </Button>
+        )}
+        {ready && !recoverySnapshotId && error && (
+          <p>{SAVED_TABLE_TARGET_MISSING}</p>
         )}
       </main>
     );

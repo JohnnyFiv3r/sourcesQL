@@ -61,6 +61,20 @@ resource request can also reflect a host cache; it does not prove the host
 skipped rendering. Confirm display in the affected host and device before
 calling the problem fixed.
 
+Retain previously published widget bundles under their original content hashes
+when deploying a new UI. The Vercel build and upload allowlists enumerate those
+public archives; the HTTP regression reads each archived URI and checks both
+protocol success and exact bytes. A local `.ui-builds` copy alone does not put
+that file in a hosted deployment.
+
+Research views keep the published snapshot layout compatible with older
+widgets. New quality and cell-diagnostic fields travel in additive
+`presentationV1` metadata bound to the table and canonical row IDs; current
+widgets validate that metadata before displaying it. Stored snapshots and
+exports keep their complete canonical fields. Recovery must reopen the exact
+saved identity. If several tables are visible, `open_research` without a target
+returns an error rather than substituting a sample.
+
 ## Qualified scope and current limits
 
 The gateway-to-Postgres-to-Flight lifecycle has been exercised, including exact
