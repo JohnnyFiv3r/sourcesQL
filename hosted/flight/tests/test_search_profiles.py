@@ -635,7 +635,9 @@ def test_research_search_fetch_semantics_and_embeddings_use_selected_adapters(
             query="SELECT SEM_EXTRACT(content,'name of campus') AS name FROM input.saved WHERE content_basis='document'",
             inputs={"saved": {"result_id": result["result_id"], "view": "sources"}},
         )
-        reused_request["budgets"].update(max_search_queries=0, max_search_requests=0, max_fetches=0)
+        reused_request["budgets"].update(
+            max_search_queries=0, max_search_requests=0, max_fetches=0, max_cost_microusd=1000
+        )
         policy.validate_request(reused_request, settings, env)
         reused = engine.query(**reused_request)
         assert reused["rows"] == [{"name": "Aurora"}]

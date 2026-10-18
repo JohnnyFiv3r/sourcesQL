@@ -23,7 +23,7 @@ and saved-source reuse without another search or fetch. This implementation has
 not been deployed or live-qualified with those providers.
 
 Provider-independent validation passes 1,284 Python/Flight tests (44 opt-in
-cases skipped), 475 app/MCP tests and 69 setup/onboarding checks, plus lint,
+cases skipped), 477 app/MCP tests and 69 setup/onboarding checks, plus lint,
 typing and the Node 24 build. The built wheel passes 129 installed regressions;
 its materialized adopter templates load the shared policies with native Node 24.
 The compact Flight source is 194,570 bytes under the unchanged 200,000-byte

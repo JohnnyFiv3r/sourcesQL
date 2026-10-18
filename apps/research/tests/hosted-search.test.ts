@@ -224,6 +224,41 @@ for (const provider of ["brave", "serper"] as const) {
         assert.ok(!JSON.stringify(config).includes("API_KEY"));
       });
 
+  test(`${provider} saved-source semantic work does not need an unused search reservation`, () => {
+    const selected = research(true, true);
+    const budget = hostedSearchBudgets(
+      {
+        max_search_queries: 0,
+        max_search_requests: 0,
+        max_fetches: 0,
+        max_cost_microusd: 1_000,
+      },
+      selected,
+      100,
+    );
+    assert.equal(budget.max_cost_microusd, 1_000);
+    assert.equal(budget.max_search_requests, 0);
+    assert.equal(budget.max_search_queries, 0);
+    assert.equal(budget.max_model_requests, 96);
+    assert.throws(() =>
+      hostedSearchBudgets(
+        { max_search_requests: 0, max_cost_microusd: 0 },
+        selected,
+        100,
+      ),
+    );
+    assert.throws(() =>
+      hostedSearchBudgets({ max_cost_microusd: 1_000 }, selected, 100),
+    );
+    assert.throws(() =>
+      hostedSearchBudgets(
+        { max_search_requests: 0, max_cost_microusd: 1_000 },
+        policy,
+        100,
+      ),
+    );
+  });
+
   test(`${provider} research fingerprint binds processing settings but excludes the daily operator cap`, () => {
     const selected = research(true, true);
     const fingerprint = hostedSearchFingerprint(selected);

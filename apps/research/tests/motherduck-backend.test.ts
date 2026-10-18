@@ -2044,6 +2044,17 @@ for (const provider of ["brave", "serper"] as const) {
           saved.provider_policy_sha256,
           hostedSearchFingerprint(policy),
         );
+        const semanticOnly = await engine.call<Row>("query", {
+          ...providerQuery(),
+          query: "SELECT 1 AS retained_processing_control",
+          budgets: {
+            max_search_requests: 0,
+            max_search_queries: 0,
+            max_fetches: 0,
+            max_cost_microusd: 1_000,
+          },
+        });
+        assert.equal(semanticOnly.status, "queued");
         await assert.rejects(
           engine.call("query", { ...providerQuery(), source_mode: "guess" }),
           { code: "unsupported_capability" },

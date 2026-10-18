@@ -170,7 +170,11 @@ export function hostedSearchBudgets(
       throw Error("Hosted search budget exceeds approval");
     caps[key] = Number(value);
   }
-  if (caps.max_cost_microusd < policy.requestCostMicrousd)
+  if (
+    caps.max_cost_microusd < 1 ||
+    (caps.max_cost_microusd < policy.requestCostMicrousd &&
+      (!isHostedSearchResearch(policy) || caps.max_search_requests > 0))
+  )
     throw Error("Hosted search budget cannot cover one estimated request");
   // API billing is unavailable. Bound attempts by the operator's conservative
   // per-search-request estimate and reserve the complete job grant before
