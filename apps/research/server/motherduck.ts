@@ -662,11 +662,9 @@ export class MotherDuckEngine implements ResearchEngine {
       const job = jobs.find((job) => job.flight_run_id === run.run_id);
       if (
         !job ||
-        ![
-          "RUN_STATUS_SUCCEEDED",
-          "RUN_STATUS_FAILED",
-          "RUN_STATUS_CANCELLED",
-        ].includes(run.status)
+        !["SUCCEEDED", "FAILED", "CANCELLED"].includes(
+          String(run.status).replace(/^RUN_STATUS_/, ""),
+        )
       )
         continue;
       const config = JSON.parse(run.config_json);

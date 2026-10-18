@@ -26,12 +26,14 @@ Provider-owned billing links do not change plans or introduce another consent
 step. Safe provider credit/rate/spending refusals retain saved work and recovery
 identity; unknown MotherDuck submission outcomes remain uncertain. See
 [usage metering](docs/usage-metering.md). Validation passes 905 Python tests
-(44 opt-in cases skipped), 436 app/MCP tests, 186 Flight tests and 41 onboarding
+(44 opt-in cases skipped), 444 app/MCP tests, 186 Flight tests and 41 onboarding
 tests, plus the Node 24 production build. Synthetic headless checks at 1100,
 420 and 320 px cover stable sizing, nonblocking actions, safe billing links,
-reduced motion and dismissal recovery. Provider-free deployment verification
-and fresh ChatGPT/Claude acceptance remain separate from these local checks;
-the published 0.2.3 artifacts are unchanged.
+reduced motion and dismissal recovery. Provider-free Preview verification checks
+tool discovery, usage reports, archived widgets and saved research while retaining
+queued work and historical counters. Fresh ChatGPT/Claude acceptance remains
+separate; the published 0.2.3 artifacts are unchanged. New job presentation fields
+use versioned metadata so archived cards retain their strict legacy payload.
 
 Advisory SQL feedback is implemented and deployed on the existing Preview.
 Each new query records an

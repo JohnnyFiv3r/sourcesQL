@@ -63,7 +63,7 @@ import {
   type CheckpointPendingState,
   type ResearchCheckpoint,
 } from "./checkpoints.js";
-import { researchJobView } from "../src/job-view.js";
+import { capacitySchema, researchJobView } from "../src/job-view.js";
 import { encodeResearchView, type ResearchViewWire } from "../src/view-wire.js";
 import {
   safeExecutionError,
@@ -247,6 +247,17 @@ export function createServer(
       const result = await work();
       if (
         options.responseByteLimit &&
+        Buffer.byteLength(JSON.stringify(result)) > options.responseByteLimit &&
+        result.structuredContent &&
+        typeof result.structuredContent === "object" &&
+        "usageNotices" in result.structuredContent
+      ) {
+        const { usageNotices: _notices, ...required } =
+          result.structuredContent;
+        result.structuredContent = required;
+      }
+      if (
+        options.responseByteLimit &&
         Buffer.byteLength(JSON.stringify(result)) > options.responseByteLimit
       )
         return {
@@ -283,6 +294,22 @@ export function createServer(
     "failed",
     "cancelled",
   ]);
+  const legacyCapacity = (capacity: Record<string, unknown>) =>
+    Object.fromEntries(
+      [
+        "resource",
+        "reason",
+        "period",
+        "allowance",
+        "services",
+        "resets_at",
+        "limit",
+        "used",
+        "unit",
+      ]
+        .filter((key) => Object.hasOwn(capacity, key))
+        .map((key) => [key, capacity[key]]),
+    );
   // Advisory usage cannot make a valid saved table fail to open.
   const currentUsageNotices = async () =>
     options.engine?.supportsUsageReporting &&
@@ -382,6 +409,12 @@ export function createServer(
         .filter((key) => Object.hasOwn(receipt, key))
         .map((key) => [key, receipt[key]]),
     );
+    const capacity = capacitySchema.safeParse(receipt.capacity);
+    if (capacity.success) {
+      result.capacity = legacyCapacity(capacity.data);
+      if (capacity.data.limit_kind !== undefined)
+        result.provider_capacity_v1 = capacity.data;
+    }
     if (receipt.status === "failed") {
       const error = safeExecutionError(receipt.error_code);
       result.error_code = error.code;
@@ -485,12 +518,30 @@ export function createServer(
             { job_id },
           );
           const checked = await jobResult(receipt);
-          const view = researchJobView(
+          const { usageNotices, job, ...base } = researchJobView(
             checked.structuredContent as Record<string, unknown>,
           );
+          // Published job cards strictly validate both this envelope and capacity.
+          // Add new presentation facts only through optional versioned metadata.
+          const view = {
+            ...base,
+            job: {
+              ...job,
+              ...(job.capacity
+                ? { capacity: legacyCapacity(job.capacity) }
+                : {}),
+            },
+          };
           return {
             content: [{ type: "text" as const, text: JSON.stringify(view) }],
             structuredContent: view,
+            _meta: {
+              sourcesqlJobPresentationV1: {
+                job_id: job.job_id,
+                ...(job.capacity ? { capacity: job.capacity } : {}),
+                ...(usageNotices ? { usageNotices } : {}),
+              },
+            },
           };
         }
         const full = result_ref

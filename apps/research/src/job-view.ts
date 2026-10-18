@@ -62,12 +62,47 @@ export const researchJobViewSchema = z
   .strict();
 export type ResearchJobView = z.infer<typeof researchJobViewSchema>;
 
+const jobPresentationV1Schema = z
+  .object({
+    job_id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
+    capacity: capacitySchema.optional(),
+    usageNotices: z.array(usageNoticeSchema).max(8).optional(),
+  })
+  .strict();
+
+/** Restore optional presentation metadata without breaking published job cards. */
+export function decodeResearchJobView(
+  structured: unknown,
+  meta?: unknown,
+): ResearchJobView {
+  const base = researchJobViewSchema.parse(structured);
+  const envelope = z.record(z.string(), z.unknown()).safeParse(meta);
+  const presentation = jobPresentationV1Schema.safeParse(
+    envelope.success ? envelope.data.sourcesqlJobPresentationV1 : undefined,
+  );
+  if (!presentation.success || presentation.data.job_id !== base.job.job_id)
+    return base;
+  const { capacity, usageNotices } = presentation.data;
+  return {
+    ...base,
+    ...(usageNotices === undefined ? {} : { usageNotices }),
+    job: {
+      ...base.job,
+      ...(capacity === undefined ? {} : { capacity }),
+    },
+  };
+}
+
 /** Reduce trusted backend receipts to the bounded app view; no query or credential text crosses here. */
 export function researchJobView(rawReceipt: unknown): ResearchJobView {
   const receipt = z.record(z.string(), z.unknown()).parse(rawReceipt);
   const status = receipt.status;
-  const capacity =
-    receipt.capacity === undefined
+  const providerCapacity = capacitySchema.safeParse(
+    receipt.provider_capacity_v1,
+  );
+  const capacity = providerCapacity.success
+    ? providerCapacity.data
+    : receipt.capacity === undefined
       ? undefined
       : capacitySchema.parse(receipt.capacity);
   const pending =

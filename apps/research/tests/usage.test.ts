@@ -139,6 +139,34 @@ test("model tokens remain reportable without inventing a dollar charge", () => {
   assert.equal(result.providers[0].cost_unavailable_requests, 1);
 });
 
+test("provider-free fixture semantic events never become OpenAI usage", () => {
+  const result = report([
+    {
+      run_id: "fixture",
+      started_at: started,
+      events: [
+        {
+          kind: "semantic",
+          fixture_only: true,
+          status: "completed",
+          usage: { input_tokens: 100, cost_microusd: 0 },
+        },
+        {
+          kind: "embedding",
+          status: "completed",
+          usage: { provider: "fixture", cost_microusd: 0 },
+        },
+        {
+          kind: "semantic",
+          status: "completed",
+          usage: { cost_basis: "fixture_no_spending", cost_microusd: 0 },
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(result.providers, []);
+});
+
 test("reference crossings are nonblocking and follow Exa monthly / F4 daily periods", () => {
   const monthly = report([
     { run_id: "r", started_at: started, events: [event("exa", 10_000_000)] },

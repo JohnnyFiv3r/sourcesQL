@@ -55,6 +55,12 @@ const integer = (value: unknown) =>
 const providerName = (event: Row) => {
   const name = event.provider ?? event.usage?.provider;
   if (
+    event.fixture_only === true ||
+    name === "fixture" ||
+    event.usage?.cost_basis === "fixture_no_spending"
+  )
+    return undefined;
+  if (
     event.kind === "semantic" ||
     event.kind === "embedding" ||
     name === "pydantic_ai" ||

@@ -66,7 +66,7 @@ import type { UsageNotice } from "./usage.js";
 import { ResearchTreePanel } from "./research-tree-panel.js";
 import { ResearchJobStatusPanel } from "./job-status-panel.js";
 import {
-  researchJobViewSchema,
+  decodeResearchJobView,
   researchJobView as parseJobReceipt,
   type ResearchJobView,
 } from "./job-view.js";
@@ -453,7 +453,10 @@ function Workspace() {
         ) {
           if (result.isError)
             throw new Error("Unable to read the saved research job.");
-          const job = researchJobViewSchema.parse(result.structuredContent);
+          const job = decodeResearchJobView(
+            result.structuredContent,
+            result._meta,
+          );
           bootstrapRecovery.current.markAccepted();
           reconciler.invalidate();
           setJobView(job);

@@ -3183,81 +3183,82 @@ test("usage notice dismissal persists by owner and provider period across gatewa
   }
 });
 
-test("usage reports backfill late terminal Flights without changing jobs and reject mismatched observations", async () => {
-  const h = await harness();
-  try {
-    const engine = h.engine("owner-a", { allowSubmission: true });
-    await engine.initialize();
-    const started = new Date().toISOString();
-    const window = {
-      start: new Date(Date.parse(started) - 60000).toISOString(),
-      end: new Date(Date.parse(started) + 60000).toISOString(),
-    };
-    h.runAckPatch = {
-      started_at: started,
-      ended_at: new Date(Date.parse(started) + 12400).toISOString(),
-      elapsed_seconds: 12.4,
-    };
-    const job = await engine.call<Row>("query", query());
-    await publish(engine, "late-finished-research", { jobId: job.job_id });
-    assert.equal(
-      (await engine.call<Row>("job_status", { job_id: job.job_id })).status,
-      "completed",
-    );
-    const persistedJob = async () =>
-      (
-        await engine.connection((client) =>
-          client.query(
-            `SELECT status,flight_settled,updated_at,engine_run_id,result_id FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
-            [job.job_id],
-          ),
-        )
-      ).rows[0];
-    const before = await persistedJob();
-    assert.equal(
-      before.flight_settled,
-      false,
-      "The app can finish before the native Flight cleanup",
-    );
-    h.runs[0].status = "RUN_STATUS_SUCCEEDED";
-    const original = h.runs[0].config_json;
-    h.runs[0].config_json = JSON.stringify({
-      ...JSON.parse(original),
-      JOB_ID: randomUUID(),
-    });
-    const wrongJob = await engine.call<Row>("usage_report", window);
-    assert.equal(wrongJob.motherduck.observed_flights, 0);
-    assert.equal(wrongJob.unobserved_flight_jobs, 1);
-    h.runs[0].config_json = original;
-    h.runs[0].flight_version++;
-    assert.equal(
-      (await engine.call<Row>("usage_report", window)).motherduck
-        .observed_flights,
-      0,
-      "Unreviewed Flight versions cannot contribute trusted observations",
-    );
-    h.runs[0].flight_version--;
-    const reopened = h.engine();
-    const report = await reopened.call<Row>("usage_report", window);
-    assert.equal(report.motherduck.observed_flights, 1);
-    assert.equal(report.motherduck.observed_flight_seconds, 13);
-    assert.equal(report.motherduck.estimated_flight_cost_microusd, 542);
-    assert.equal(report.unobserved_flight_jobs, 0);
-    assert.deepEqual(
-      (await reopened.call<Row>("usage_report", window)).motherduck,
-      report.motherduck,
-    );
-    assert.deepEqual(
-      await persistedJob(),
-      before,
-      "Cost inspection neither changes execution settlement nor rewrites job status",
-    );
-    assert.equal(h.submissions, 1, "No Flight starts during cost reporting");
-    assert.equal(h.cancellations, 0);
-  } finally {
-    await h.close();
-  }
-});
+for (const nativeStatus of ["RUN_STATUS_SUCCEEDED", "SUCCEEDED"])
+  test(`usage reports backfill late terminal Flights (${nativeStatus}) without changing jobs and reject mismatched observations`, async () => {
+    const h = await harness();
+    try {
+      const engine = h.engine("owner-a", { allowSubmission: true });
+      await engine.initialize();
+      const started = new Date().toISOString();
+      const window = {
+        start: new Date(Date.parse(started) - 60000).toISOString(),
+        end: new Date(Date.parse(started) + 60000).toISOString(),
+      };
+      h.runAckPatch = {
+        started_at: started,
+        ended_at: new Date(Date.parse(started) + 12400).toISOString(),
+        elapsed_seconds: 12.4,
+      };
+      const job = await engine.call<Row>("query", query());
+      await publish(engine, "late-finished-research", { jobId: job.job_id });
+      assert.equal(
+        (await engine.call<Row>("job_status", { job_id: job.job_id })).status,
+        "completed",
+      );
+      const persistedJob = async () =>
+        (
+          await engine.connection((client) =>
+            client.query(
+              `SELECT status,flight_settled,updated_at,engine_run_id,result_id FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+              [job.job_id],
+            ),
+          )
+        ).rows[0];
+      const before = await persistedJob();
+      assert.equal(
+        before.flight_settled,
+        false,
+        "The app can finish before the native Flight cleanup",
+      );
+      h.runs[0].status = nativeStatus;
+      const original = h.runs[0].config_json;
+      h.runs[0].config_json = JSON.stringify({
+        ...JSON.parse(original),
+        JOB_ID: randomUUID(),
+      });
+      const wrongJob = await engine.call<Row>("usage_report", window);
+      assert.equal(wrongJob.motherduck.observed_flights, 0);
+      assert.equal(wrongJob.unobserved_flight_jobs, 1);
+      h.runs[0].config_json = original;
+      h.runs[0].flight_version++;
+      assert.equal(
+        (await engine.call<Row>("usage_report", window)).motherduck
+          .observed_flights,
+        0,
+        "Unreviewed Flight versions cannot contribute trusted observations",
+      );
+      h.runs[0].flight_version--;
+      const reopened = h.engine();
+      const report = await reopened.call<Row>("usage_report", window);
+      assert.equal(report.motherduck.observed_flights, 1);
+      assert.equal(report.motherduck.observed_flight_seconds, 13);
+      assert.equal(report.motherduck.estimated_flight_cost_microusd, 542);
+      assert.equal(report.unobserved_flight_jobs, 0);
+      assert.deepEqual(
+        (await reopened.call<Row>("usage_report", window)).motherduck,
+        report.motherduck,
+      );
+      assert.deepEqual(
+        await persistedJob(),
+        before,
+        "Cost inspection neither changes execution settlement nor rewrites job status",
+      );
+      assert.equal(h.submissions, 1, "No Flight starts during cost reporting");
+      assert.equal(h.cancellations, 0);
+    } finally {
+      await h.close();
+    }
+  });
 
 test("failed hosted model jobs reopen with distinct safe errors and never redispatch", async () => {
   const h = await harness();
