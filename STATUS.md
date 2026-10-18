@@ -38,6 +38,14 @@ Actual HTTP tests cover resource delivery, a missing archived bundle, owner
 refusal and private-payload exclusion. Successful server delivery still does
 not establish that ChatGPT rendered the widget.
 
+A subsequent mobile trace identified a concrete resource failure: ChatGPT read
+the earlier `758dbf283e918839` bundle, which was absent from the deployment's
+explicit archive list. Each read returned a JSON-RPC error inside HTTP 200;
+authentication succeeded. The original public bytes have been recovered and
+added to the checksum-pinned archive and upload list. This repairs that missing
+resource without replacing its contents or changing saved research. Actual host
+rendering after the repair remains an acceptance check.
+
 PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
 The next local implementation covers canonical hosted preflight, bounded durable
 stage journals, explicit restart continuation/source recovery, query-hit

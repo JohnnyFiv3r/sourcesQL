@@ -45,6 +45,7 @@
 !ui-history/research-be8725d56a366d19.html
 !ui-history/research-b5ab74c900f06fdb.html
 !ui-history/research-20919a6895fa9fa4.html
+!ui-history/research-758dbf283e918839.html
 
 # Defense in depth if the public-input allowlist is extended later.
 **/.env*

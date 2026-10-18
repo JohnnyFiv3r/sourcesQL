@@ -76,6 +76,10 @@ const historicalBundles = [
     filename: "research-20919a6895fa9fa4.html",
     sha256: "20919a6895fa9fa4b77d92e3cc270d4e3e5be4303f822d1f14ade95158dc60a2",
   },
+  {
+    filename: "research-758dbf283e918839.html",
+    sha256: "758dbf283e918839bdc96cb3a97b374e44a7b7ba0262fcdad35a796973ad79f0",
+  },
 ] as const;
 
 export async function packageVercelAssets(

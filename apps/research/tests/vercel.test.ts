@@ -689,6 +689,10 @@ const historicalBundles = [
     filename: "research-20919a6895fa9fa4.html",
     sha256: "20919a6895fa9fa4b77d92e3cc270d4e3e5be4303f822d1f14ade95158dc60a2",
   },
+  {
+    filename: "research-758dbf283e918839.html",
+    sha256: "758dbf283e918839bdc96cb3a97b374e44a7b7ba0262fcdad35a796973ad79f0",
+  },
 ] as const;
 
 test("serverless assets contain only current and explicitly retained public widgets plus declared synthetic files", async () => {
@@ -744,6 +748,65 @@ test("serverless assets contain only current and explicitly retained public widg
     ],
     "Historical upload inputs must remain explicitly enumerated",
   );
+});
+
+test("cached ChatGPT widget URIs return their exact packaged bytes over HTTP without storage or engine calls", async () => {
+  const services = await createResearchApplication({
+    environment,
+    root,
+    serverless: true,
+    backend: {
+      engine: {
+        async call() {
+          throw new Error("UI resource reads must not execute research");
+        },
+      },
+      stateBackend: {
+        async read() {
+          throw new Error("UI resource reads must not open research storage");
+        },
+        async write() {
+          throw new Error("UI resource reads must not change research storage");
+        },
+      },
+    },
+  });
+  const server = await serving(
+    createHttpApp({
+      environment,
+      root,
+      serverless: true,
+      services: async () => services,
+    }),
+  );
+  try {
+    for (const { filename, sha256 } of historicalBundles) {
+      const uri = `ui://sourcesql/${filename}`;
+      const response = await send(
+        server,
+        "/mcp",
+        rpc("resources/read", { uri }),
+        auth,
+      );
+      assert.equal(response.status, 200, uri);
+      assert.equal(
+        response.json.error,
+        undefined,
+        "HTTP 200 must not hide an MCP resource error for " + uri,
+      );
+      assert.equal(response.json.result.contents.length, 1, uri);
+      const resource = response.json.result.contents[0];
+      assert.equal(resource.uri, uri);
+      assert.equal(resource.mimeType, "text/html;profile=mcp-app");
+      assert.equal(
+        createHash("sha256").update(resource.text).digest("hex"),
+        sha256,
+        "A cached URI must return its original public bundle: " + uri,
+      );
+    }
+  } finally {
+    await close(server);
+  }
 });
 
 test("rebuilding the current UI preserves old ChatGPT resource reads without copying arbitrary history files", async () => {
