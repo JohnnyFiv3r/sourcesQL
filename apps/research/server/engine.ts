@@ -44,6 +44,7 @@ export type EngineResult = {
 export interface ResearchEngine {
   readonly supportsExplain?: boolean;
   readonly supportsAsyncJobs?: boolean;
+  readonly supportsUsageReporting?: boolean;
   call<T = Record<string, unknown>>(
     method: string,
     params?: Record<string, unknown>,

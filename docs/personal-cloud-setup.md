@@ -37,7 +37,9 @@ Begin with `fixture`; no search or model API key is needed for that path.
 Exa, Brave and Serper credentials are only needed when choosing a live provider.
 The optional Exa research profile also needs an OpenAI credential for each
 configured model or embedding adapter. These opt-ins appear in the reviewed plan.
-MotherDuck SQL queries, storage and Flights are separate usage; local application limits do not prove a billing hard stop.
+MotherDuck SQL queries, storage and Flights are separate usage. Provider account
+settings determine whether further usage is available or billed; sourcesQL's
+estimates do not establish a billing hard stop or remaining free credits.
 
 ## MotherDuck credentials for a persistent gateway
 
@@ -91,8 +93,6 @@ Create a token-free JSON configuration outside source control, for example
   "create_database": true,
   "allow_static_bootstrap": true,
   "enable_execution": false,
-  "monthly_flight_seconds": 18000,
-  "monthly_provider_cost_microusd": 10000000,
   "oauth": {
     "issuer": "https://your-tenant.auth0.com/",
     "subject": "auth0|your-immutable-application-user-id",
@@ -144,45 +144,57 @@ The default host is `pg.us-east-1-aws.motherduck.com`. Keep credentials in an
 existing secret manager or a private shell environment; never put key values in
 this JSON, command arguments, a repository or chat.
 
-## Configure usage reservations
+## Usage notices and provider billing
 
-New personal-cloud plans default to **18,000 Flight seconds (5 hours)** and
-**10,000,000 microUSD ($10) of search/model reservations** per UTC calendar month.
-These are application limits chosen by the operator. They are not measurements
-of free credits, provider bills or MotherDuck's included compute. The monthly
-provider cap applies alongside the selected provider's per-job and daily policy.
-Setup makes no live search or model calls.
+New personal-cloud plans use provider-managed availability. Accumulated local
+reservations no longer stop research at an artificial daily or monthly quota.
+Each job still has finite search, model, provider-cost and runtime bounds; a
+Flight is capped at **120 seconds**, with only one active job for the owner.
+Setup makes no live search or model calls and requires no billing-admin API key.
 
-Flight capacity reserves the job's maximum runtime before dispatch, rather than
-charging its eventual observed runtime. Search/model capacity reserves the
-job's approved cost ceiling. Uncertain submissions keep their reservations;
-queueing alone starts no Flight. This conservative accounting can stop work
-before a vendor allowance is exhausted. A capacity notice identifies the
-configured limit; it does not make a partial sample count as completed research.
+sourcesQL records provider usage estimates and observed Flight runtime as work
+finishes, including available usage from failed or cancelled work. These records
+support session and period cost reports. Missing usage remains unknown; a missing
+provider cost is not proof that an operation was free. A per-job approved ceiling
+is a bound on a request, not a charge or an accumulated monthly cost.
 
-Both monthly fields accept zero to prevent dispatch, or a nonnegative integer
-up to 2,678,400 Flight seconds and 1,000,000,000 microUSD ($1,000). Those upper
-bounds are configuration ceilings, not spending defaults. A complete job must
-fit within every applicable reservation.
+Crossing an estimated free reference allowance shows a nonblocking notice once
+per provider and allowance period. It does not add an approval step or prevent
+further work. The initial reference notices use **$10 of Exa usage per UTC
+calendar month** and **1,800 F4 Flight seconds per UTC day**. These references
+come from [Exa pricing](https://exa.ai/pricing) and
+[MotherDuck pricing](https://motherduck.com/product/pricing/); they do not
+establish the user's plan, billing cycle, promotional credits or payment method.
+OpenAI model/embedding usage is tracked separately; setup assumes no free API
+credit allowance for it.
 
-An optional `"daily_flight_seconds": 600` adds a daily guard alongside the
-monthly limit; its range is 0–86,400 seconds. Omit it for monthly-only Flight
-reservations. The setup command does not insert a daily job-count limit when
-it is omitted. Existing gateway environments with neither monthly nor daily
-settings keep the legacy 600-second daily default.
+The estimates describe this sourcesQL workspace, not the provider's account-wide
+total. Another app can consume the same account's allowance. MotherDuck's SQL
+compute, storage and Flight runtime are separate; a Flight runtime estimate alone
+cannot establish the total MotherDuck bill. Check actual balances, credits and
+charges in each provider's dashboard.
 
-MotherDuck's [Flight billing documentation](https://motherduck.com/docs/about-motherduck/billing/flight-sizes/)
-distinguishes no-card Lite's daily F4 allowance from card-backed Lite's shared
-monthly compute allocation and pay-as-you-go overage. Flight runtime and the SQL
-it sends to a Duckling are separate compute usage. These application reservations
-do not guarantee a $0 infrastructure bill or cover another application using the
-same account. Check your account's actual usage and allowances separately.
+If a provider refuses further work because of capacity, payment or rate limits,
+the app shows its capacity overlay with the relevant billing link or retry/reset
+information. Completed results remain saved. Adding a card and buying credits
+happen at the provider, not through sourcesQL. When a provider permits continued
+usage, research can continue without a separate sourcesQL billing authorization.
+Opening a billing link is not proof that a card was added or that a failed job
+resumed. Metering continues after the notice so later cost reports include paid
+usage estimates too.
 
-The [MotherDuck billing page](https://app.motherduck.com/settings/billing) and your
-chosen provider's billing dashboard can help you review capacity. Adding a card,
-buying credits or changing a vendor plan does not raise sourcesQL's configured
-caps. Any increase needs an explicit configuration change and a newly reviewed
-setup plan; research never enables a paid top-up automatically.
+Older configuration fields `monthly_flight_seconds`,
+`monthly_provider_cost_microusd`, `daily_flight_seconds` and
+`provider.daily_cost_microusd` are accepted as **deprecated metadata**. Plans warn
+when they are supplied, and they are not emitted as accumulated gateway caps.
+Remove them from new configurations. A zero in one of these old fields no longer
+disables execution; use `"enable_execution": false` to disable job submission.
+New reviewed personal-cloud plans explicitly set
+`SOURCESQL_USAGE_MODE=provider_managed`. Existing deployments without that mode
+retain their operator-configured reservation behavior; upgrading source files
+alone does not opt them into provider-managed availability. Existing frozen plans
+and receipts are not rewritten. Review a new plan for changed setup inputs;
+completed setup receipts do not upgrade a running gateway.
 
 ## Keep credentials in one private file
 
@@ -220,8 +232,7 @@ such as `~/.config/sourcesql/cloud/preflight`.
 
 Before preparing the plan you intend to apply, choose whether to qualify one
 fixture job. If that execution is approved, keep `provider.name` as `fixture`
-and set `enable_execution` true with the agreed monthly reservations and any
-optional daily guard. Otherwise,
+and set `enable_execution` true for the single bounded fixture. Otherwise,
 leave it false for connection checks only. Use a separate workspace when the
 configuration changes; keep the preflight receipts rather than editing its
 saved plan.
@@ -240,7 +251,8 @@ Neither path contacts your cloud accounts or runs research. An unpublished
 version requires the explicit matching wheel until that version is on PyPI.
 
 Read `plan.json`, including the destination, exact public file hashes, Flight
-fingerprints, mutations, monthly reservations, any daily guard and manual steps. The output includes
+fingerprints, mutations, per-job bounds, usage reference notices, deprecation
+warnings and manual steps. The output includes
 `plan_sha256`. No credential value is printed. Preparation will stop if the
 exact wheel is unavailable, Node 24 is missing or reviewed inputs differ.
 
@@ -397,7 +409,7 @@ eligibility or accept account terms for the adopter. Follow
 
 The reviewed Flight supports fixture plus **one** chosen live provider. Substitute
 one provider object in the initial configuration; approve its estimated per-job
-and daily usage explicitly. Do not split jobs to evade limits.
+per job explicitly. Do not split jobs to evade execution bounds.
 
 Exa:
 
@@ -405,8 +417,7 @@ Exa:
 {
   "name": "exa",
   "secret_name": "sourcesql_exa",
-  "approved_cost_microusd": 50000,
-  "daily_cost_microusd": 1000000
+  "approved_cost_microusd": 50000
 }
 ```
 
@@ -417,8 +428,7 @@ Brave or Serper (replace `brave` with `serper` in both names):
   "name": "brave",
   "secret_name": "sourcesql_brave",
   "request_cost_microusd": 6000,
-  "approved_cost_microusd": 50000,
-  "daily_cost_microusd": 1000000
+  "approved_cost_microusd": 50000
 }
 ```
 
@@ -451,7 +461,6 @@ For example, replace the provider object with:
   "name": "exa",
   "secret_name": "sourcesql_exa",
   "approved_cost_microusd": 50000,
-  "daily_cost_microusd": 1000000,
   "model": {
     "name": "gpt-4.1-mini",
     "secret_name": "sourcesql_openai"
@@ -480,15 +489,15 @@ reuse choices. Keep setup receipts: interrupted creation reconciles the same
 named secret rather than silently replacing it.
 
 The plan lists OpenAI as an additional processor, each enabled operator, model
-names and configured spending reservations. Semantic calls send the SQL-selected
+names and configured per-job spending bounds. Semantic calls send the SQL-selected
 source text to OpenAI. Setup itself runs no search, model or embedding requests;
 account signup, payment methods and paid top-ups stay explicit user decisions.
 
-The example retains the same $0.05 per-job and $1 daily application reservations
-as search-only setup. Monthly and Flight reservations also stay as configured.
-These estimates are not a provider balance or billing guarantee, and some
-research jobs will need a deliberately reviewed larger allowance. Setup never
-raises limits to fit a query. Changing adapters or limits requires a new plan;
+The example retains the same $0.05 per-job cost ceiling as search-only setup,
+without accumulated daily or monthly reservation gates. This ceiling is not a
+provider balance or billing guarantee, and some research jobs will need a
+deliberately reviewed larger per-job bound. Setup never raises execution bounds
+to fit a query. Changing adapters or per-job limits requires a new plan;
 completed setup receipts do not upgrade an existing deployment in place.
 
 The source and credential-free provisioning tests verify the v3 policy,

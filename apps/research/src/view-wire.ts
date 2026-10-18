@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { queryFeedbackSchema } from "./query-feedback.js";
+import { usageNotices } from "./usage.js";
 import {
   cellDiagnosticSchema,
   id,
@@ -109,7 +110,13 @@ export function decodeResearchView(value: unknown): ResearchView {
       queryFeedbackV1: _feedback,
       ...base
     } = view;
-    return { ...base, snapshot };
+    return {
+      ...base,
+      snapshot,
+      ...(base.usageNotices === undefined
+        ? {}
+        : { usageNotices: usageNotices(base.usageNotices) }),
+    };
   } catch {
     throw new Error(DISPLAY_ERROR);
   }

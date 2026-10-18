@@ -21,6 +21,8 @@ from sourcesql.contracts import Table, Column, SourcesQLError, canonical, digest
 from sourcesql.storage.store import Store
 
 TABLES = (
+    "CREATE TABLE IF NOT EXISTS usage_notice_dismissals(id VARCHAR PRIMARY KEY,dismissed_at VARCHAR NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS usage_flights(run_id VARCHAR PRIMARY KEY,job_id UUID NOT NULL,started_at VARCHAR NOT NULL,ended_at VARCHAR NOT NULL,elapsed_seconds DOUBLE NOT NULL,instance_type VARCHAR NOT NULL)",
     "CREATE TABLE IF NOT EXISTS control(id INTEGER PRIMARY KEY, namespace VARCHAR NOT NULL, revision BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS results(id VARCHAR PRIMARY KEY, hash VARCHAR NOT NULL, metadata VARCHAR NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, payload VARCHAR NOT NULL, wire_payload VARCHAR NOT NULL, wire_hash VARCHAR NOT NULL)",
     "CREATE TABLE IF NOT EXISTS runs(id VARCHAR PRIMARY KEY, request_id VARCHAR UNIQUE NOT NULL, request_hash VARCHAR NOT NULL, receipt VARCHAR NOT NULL)",

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { usageNoticeSchema, usageNotices } from "./usage.js";
 
 /** Capacity labels describe the measured authority, never an inferred vendor entitlement. */
 export const capacitySchema = z
@@ -24,6 +25,9 @@ export const capacitySchema = z
     limit: z.number().int().nonnegative().optional(),
     used: z.number().int().nonnegative().optional(),
     unit: z.enum(["seconds", "microusd"]).optional(),
+    limit_kind: z.enum(["credits", "rate", "spend", "unknown"]).optional(),
+    http_status: z.union([z.literal(402), z.literal(429)]).optional(),
+    retry_after_seconds: z.number().int().nonnegative().max(604800).optional(),
   })
   .strict();
 export type ResearchCapacity = z.infer<typeof capacitySchema>;
@@ -31,6 +35,7 @@ export type ResearchCapacity = z.infer<typeof capacitySchema>;
 export const researchJobViewSchema = z
   .object({
     kind: z.literal("research_job_status"),
+    usageNotices: z.array(usageNoticeSchema).max(8).optional(),
     job: z
       .object({
         job_id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
@@ -70,6 +75,9 @@ export function researchJobView(rawReceipt: unknown): ResearchJobView {
     (status === "cancelled" && receipt.pending === true);
   return researchJobViewSchema.parse({
     kind: "research_job_status",
+    ...(receipt.usageNotices === undefined
+      ? {}
+      : { usageNotices: usageNotices(receipt.usageNotices) }),
     job: {
       job_id: receipt.job_id,
       request_id: receipt.request_id,

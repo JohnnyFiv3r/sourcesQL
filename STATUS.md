@@ -8,6 +8,31 @@ and [release notes](docs/releases/0.2.3.md).
 
 ## Unreleased research completion work
 
+Provider-managed metering is implemented for new reviewed personal-cloud plans
+and can be explicitly enabled on an existing deployment. Accumulated application
+reservations neither block dispatch nor grow in that mode. Historical counters,
+queued handles, finite per-job budgets and single active/uncertain Flight
+protection remain intact. Deployments without the new mode retain their prior
+operator safeguards until deliberately migrated.
+
+Run receipts meter Exa response estimates, provider requests and model tokens,
+including failed/cancelled work. Observed terminal Flight runtime is stored once;
+cost reports reconcile recent platform observations without starting work and
+retain unknown database, storage and older runtime components. The authenticated
+owner's `sourcesql_usage_report` exposes period/job totals without research text
+or credentials. App notices identify estimated sourcesQL reference allowance
+crossings and remain nonblocking. Dismissals persist per owner/provider/period.
+Provider-owned billing links do not change plans or introduce another consent
+step. Safe provider credit/rate/spending refusals retain saved work and recovery
+identity; unknown MotherDuck submission outcomes remain uncertain. See
+[usage metering](docs/usage-metering.md). Validation passes 905 Python tests
+(44 opt-in cases skipped), 436 app/MCP tests, 186 Flight tests and 41 onboarding
+tests, plus the Node 24 production build. Synthetic headless checks at 1100,
+420 and 320 px cover stable sizing, nonblocking actions, safe billing links,
+reduced motion and dismissal recovery. Provider-free deployment verification
+and fresh ChatGPT/Claude acceptance remain separate from these local checks;
+the published 0.2.3 artifacts are unchanged.
+
 Advisory SQL feedback is implemented and deployed on the existing Preview.
 Each new query records an
 AST-derived description independently of optional intended answer metadata,

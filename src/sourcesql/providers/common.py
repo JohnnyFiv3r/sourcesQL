@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from copy import deepcopy
 import hashlib
 from html.parser import HTMLParser
 import ipaddress
 import json
+import re
 import socket
 from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -19,6 +21,96 @@ from ..contracts import Budget, SourcesQLError, digest
 
 class ProviderTransportError(SourcesQLError):
     remote_outcome_unknown = True
+
+
+_EXA_ERROR_TAGS = {
+    "INVALID_API_KEY",
+    "NO_MORE_CREDITS",
+    "API_KEY_BUDGET_EXCEEDED",
+    "TEAM_BUDGET_EXCEEDED",
+    "FEATURE_DISABLED",
+    "PROHIBITED_CONTENT",
+    "CONTENT_FILTER_ERROR",
+    "RATE_LIMIT_EXCEEDED",
+    "SERVICE_OVERLOADED",
+    "INVALID_REQUEST_BODY",
+    "INVALID_REQUEST",
+    "INVALID_NUM_RESULTS",
+    "NUM_RESULTS_EXCEEDED",
+    "INVALID_JSON_SCHEMA",
+    "SUBPAGES_LIMIT_EXCEEDED",
+}
+
+
+def provider_http_error(response: httpx.Response, provider: str | None = None) -> SourcesQLError:
+    """Keep bounded routing facts, never provider messages, headers or arbitrary tags.
+
+    A provider's refusal says nothing about whether its depleted balance was free
+    or purchased. Likewise, a rate limit does not establish a billing shortage.
+    """
+    error = SourcesQLError("provider_unavailable", "Provider request failed", "acquisition")
+    error.http_status = response.status_code
+    tag = None
+    if provider == "exa":
+        raw = bytearray()
+        try:
+            for chunk in response.iter_bytes():
+                if len(raw) + len(chunk) > 16_384:
+                    break
+                raw.extend(chunk)
+            else:
+                body = json_object(bytes(raw))
+                if isinstance(body.get("tag"), str) and body["tag"] in _EXA_ERROR_TAGS:
+                    tag = error.provider_error_tag = body["tag"]
+                request_id = body.get("requestId")
+                if isinstance(request_id, str) and re.fullmatch(r"[0-9a-fA-F]{16,64}", request_id):
+                    error.request_id = request_id
+        except (SourcesQLError, httpx.HTTPError, RecursionError):
+            # The HTTP refusal is known even when optional diagnostics are absent.
+            pass
+    retry_after = response.headers.get("Retry-After", "")
+    if re.fullmatch(r"[0-9]{1,8}", retry_after):
+        seconds = int(retry_after)
+        if seconds <= 604_800:
+            error.retry_after_seconds = seconds
+    if provider in {"exa", "brave", "serper"} and response.status_code in {402, 429}:
+        limit_kind = (
+            "rate"
+            if response.status_code == 429
+            else "credits"
+            if tag == "NO_MORE_CREDITS"
+            else "spend"
+            if tag in {"API_KEY_BUDGET_EXCEEDED", "TEAM_BUDGET_EXCEEDED"}
+            else "unknown"
+        )
+        error.provider_capacity = {
+            "resource": "search_model_budget",
+            "reason": "provider_limit",
+            "period": "unknown",
+            "allowance": "unknown",
+            "services": [provider],
+            "limit_kind": limit_kind,
+            "http_status": response.status_code,
+            **(
+                {"retry_after_seconds": error.retry_after_seconds}
+                if hasattr(error, "retry_after_seconds")
+                else {}
+            ),
+        }
+    return error
+
+
+def capture_provider_failure(event: dict, error: SourcesQLError) -> None:
+    """Copy only adapter-created failure diagnostics into the durable receipt."""
+    for name in (
+        "http_status",
+        "provider_error_tag",
+        "request_id",
+        "retry_after_seconds",
+        "provider_capacity",
+    ):
+        if hasattr(error, name):
+            event[name] = deepcopy(getattr(error, name))
 
 
 def utc_now() -> str:
@@ -254,9 +346,11 @@ def json_object(raw: bytes) -> dict[str, Any]:
         ) from None
 
 
-def read_response(response: httpx.Response, max_bytes: int) -> bytes:
+def read_response(
+    response: httpx.Response, max_bytes: int, *, provider: str | None = None
+) -> bytes:
     if response.status_code >= 400:
-        raise SourcesQLError("provider_unavailable", "Provider request failed", "acquisition")
+        raise provider_http_error(response, provider)
     content = bytearray()
     for chunk in response.iter_bytes():
         if len(content) + len(chunk) > max_bytes:
@@ -276,6 +370,7 @@ def api_json(
     params: dict | None = None,
     body: dict | None = None,
     max_bytes: int = 2_097_152,
+    provider: str | None = None,
 ) -> dict:
     try:
         with client.stream(
@@ -285,7 +380,7 @@ def api_json(
                 raise SourcesQLError(
                     "provider_unavailable", "Unexpected API redirect", "acquisition"
                 )
-            return json_object(read_response(response, max_bytes))
+            return json_object(read_response(response, max_bytes, provider=provider))
     except httpx.HTTPError:
         error = ProviderTransportError(
             "provider_unavailable", "Provider transport failed", "acquisition"

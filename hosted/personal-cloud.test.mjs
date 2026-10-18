@@ -27,6 +27,7 @@ import {
   ownerBearer,
   providerBindings,
   assertCapabilities,
+  usageWarnings,
 } from "./personal-cloud.mjs";
 import { parseArguments as parseSetup, flightConfiguration } from "./setup.mjs";
 import {
@@ -99,7 +100,7 @@ const researchProvider = () => ({
   embedding: { name: "text-embedding-3-small", secret_name: "personal_openai" },
 });
 
-test("research opt-in advertises exact operators, third-party processors and unchanged reservations", () => {
+test("research opt-in advertises exact operators, processors and provider-managed usage", () => {
   const path = workspace(),
     plan = createPlan(
       { ...config(), provider: researchProvider() },
@@ -120,8 +121,9 @@ test("research opt-in advertises exact operators, third-party processors and unc
   assert.equal(plan.research.embedding, "text-embedding-3-small");
   assert.equal(plan.limits.execution_enabled, false);
   assert.equal(plan.limits.model_calls_during_setup, 0);
-  assert.equal(plan.limits.provider_cost_microusd_per_month, 10000000);
-  assert.match(plan.research.reservation_basis, /estimates/);
+  assert.equal(plan.limits.usage_mode, "provider_managed");
+  assert.equal(plan.limits.provider_cost_microusd_per_job, 50000);
+  assert.match(plan.research.usage_basis, /estimates/);
   assert.deepEqual(
     providerBindings(plan.config).map((entry) => entry.name),
     ["personal_exa", "personal_openai"],
@@ -211,9 +213,9 @@ test("verification rejects capabilities that disagree with the reviewed research
     ],
     flight_submission_enabled: false,
     max_flight_runtime_seconds: 120,
-    monthly_execution_reserve_seconds: configured.monthly_flight_seconds,
-    monthly_provider_reserve_microusd:
-      configured.monthly_provider_cost_microusd,
+    usage_mode: "provider_managed",
+    monthly_execution_reserve_seconds: null,
+    monthly_provider_reserve_microusd: null,
     daily_execution_reserve_seconds: null,
   };
   assertCapabilities(configured, expected);
@@ -235,6 +237,12 @@ test("verification rejects capabilities that disagree with the reviewed research
     },
     (caps) => {
       caps.monthly_provider_reserve_microusd = 99999999;
+    },
+    (caps) => {
+      caps.usage_mode = "application_reservations";
+    },
+    (caps) => {
+      caps.daily_execution_reserve_seconds = 600;
     },
     (caps) => {
       caps.flight_submission_enabled = true;
@@ -536,11 +544,12 @@ test("strict configuration rejects secrets, invalid owners, different destinatio
     true,
   );
 });
-test("personal-cloud defaults use configured monthly reservations without an implicit daily guard", () => {
+test("personal-cloud defaults have no accumulated reservation gates", () => {
   const normalized = validateConfig(config());
-  assert.equal(normalized.monthly_flight_seconds, 18000);
-  assert.equal(normalized.monthly_provider_cost_microusd, 10000000);
+  assert.equal(normalized.monthly_flight_seconds, undefined);
+  assert.equal(normalized.monthly_provider_cost_microusd, undefined);
   assert.equal(normalized.daily_flight_seconds, undefined);
+  assert.deepEqual(usageWarnings(normalized), []);
   const explicit = validateConfig({
     ...config(),
     monthly_flight_seconds: 0,
@@ -550,6 +559,14 @@ test("personal-cloud defaults use configured monthly reservations without an imp
   assert.equal(explicit.monthly_flight_seconds, 0);
   assert.equal(explicit.monthly_provider_cost_microusd, 0);
   assert.equal(explicit.daily_flight_seconds, 0);
+  assert.equal(usageWarnings(explicit).length, 3);
+  assert.ok(
+    usageWarnings(explicit).every((warning) =>
+      /deprecated metadata.*no longer limits usage.*do not measure account balances/.test(
+        warning,
+      ),
+    ),
+  );
   const maximum = validateConfig({
     ...config(),
     monthly_flight_seconds: 2678400,
@@ -582,10 +599,18 @@ test("monthly and optional daily reservation fields reject malformed or unbounde
         `${field}: ${value}`,
       );
 });
-test("monthly-only plans remove lower-level legacy daily defaults while explicit daily guards survive", () => {
+test("provider-managed settings omit accumulated limits even from explicit legacy configurations", () => {
   const settings = {
     SOURCESQL_BACKEND: "motherduck",
+    SOURCESQL_USAGE_MODE: "operator_reserved",
     SOURCESQL_FLIGHT_DAILY_SECONDS: "600",
+    SOURCESQL_FLIGHT_MONTHLY_SECONDS: "18000",
+    SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD: "10000000",
+    SOURCESQL_EXA_DAILY_COST_MICROUSD: "1000000",
+    SOURCESQL_BRAVE_DAILY_COST_MICROUSD: "1000000",
+    SOURCESQL_SERPER_DAILY_COST_MICROUSD: "1000000",
+    SOURCESQL_FLIGHT_MAX_RUNTIME_SEC: "120",
+    SOURCESQL_EXA_APPROVED_COST_MICROUSD: "50000",
   };
   const secrets = {
     MOTHERDUCK_TOKEN: "fixture-database-key",
@@ -596,44 +621,50 @@ test("monthly-only plans remove lower-level legacy daily defaults while explicit
     settings,
     secrets,
   );
-  assert.equal(monthly.SOURCESQL_FLIGHT_MONTHLY_SECONDS, "18000");
-  assert.equal(monthly.SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD, "10000000");
   assert.equal(monthly.SOURCESQL_BACKEND, "motherduck");
-  assert.ok(!Object.hasOwn(monthly, "SOURCESQL_FLIGHT_DAILY_SECONDS"));
-  assert.deepEqual(settings, {
-    SOURCESQL_BACKEND: "motherduck",
-    SOURCESQL_FLIGHT_DAILY_SECONDS: "600",
-  });
+  assert.equal(monthly.SOURCESQL_USAGE_MODE, "provider_managed");
+  assert.equal(monthly.SOURCESQL_FLIGHT_MAX_RUNTIME_SEC, "120");
+  assert.equal(monthly.SOURCESQL_EXA_APPROVED_COST_MICROUSD, "50000");
+  const capKeys = Object.keys(settings).filter((key) =>
+    /DAILY|MONTHLY/.test(key),
+  );
+  for (const key of capKeys) assert.ok(!Object.hasOwn(monthly, key), key);
+  assert.equal(settings.SOURCESQL_FLIGHT_DAILY_SECONDS, "600");
   for (const daily of [0, 600, 86400]) {
     const explicit = environmentSettings(
-      validateConfig({ ...config(), daily_flight_seconds: daily }),
+      validateConfig({
+        ...config(),
+        daily_flight_seconds: daily,
+        monthly_flight_seconds: 0,
+        monthly_provider_cost_microusd: 0,
+      }),
       settings,
       secrets,
     );
-    assert.equal(explicit.SOURCESQL_FLIGHT_DAILY_SECONDS, String(daily));
-    assert.equal(explicit.SOURCESQL_FLIGHT_MONTHLY_SECONDS, "18000");
+    for (const key of capKeys) assert.ok(!Object.hasOwn(explicit, key), key);
   }
 });
-test("reviewed plans bind monthly reservations and changes require new approval", () => {
+test("reviewed plans disclose reference estimates and bind deprecated inputs without enforcing them", () => {
   const path = workspace();
   const first = createPlan(config(), root, path);
-  assertPlan(
-    first,
-    createPlan(
-      {
-        ...config(),
-        monthly_flight_seconds: 18000,
-        monthly_provider_cost_microusd: 10000000,
-      },
-      root,
-      path,
-    ),
-    first.plan_sha256,
+  assertPlan(first, createPlan(config(), root, path), first.plan_sha256);
+  assert.equal(first.limits.usage_mode, "provider_managed");
+  assert.equal(first.limits.max_flight_runtime_seconds, 120);
+  assert.deepEqual(first.limits.reference_notices.exa, {
+    cost_microusd: 10000000,
+    period: "UTC calendar month",
+  });
+  assert.deepEqual(first.limits.reference_notices.motherduck_f4, {
+    runtime_seconds: 1800,
+    period: "UTC day",
+  });
+  assert.match(
+    first.limits.reference_notices.basis,
+    /account plan, payment method and remaining credits are unknown/,
   );
-  assert.equal(first.limits.reservation_period, "UTC calendar month");
-  assert.equal(first.limits.allowance, "configured");
-  assert.equal(first.limits.flight_seconds_per_month, 18000);
-  assert.equal(first.limits.provider_cost_microusd_per_month, 10000000);
+  assert.deepEqual(first.warnings, []);
+  assert.ok(!Object.hasOwn(first.limits, "flight_seconds_per_month"));
+  assert.ok(!Object.hasOwn(first.limits, "provider_cost_microusd_per_month"));
   assert.ok(!Object.hasOwn(first.limits, "flight_seconds_per_day"));
   for (const fields of [
     { monthly_flight_seconds: 17999 },
@@ -654,10 +685,14 @@ test("reviewed plans bind monthly reservations and changes require new approval"
     root,
     path,
   );
-  assert.equal(daily.limits.flight_seconds_per_day, 600);
-  assert.equal(daily.limits.flight_seconds_per_month, 18000);
+  assert.deepEqual(daily.limits, first.limits);
+  assert.equal(daily.warnings.length, 1);
+  assert.match(
+    daily.warnings[0],
+    /daily_flight_seconds is deprecated metadata/,
+  );
 });
-test("monthly gateway caps stay separate from each provider's reviewed execution policy", () => {
+test("provider daily allowance metadata is optional and never emitted as an accumulated cap", () => {
   for (const name of ["exa", "brave", "serper"]) {
     const provider = {
       name,
@@ -687,8 +722,21 @@ test("monthly gateway caps stay separate from each provider's reviewed execution
         RESEARCH_BEARER_TOKEN: "a".repeat(40),
       },
     );
-    assert.equal(settings[prefix + "_DAILY_COST_MICROUSD"], "100000");
-    assert.equal(settings.SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD, "10000000");
+    assert.ok(!Object.hasOwn(settings, prefix + "_DAILY_COST_MICROUSD"));
+    assert.ok(
+      !Object.hasOwn(settings, "SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD"),
+    );
+    assert.equal(usageWarnings(base).length, 1);
+    const { daily_cost_microusd: _daily, ...perJobProvider } = provider;
+    const withoutDaily = validateConfig({
+      ...config(),
+      provider: perJobProvider,
+    });
+    assert.deepEqual(usageWarnings(withoutDaily), []);
+    const options = parseSetup(setupArguments(withoutDaily, "/synthetic"), {});
+    const runtime = flightConfiguration(options, "a".repeat(64), "reviewed");
+    assert.equal(runtime[prefix + "_APPROVED_COST_MICROUSD"], "50000");
+    assert.ok(!Object.keys(runtime).some((key) => /DAILY|MONTHLY/.test(key)));
   }
 });
 test("a reviewed plan binds every public file, exact setup source, account, owner, provider and limits", () => {

@@ -169,6 +169,7 @@ class Harness {
       dailySeconds?: number;
       monthlySeconds?: number;
       monthlyProviderCostMicrousd?: number;
+      usageMode?: "provider_managed" | "operator_reserved";
       exa?: HostedExaPolicy;
       search?: HostedSearchPolicy;
     } = {},
@@ -185,6 +186,7 @@ class Harness {
       dailySeconds: options.dailySeconds,
       monthlySeconds: options.monthlySeconds,
       monthlyProviderCostMicrousd: options.monthlyProviderCostMicrousd,
+      usageMode: options.usageMode ?? "provider_managed",
       sourceSha256: reviewedSourceHash,
       requirementsSha256: reviewedRequirementsHash,
       exa: options.exa,
@@ -733,7 +735,7 @@ test("known running status polls leave the durable writer revision unchanged", a
   }
 });
 
-test("runtime allowance is reserved at dispatch intent and stays held after uncertain submission", async () => {
+test("uncertain submission retains the active slot without accumulating runtime reservations", async () => {
   const h = await harness();
   try {
     const engine = h.engine("owner-a", {
@@ -752,16 +754,18 @@ test("runtime allowance is reserved at dispatch intent and stays held after unce
         `SELECT CAST(reserved_seconds AS VARCHAR) AS seconds FROM ${engine.table("flight_allowances")}`,
       ),
     );
-    assert.equal(reserve.rows[0].seconds, "120");
+    assert.deepEqual(reserve.rows, []);
     h.runs[0].status = "RUN_STATUS_FAILED";
-    await engine.call("job_status", { job_id: first.job_id });
-    await assert.rejects(engine.call("start_job", { job_id: second.job_id }), {
-      code: "budget_exhausted",
-    });
-    assert.equal(h.submissions, 1);
+    assert.equal(
+      (await engine.call<Row>("job_status", { job_id: first.job_id })).status,
+      "failed",
+    );
+    h.loseSubmissionResponse = false;
+    await engine.call("start_job", { job_id: second.job_id });
+    assert.equal(h.submissions, 2);
     assert.equal(
       (await engine.call<Row>("job_status", { job_id: second.job_id })).status,
-      "queued",
+      "dispatching",
     );
   } finally {
     await h.close();
@@ -1261,7 +1265,7 @@ test("existing Auto Flight keeps its exact v1 policy and limits without enabling
       60,
     );
     assert.equal(h.submissions, 1);
-    assert.equal(await providerReserve(engine), "50000");
+    assert.equal(await providerReserve(engine), "0");
     assert.throws(() =>
       h.engine("other-owner", { exa: { ...legacy, policyVersion: "unknown" } }),
     );
@@ -1617,7 +1621,7 @@ test("v3 model Flight drift and missing secret refuse before reservation, then e
     const replay = await submitter.call<Row>("query", request);
     assert.equal(replay.job_id, queued.job_id);
     assert.equal(h.submissions, 1);
-    assert.equal(await providerReserve(submitter), "50000");
+    assert.equal(await providerReserve(submitter), "0");
     assert.equal(h.runs.length, 1);
   } finally {
     await h.close();
@@ -1658,7 +1662,7 @@ test("v3 no-model policy refuses unexpected model configuration before native di
     h.flightConfig = expected;
     await submitter.call("start_job", { job_id: queued.job_id });
     assert.equal(h.submissions, 1);
-    assert.equal(await providerReserve(submitter), "50000");
+    assert.equal(await providerReserve(submitter), "0");
   } finally {
     await h.close();
   }
@@ -1741,7 +1745,7 @@ test("Exa is opt-in and normalized budgets cannot expand the operator grant", as
   }
 });
 
-test("Exa reserves nothing for queued or unreviewed secret binding, then reserves at dispatch intent", async () => {
+test("Exa preserves policy and secret admission without accumulating provider reservations", async () => {
   const h = await harness();
   try {
     configureExa(h);
@@ -1777,7 +1781,7 @@ test("Exa reserves nothing for queued or unreviewed secret binding, then reserve
     h.flightSecrets = ["sourcesql_exa"];
     await submitter.call("start_job", { job_id: queued.job_id });
     assert.equal(h.submissions, 1);
-    assert.equal(await providerReserve(submitter), "50000");
+    assert.equal(await providerReserve(submitter), "0");
     const after = (
       await submitter.connection((client) =>
         client.query(
@@ -1787,13 +1791,13 @@ test("Exa reserves nothing for queued or unreviewed secret binding, then reserve
       )
     ).rows[0];
     assert.ok(after.dispatch_intent_at);
-    assert.equal(Number(after.provider_cost_reserved_microusd), 50_000);
+    assert.equal(Number(after.provider_cost_reserved_microusd), 0);
   } finally {
     await h.close();
   }
 });
 
-test("Exa request replay does not duplicate dispatch or release an uncertain provider reserve", async () => {
+test("Exa request replay does not duplicate dispatch or create provider reservations", async () => {
   const h = await harness();
   try {
     configureExa(h);
@@ -1815,19 +1819,19 @@ test("Exa request replay does not duplicate dispatch or release an uncertain pro
     assert.equal(replay.job_id, first.job_id);
     await engine.call("job_status", { job_id: first.job_id });
     assert.equal(h.submissions, 1);
-    assert.equal(await providerReserve(engine), "50000");
+    assert.equal(await providerReserve(engine), "0");
     await assert.rejects(
       engine.call("query", { ...request, query: "SELECT 2 AS value" }),
       { code: "idempotency_conflict" },
     );
     assert.equal(h.submissions, 1);
-    assert.equal(await providerReserve(engine), "50000");
+    assert.equal(await providerReserve(engine), "0");
   } finally {
     await h.close();
   }
 });
 
-test("daily Exa reserve exhaustion refuses a second Flight before md_run_flight", async () => {
+test("legacy daily Exa metadata permits a sequential Flight after the active Flight has stopped", async () => {
   const h = await harness();
   try {
     configureExa(h);
@@ -1839,13 +1843,28 @@ test("daily Exa reserve exhaustion refuses a second Flight before md_run_flight"
     const first = await engine.call<Row>("query", liveQuery());
     const second = await engine.call<Row>("query", liveQuery());
     assert.equal(second.status, "queued");
+    assert.equal(
+      h.submissions,
+      1,
+      "The second job must wait for the active Flight",
+    );
     h.runs[0].status = "RUN_STATUS_FAILED";
-    await engine.call("job_status", { job_id: first.job_id });
-    await assert.rejects(engine.call("start_job", { job_id: second.job_id }), {
-      code: "budget_exhausted",
+    const stopped = await engine.call<Row>("job_status", {
+      job_id: first.job_id,
     });
-    assert.equal(h.submissions, 1);
-    assert.equal(await providerReserve(engine), "50000");
+    assert.equal(
+      stopped.status,
+      "failed",
+      "The first Flight is terminal before the next dispatch",
+    );
+    await engine.call("start_job", { job_id: second.job_id });
+    assert.equal(
+      h.submissions,
+      2,
+      "Only the stopped Flight frees the single active slot",
+    );
+    await engine.call("job_status", { job_id: second.job_id });
+    assert.equal(await providerReserve(engine), "0");
     const saved = (
       await engine.connection((client) =>
         client.query(
@@ -1854,20 +1873,20 @@ test("daily Exa reserve exhaustion refuses a second Flight before md_run_flight"
         ),
       )
     ).rows[0];
-    assert.equal(saved.status, "queued");
-    assert.equal(saved.dispatch_intent_at, null);
+    assert.equal(saved.status, "dispatching");
+    assert.ok(saved.dispatch_intent_at);
     assert.equal(Number(saved.provider_cost_reserved_microusd), 0);
     const runtime = (
       await engine.connection((client) =>
         client.query(
-          `SELECT CAST(sum(reserved_seconds) AS VARCHAR) AS seconds FROM ${engine.table("flight_allowances")}`,
+          `SELECT CAST(coalesce(sum(reserved_seconds),0) AS VARCHAR) AS seconds FROM ${engine.table("flight_allowances")}`,
         ),
       )
     ).rows[0];
     assert.equal(
       runtime.seconds,
-      "120",
-      "Failed second reservation transaction must not consume runtime",
+      "0",
+      "New dispatches must not accumulate obsolete runtime holds",
     );
   } finally {
     await h.close();
@@ -2051,7 +2070,7 @@ for (const provider of ["brave", "serper"] as const) {
       h.flightSecrets = [policy.secretName];
       await submitter.call("start_job", { job_id: queued.job_id });
       assert.equal(h.submissions, 1);
-      assert.equal(await providerReserve(submitter), "50000");
+      assert.equal(await providerReserve(submitter), "0");
       const saved = (
         await submitter.connection((client) =>
           client.query(
@@ -2061,7 +2080,7 @@ for (const provider of ["brave", "serper"] as const) {
         )
       ).rows[0];
       assert.ok(saved.dispatch_intent_at);
-      assert.equal(Number(saved.provider_cost_reserved_microusd), 50_000);
+      assert.equal(Number(saved.provider_cost_reserved_microusd), 0);
     } finally {
       await h.close();
     }
@@ -2091,7 +2110,7 @@ for (const provider of ["brave", "serper"] as const) {
     }
   });
 
-  test(`${provider} lost-response replay preserves the reservation without duplicate Flight submission`, async () => {
+  test(`${provider} lost-response replay avoids duplicate Flight submission and accumulated reservations`, async () => {
     const h = await harness();
     try {
       const policy = searchPolicy(provider);
@@ -2108,14 +2127,14 @@ for (const provider of ["brave", "serper"] as const) {
       };
       const first = await engine.call<Row>("query", request);
       assert.equal(first.status, "submission_unknown");
-      assert.equal(await providerReserve(engine), "5000");
+      assert.equal(await providerReserve(engine), "0");
       const replay = await h
         .engine("owner-a", { search: policy, allowSubmission: true })
         .call<Row>("query", { ...request, source_mode: "allow_excerpt" });
       assert.equal(replay.job_id, first.job_id);
       await engine.call("job_status", { job_id: first.job_id });
       assert.equal(h.submissions, 1);
-      assert.equal(await providerReserve(engine), "5000");
+      assert.equal(await providerReserve(engine), "0");
       await assert.rejects(
         engine.call("query", { ...request, query: "SELECT 2 AS value" }),
         { code: "idempotency_conflict" },
@@ -2126,7 +2145,7 @@ for (const provider of ["brave", "serper"] as const) {
     }
   });
 
-  test(`${provider} exhausted daily estimate refuses a second Flight without consuming execution allowance`, async () => {
+  test(`${provider} legacy daily metadata permits sequential Flights while preserving one active Flight`, async () => {
     const h = await harness();
     try {
       const policy = searchPolicy(provider, { dailyCostMicrousd: 50_000 });
@@ -2139,14 +2158,28 @@ for (const provider of ["brave", "serper"] as const) {
       const first = await engine.call<Row>("query", providerQuery());
       const second = await engine.call<Row>("query", providerQuery());
       assert.equal(second.status, "queued");
-      h.runs[0].status = "RUN_STATUS_FAILED";
-      await engine.call("job_status", { job_id: first.job_id });
-      await assert.rejects(
-        engine.call("start_job", { job_id: second.job_id }),
-        { code: "budget_exhausted" },
+      assert.equal(
+        h.submissions,
+        1,
+        "The second job must wait for the active Flight",
       );
-      assert.equal(h.submissions, 1);
-      assert.equal(await providerReserve(engine), "50000");
+      h.runs[0].status = "RUN_STATUS_FAILED";
+      const stopped = await engine.call<Row>("job_status", {
+        job_id: first.job_id,
+      });
+      assert.equal(
+        stopped.status,
+        "failed",
+        "The first Flight is terminal before the next dispatch",
+      );
+      await engine.call("start_job", { job_id: second.job_id });
+      assert.equal(
+        h.submissions,
+        2,
+        "Only the stopped Flight frees the single active slot",
+      );
+      await engine.call("job_status", { job_id: second.job_id });
+      assert.equal(await providerReserve(engine), "0");
       const saved = (
         await engine.connection((client) =>
           client.query(
@@ -2155,17 +2188,17 @@ for (const provider of ["brave", "serper"] as const) {
           ),
         )
       ).rows[0];
-      assert.equal(saved.status, "queued");
-      assert.equal(saved.dispatch_intent_at, null);
+      assert.equal(saved.status, "dispatching");
+      assert.ok(saved.dispatch_intent_at);
       assert.equal(Number(saved.provider_cost_reserved_microusd), 0);
       const runtime = (
         await engine.connection((client) =>
           client.query(
-            `SELECT CAST(sum(reserved_seconds) AS VARCHAR) AS seconds FROM ${engine.table("flight_allowances")}`,
+            `SELECT CAST(coalesce(sum(reserved_seconds),0) AS VARCHAR) AS seconds FROM ${engine.table("flight_allowances")}`,
           ),
         )
       ).rows[0];
-      assert.equal(runtime.seconds, "120");
+      assert.equal(runtime.seconds, "0");
     } finally {
       await h.close();
     }
@@ -2219,12 +2252,13 @@ async function runtimeReserve(engine: MotherDuckEngine) {
   ).rows[0].seconds;
 }
 
-test("an exhausted automatic start preserves one queued handle across replay and cancellation without changing limits", async () => {
+test("operator-reserved compatibility: an exhausted automatic start preserves one queued handle across replay and cancellation without changing limits", async () => {
   const h = await harness();
   try {
     configureExa(h);
     const engine = h.engine("owner-a", {
       allowSubmission: true,
+      usageMode: "operator_reserved",
       exa: exaPolicy(),
     });
     await engine.initialize();
@@ -2302,13 +2336,14 @@ test("an exhausted automatic start preserves one queued handle across replay and
   }
 });
 
-test("an exhausted provider allowance returns the queued handle and rolls back execution reservation", async () => {
+test("operator-reserved compatibility: an exhausted provider allowance returns the queued handle and rolls back execution reservation", async () => {
   const h = await harness();
   try {
     const policy = searchPolicy("brave", { dailyCostMicrousd: 50_000 });
     configureSearch(h, policy);
     const engine = h.engine("owner-a", {
       allowSubmission: true,
+      usageMode: "operator_reserved",
       search: policy,
     });
     await engine.initialize();
@@ -2418,7 +2453,7 @@ test("MCP reopens an admission-failed job with its safe code and no result or ex
   }
 });
 
-test("MCP returns the blocked queued receipt and same-ID resume guidance rather than an error", async () => {
+test("operator-reserved compatibility: MCP returns the blocked queued receipt and same-ID resume guidance rather than an error", async () => {
   const h = await harness();
   const client = new Client({ name: "budget-boundary-test", version: "1" });
   let server: ReturnType<typeof createServer> | undefined;
@@ -2426,6 +2461,7 @@ test("MCP returns the blocked queued receipt and same-ID resume guidance rather 
     configureExa(h);
     const engine = h.engine("owner-a", {
       allowSubmission: true,
+      usageMode: "operator_reserved",
       exa: exaPolicy(),
     });
     await engine.initialize();
@@ -2618,7 +2654,7 @@ function monthWindow() {
     ).toISOString(),
   };
 }
-test("monthly Flight reservations carry existing work forward, exclude other months and survive reopening", async () => {
+test("operator-reserved compatibility: monthly Flight reservations carry existing work forward, exclude other months and survive reopening", async () => {
   const h = await harness();
   try {
     const legacy = h.engine();
@@ -2637,6 +2673,7 @@ test("monthly Flight reservations carry existing work forward, exclude other mon
       );
     const engine = h.engine("owner-a", {
       allowSubmission: true,
+      usageMode: "operator_reserved",
       monthlySeconds: 240,
     });
     const caps = await engine.call<Row>("capabilities");
@@ -2662,6 +2699,7 @@ test("monthly Flight reservations carry existing work forward, exclude other mon
     });
     const reopened = h.engine("owner-a", {
       allowSubmission: true,
+      usageMode: "operator_reserved",
       monthlySeconds: 240,
     });
     assert.deepEqual(
@@ -2683,12 +2721,13 @@ test("monthly Flight reservations carry existing work forward, exclude other mon
     await h.close();
   }
 });
-test("monthly search/model reservations refuse before charging Flight or provider rows", async () => {
+test("operator-reserved compatibility: monthly search/model reservations refuse before charging Flight or provider rows", async () => {
   const h = await harness();
   try {
     configureExa(h);
     const engine = h.engine("owner-a", {
       allowSubmission: true,
+      usageMode: "operator_reserved",
       exa: exaPolicy(),
       monthlySeconds: 18000,
       monthlyProviderCostMicrousd: 100000,
@@ -2732,11 +2771,12 @@ test("monthly search/model reservations refuse before charging Flight or provide
     await h.close();
   }
 });
-test("monthly-only jobs can use more than the legacy daily default while a zero monthly cap stays closed", async () => {
+test("operator-reserved compatibility: monthly-only jobs can use more than the legacy daily default while a zero monthly cap stays closed", async () => {
   const h = await harness();
   try {
     const engine = h.engine("owner-a", {
       allowSubmission: true,
+      usageMode: "operator_reserved",
       monthlySeconds: 1800,
     });
     await engine.initialize();
@@ -2746,6 +2786,7 @@ test("monthly-only jobs can use more than the legacy daily default while a zero 
     assert.equal(await runtimeReserve(engine), "720");
     const closed = h.engine("owner-b", {
       allowSubmission: true,
+      usageMode: "operator_reserved",
       monthlySeconds: 0,
       monthlyProviderCostMicrousd: 0,
     });
@@ -2761,6 +2802,458 @@ test("monthly-only jobs can use more than the legacy daily default while a zero 
       assert.throws(() =>
         h.engine("invalid", { monthlyProviderCostMicrousd: bad }),
       );
+  } finally {
+    await h.close();
+  }
+});
+
+test("provider-managed dispatch ignores historical reservations while retaining finite jobs and one active Flight", async () => {
+  const h = await harness();
+  try {
+    configureExa(h);
+    const engine = h.engine("owner-a", {
+      usageMode: "provider_managed",
+      allowSubmission: true,
+      dailySeconds: 0,
+      monthlySeconds: 0,
+      monthlyProviderCostMicrousd: 0,
+      exa: exaPolicy(50_000),
+    });
+    await engine.initialize();
+    await reserveRuntimeDay(engine, 99999);
+    await engine.connection((client) =>
+      client.query(
+        `INSERT INTO ${engine.table("provider_allowances")} VALUES($1,99999999)`,
+        [new Date().toISOString().slice(0, 10)],
+      ),
+    );
+    const caps = await engine.call<Row>("capabilities");
+    assert.equal(caps.usage_mode, "provider_managed");
+    assert.equal(caps.daily_execution_reserve_seconds, null);
+    assert.equal(caps.monthly_execution_reserve_seconds, null);
+    assert.equal(caps.monthly_provider_reserve_microusd, null);
+    assert.equal(caps.max_flight_runtime_seconds, 120);
+    await assert.rejects(
+      engine.call("query", {
+        ...liveQuery(),
+        budgets: { max_cost_microusd: 50_001 },
+      }),
+      { code: "invalid_request" },
+    );
+    const request = liveQuery();
+    const first = await engine.call<Row>("query", request);
+    assert.equal(first.capacity, undefined);
+    assert.equal(
+      (await engine.call<Row>("query", request)).job_id,
+      first.job_id,
+    );
+    const second = await engine.call<Row>("query", liveQuery());
+    assert.equal(second.status, "queued");
+    assert.equal(
+      h.submissions,
+      1,
+      "Historical quotas do not relax the single active Flight constraint",
+    );
+    h.runs[0].status = "RUN_STATUS_FAILED";
+    assert.equal(
+      (await engine.call<Row>("job_status", { job_id: first.job_id })).status,
+      "failed",
+    );
+    await engine.call("start_job", { job_id: second.job_id });
+    assert.equal(
+      h.submissions,
+      2,
+      "The second Flight starts only after the first is terminal",
+    );
+    assert.equal(await runtimeReserve(engine), "99999");
+    assert.equal(await providerReserve(engine), "99999999");
+    const report = await engine.call<Row>("usage_report");
+    assert.deepEqual(
+      report.providers,
+      [],
+      "Historical reservation ceilings are not provider costs",
+    );
+    assert.equal(report.motherduck.observed_flight_seconds, 0);
+    assert.equal(
+      report.unobserved_flight_jobs,
+      2,
+      "Unmeasured dispatched jobs remain visible rather than being reported as free",
+    );
+    assert.equal(report.motherduck.account_billed_cost_microusd, null);
+  } finally {
+    await h.close();
+  }
+});
+
+test("usage reports include failed and cancelled provider work, deduplicate request IDs and isolate owner/job scope", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { exa: exaPolicy() });
+    const other = h.engine("owner-b");
+    await engine.initialize();
+    await other.initialize();
+    const window = {
+      start: "2026-10-01T00:00:00.000Z",
+      end: "2026-11-01T00:00:00.000Z",
+    };
+    const shared = {
+      provider: "exa",
+      kind: "search",
+      status: "completed",
+      request_id: "exa-shared",
+      usage: { estimated_cost_microusd: 42000, cost_microusd: null },
+    };
+    const receipts = [
+      {
+        run_id: "usage-completed",
+        started_at: "2026-10-18T10:00:00.000Z",
+        status: "completed",
+        provider_events: [shared],
+      },
+      {
+        run_id: "usage-failed",
+        started_at: "2026-10-18T11:00:00.000Z",
+        status: "failed",
+        provider_events: [
+          shared,
+          {
+            provider: "openai_embeddings",
+            kind: "embedding",
+            status: "completed",
+            request_id: "openai-1",
+            usage: { cost_microusd: 150, input_tokens: 12 },
+          },
+        ],
+      },
+      {
+        run_id: "usage-cancelled",
+        started_at: "2026-10-18T12:00:00.000Z",
+        status: "cancelled",
+        provider_events: [
+          {
+            provider: "exa",
+            kind: "fetch",
+            status: "remote_outcome_unknown",
+            request_id: "exa-uncertain",
+            usage: {},
+          },
+        ],
+      },
+      {
+        run_id: "usage-outside",
+        started_at: "2026-09-30T12:00:00.000Z",
+        status: "completed",
+        provider_events: [{ ...shared, request_id: "outside" }],
+      },
+    ];
+    for (const receipt of receipts) {
+      const requestId = randomUUID();
+      await engine.connection((client) =>
+        client.query(
+          `INSERT INTO ${engine.table("runs")} VALUES($1,$2,$3,$4)`,
+          [
+            receipt.run_id,
+            requestId,
+            digest(requestId),
+            JSON.stringify({
+              ...receipt,
+              query: "PRIVATE-QUERY",
+              source_text: "PRIVATE-SOURCE",
+            }),
+          ],
+        ),
+      );
+    }
+    const report = await engine.call<Row>("usage_report", window);
+    const exa = report.providers.find((entry: Row) => entry.service === "exa");
+    assert.equal(exa.requests, 2);
+    assert.equal(exa.estimated_cost_microusd, 42000);
+    assert.equal(exa.reported_cost_microusd, null);
+    assert.equal(exa.reported_cost_requests, 0);
+    assert.equal(exa.estimated_cost_requests, 1);
+    assert.equal(exa.cost_unavailable_requests, 1);
+    assert.equal(exa.uncertain_requests, 1);
+    const openai = report.providers.find(
+      (entry: Row) => entry.service === "openai",
+    );
+    assert.equal(openai.reported_cost_microusd, 150);
+    assert.equal(openai.input_tokens, 12);
+    assert.ok(!JSON.stringify(report).includes("PRIVATE-"));
+    assert.deepEqual(
+      (await other.call<Row>("usage_report", window)).providers,
+      [],
+    );
+    const savedSql = await engine.call<Row>("query", {
+      ...query(),
+      profile: "exa",
+    });
+    const saved = await publish(engine, "saved-data-no-provider", {
+      jobId: savedSql.job_id,
+    });
+    await engine.connection((client) =>
+      client.query(
+        `UPDATE ${engine.table("runs")} SET receipt=$1 WHERE id=$2`,
+        [
+          JSON.stringify({
+            ...saved.receipt,
+            started_at: "2026-10-18T13:00:00.000Z",
+            provider_events: [],
+          }),
+          saved.run_id,
+        ],
+      ),
+    );
+    const localSqlReport = await engine.call<Row>("usage_report", {
+      ...window,
+      job_id: savedSql.job_id,
+    });
+    assert.deepEqual(
+      localSqlReport.providers,
+      [],
+      "Saved-data SQL must not inherit the configured Exa per-job ceiling as cost",
+    );
+    assert.equal(localSqlReport.job_id, savedSql.job_id);
+    await assert.rejects(
+      other.call("usage_report", { ...window, job_id: savedSql.job_id }),
+      { code: "not_found" },
+    );
+    for (const bad of [
+      { start: "invalid" },
+      { end: window.start, start: window.end },
+      { start: "2024-01-01T00:00:00Z", end: window.end },
+      { query: "private" },
+    ])
+      await assert.rejects(engine.call("usage_report", bad), {
+        code: "invalid_request",
+      });
+    assert.equal(
+      h.submissions,
+      0,
+      "Cost reports and queued saved SQL make no native Flight calls",
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test("terminal Flight observations meter runtime once across failures, cancellations, polling and reopening", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    const started = new Date().toISOString();
+    const window = {
+      start: new Date(Date.parse(started) - 60000).toISOString(),
+      end: new Date(Date.parse(started) + 60000).toISOString(),
+    };
+    h.runAckPatch = {
+      started_at: started,
+      ended_at: new Date(Date.parse(started) + 12400).toISOString(),
+      elapsed_seconds: 12.4,
+    };
+    const first = await engine.call<Row>("query", query());
+    assert.equal(
+      (await engine.call<Row>("usage_report", window)).motherduck
+        .observed_flights,
+      0,
+      "Running Flight time is not a settled measurement",
+    );
+    h.runs[0].status = "RUN_STATUS_FAILED";
+    await engine.call("job_status", { job_id: first.job_id });
+    await engine.call("job_status", { job_id: first.job_id });
+    h.runAckPatch = {
+      started_at: started,
+      ended_at: new Date(Date.parse(started) + 4100).toISOString(),
+      elapsed_seconds: 4.1,
+    };
+    const second = await engine.call<Row>("query", query());
+    h.runs[1].status = "RUN_STATUS_CANCELLED";
+    await engine.call("job_status", { job_id: second.job_id });
+    const reopened = h.engine();
+    const report = await reopened.call<Row>("usage_report", window);
+    assert.equal(report.motherduck.observed_flights, 2);
+    assert.equal(report.motherduck.observed_flight_seconds, 18);
+    assert.equal(report.motherduck.estimated_flight_cost_microusd, 750);
+    assert.equal(report.motherduck.sql_compute_cost_microusd, null);
+    assert.equal(report.motherduck.storage_cost_microusd, null);
+    assert.equal(report.motherduck.account_billed_cost_microusd, null);
+    assert.equal(report.unobserved_flight_jobs, 0);
+    assert.equal(
+      (
+        await reopened.call<Row>("usage_report", {
+          ...window,
+          job_id: first.job_id,
+        })
+      ).motherduck.observed_flight_seconds,
+      13,
+    );
+    const other = h.engine("owner-b");
+    await other.initialize();
+    assert.equal(
+      (await other.call<Row>("usage_report", window)).motherduck
+        .observed_flights,
+      0,
+    );
+    assert.equal(await runtimeReserve(engine), "0");
+    assert.equal(h.submissions, 2);
+  } finally {
+    await h.close();
+  }
+});
+
+test("usage notice dismissal persists by owner and provider period across gateway reopening", async () => {
+  const h = await harness();
+  try {
+    const owner = h.engine("owner-a"),
+      other = h.engine("owner-b");
+    await owner.initialize();
+    await other.initialize();
+    const receipt = {
+      run_id: "exa-reference-crossing",
+      started_at: new Date().toISOString(),
+      status: "completed",
+      provider_events: [
+        {
+          provider: "exa",
+          kind: "search",
+          status: "completed",
+          request_id: "reference-crossing",
+          usage: { estimated_cost_microusd: 10_007_000 },
+        },
+      ],
+    };
+    for (const engine of [owner, other]) {
+      const requestId = randomUUID();
+      await engine.connection((client) =>
+        client.query(
+          `INSERT INTO ${engine.table("runs")} VALUES($1,$2,$3,$4)`,
+          [
+            receipt.run_id,
+            requestId,
+            digest(requestId),
+            JSON.stringify(receipt),
+          ],
+        ),
+      );
+    }
+    const notices = await owner.call<Row[]>("usage_notices");
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].service, "exa");
+    assert.equal(notices[0].blocking, false);
+    assert.equal(notices[0].used, 10_007_000);
+    assert.deepEqual(await other.call("usage_notices"), notices);
+    for (let attempt = 0; attempt < 2; attempt++)
+      assert.deepEqual(
+        await owner.call("dismiss_usage_notice", { notice_id: notices[0].id }),
+        { dismissed: true },
+      );
+    const reopened = h.engine("owner-a");
+    assert.deepEqual(await reopened.call("usage_notices"), []);
+    assert.deepEqual(
+      await other.call("usage_notices"),
+      notices,
+      "The same notice identity remains visible in another owner's namespace",
+    );
+    const rows = await reopened.connection((client) =>
+      client.query(
+        `SELECT id,dismissed_at FROM ${reopened.table("usage_notice_dismissals")}`,
+      ),
+    );
+    assert.equal(rows.rows.length, 1);
+    assert.equal(rows.rows[0].id, notices[0].id);
+    assert.ok(Number.isFinite(Date.parse(rows.rows[0].dismissed_at)));
+    for (const args of [
+      { notice_id: "invalid" },
+      { notice_id: notices[0].id, extra: "invalid" },
+    ])
+      await assert.rejects(owner.call("dismiss_usage_notice", args), {
+        code: "invalid_request",
+      });
+    const legacy = h.engine("owner-a", { usageMode: "operator_reserved" });
+    const report = await legacy.call<Row>("usage_report");
+    assert.equal(report.usage_mode, "operator_reserved");
+    assert.equal(
+      report.providers[0].estimated_cost_microusd,
+      10_007_000,
+      "Dismissal never changes metered usage",
+    );
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("usage reports backfill late terminal Flights without changing jobs and reject mismatched observations", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    const started = new Date().toISOString();
+    const window = {
+      start: new Date(Date.parse(started) - 60000).toISOString(),
+      end: new Date(Date.parse(started) + 60000).toISOString(),
+    };
+    h.runAckPatch = {
+      started_at: started,
+      ended_at: new Date(Date.parse(started) + 12400).toISOString(),
+      elapsed_seconds: 12.4,
+    };
+    const job = await engine.call<Row>("query", query());
+    await publish(engine, "late-finished-research", { jobId: job.job_id });
+    assert.equal(
+      (await engine.call<Row>("job_status", { job_id: job.job_id })).status,
+      "completed",
+    );
+    const persistedJob = async () =>
+      (
+        await engine.connection((client) =>
+          client.query(
+            `SELECT status,flight_settled,updated_at,engine_run_id,result_id FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+            [job.job_id],
+          ),
+        )
+      ).rows[0];
+    const before = await persistedJob();
+    assert.equal(
+      before.flight_settled,
+      false,
+      "The app can finish before the native Flight cleanup",
+    );
+    h.runs[0].status = "RUN_STATUS_SUCCEEDED";
+    const original = h.runs[0].config_json;
+    h.runs[0].config_json = JSON.stringify({
+      ...JSON.parse(original),
+      JOB_ID: randomUUID(),
+    });
+    const wrongJob = await engine.call<Row>("usage_report", window);
+    assert.equal(wrongJob.motherduck.observed_flights, 0);
+    assert.equal(wrongJob.unobserved_flight_jobs, 1);
+    h.runs[0].config_json = original;
+    h.runs[0].flight_version++;
+    assert.equal(
+      (await engine.call<Row>("usage_report", window)).motherduck
+        .observed_flights,
+      0,
+      "Unreviewed Flight versions cannot contribute trusted observations",
+    );
+    h.runs[0].flight_version--;
+    const reopened = h.engine();
+    const report = await reopened.call<Row>("usage_report", window);
+    assert.equal(report.motherduck.observed_flights, 1);
+    assert.equal(report.motherduck.observed_flight_seconds, 13);
+    assert.equal(report.motherduck.estimated_flight_cost_microusd, 542);
+    assert.equal(report.unobserved_flight_jobs, 0);
+    assert.deepEqual(
+      (await reopened.call<Row>("usage_report", window)).motherduck,
+      report.motherduck,
+    );
+    assert.deepEqual(
+      await persistedJob(),
+      before,
+      "Cost inspection neither changes execution settlement nor rewrites job status",
+    );
+    assert.equal(h.submissions, 1, "No Flight starts during cost reporting");
+    assert.equal(h.cancellations, 0);
   } finally {
     await h.close();
   }
@@ -2814,23 +3307,40 @@ test("hosted preflight uses canonical Python admission without provider dispatch
   try {
     const engine = h.engine("owner-a", { allowSubmission: true });
     await engine.initialize();
-    const store = new ResearchStore(h.directory, seed, undefined, 3000, { backend: new MotherDuckStateBackend(engine) });
-    server = createServer(store, join(root, "apps/research/dist/research.html"), { engine });
+    const store = new ResearchStore(h.directory, seed, undefined, 3000, {
+      backend: new MotherDuckStateBackend(engine),
+    });
+    server = createServer(
+      store,
+      join(root, "apps/research/dist/research.html"),
+      { engine },
+    );
     const [a, b] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(a), client.connect(b)]);
     const request = { ...query(), partial_policy: "strict" };
-    const submitted = await client.callTool({ name: "sourcesql_explain", arguments: request });
+    const submitted = await client.callTool({
+      name: "sourcesql_explain",
+      arguments: request,
+    });
     assert.notEqual(submitted.isError, true);
     const job = submitted.structuredContent as Row;
     assert.equal(job.operation, "explain");
     assert.equal(job.pending, true);
     assert.equal(job.result_id, undefined);
-    const [written] = await h.sql.request(randomUUID(), "execute_preflight_job", undefined, [engine.namespace, job.job_id]);
+    const [written] = await h.sql.request(
+      randomUUID(),
+      "execute_preflight_job",
+      undefined,
+      [engine.namespace, job.job_id],
+    );
     assert.equal(written.status, "completed");
     assert.equal(written.provider_requests, 0);
     h.runs[0].status = "RUN_STATUS_SUCCEEDED";
     h.runs[0].exit_code = 0;
-    const done = await client.callTool({ name: "sourcesql_job_status", arguments: { job_id: job.job_id } });
+    const done = await client.callTool({
+      name: "sourcesql_job_status",
+      arguments: { job_id: job.job_id },
+    });
     assert.notEqual(done.isError, true);
     const receipt = done.structuredContent as Row;
     assert.equal(receipt.preflight.external_calls, 0);
@@ -2838,16 +3348,30 @@ test("hosted preflight uses canonical Python admission without provider dispatch
     assert.equal(receipt.result_id, undefined);
     assert.equal(receipt.run_id, undefined);
     assert.equal(receipt.pending, false);
-    assert.equal((await engine.call<Row>("explain", request)).job_id, job.job_id);
+    assert.equal(
+      (await engine.call<Row>("explain", request)).job_id,
+      job.job_id,
+    );
     assert.equal(h.submissions, 1);
-    assert.equal(await runtimeReserve(engine), "120");
+    assert.equal(await runtimeReserve(engine), "0");
     assert.equal(await providerReserve(engine), "0");
-    const invalid = await engine.call<Row>("explain", { ...request, request_id: randomUUID(), query: "SELECT SEM_MATCH(content) FROM WEB_SEARCH('aurora')" });
-    const [failed] = await h.sql.request(randomUUID(), "execute_preflight_job", undefined, [engine.namespace, invalid.job_id]);
+    const invalid = await engine.call<Row>("explain", {
+      ...request,
+      request_id: randomUUID(),
+      query: "SELECT SEM_MATCH(content) FROM WEB_SEARCH('aurora')",
+    });
+    const [failed] = await h.sql.request(
+      randomUUID(),
+      "execute_preflight_job",
+      undefined,
+      [engine.namespace, invalid.job_id],
+    );
     assert.equal(failed.status, "failed");
     assert.equal(failed.provider_requests, 0);
     h.runs[1].status = "RUN_STATUS_FAILED";
-    const refusal = await engine.call<Row>("job_status", { job_id: invalid.job_id });
+    const refusal = await engine.call<Row>("job_status", {
+      job_id: invalid.job_id,
+    });
     assert.equal(refusal.error_code, "invalid_query");
     assert.equal(refusal.stage, "admission");
     assert.equal(refusal.provider_dispatch, "not_dispatched");
@@ -2866,16 +3390,32 @@ test("completed preflight reauthorizes input pins on status, start and cancel", 
     await engine.initialize();
     const saved = await publish(engine, "wq_preflight_parent");
     const submitted = await engine.call<Row>("explain", {
-      ...query(), query: "SELECT value FROM input.saved", partial_policy: "strict",
+      ...query(),
+      query: "SELECT value FROM input.saved",
+      partial_policy: "strict",
       inputs: { saved: { result_id: saved.result_id, view: "original" } },
     });
-    await h.sql.request(randomUUID(), "execute_preflight_job", undefined, [engine.namespace, submitted.job_id]);
+    await h.sql.request(randomUUID(), "execute_preflight_job", undefined, [
+      engine.namespace,
+      submitted.job_id,
+    ]);
     h.runs[0].status = "RUN_STATUS_SUCCEEDED";
     h.runs[0].exit_code = 0;
-    assert.equal((await engine.call<Row>("job_status", { job_id: submitted.job_id })).preflight.external_calls, 0);
-    await engine.connection((connection) => connection.query(`UPDATE ${engine.table("results")} SET revoked=1 WHERE id=$1`, [saved.result_id]));
+    assert.equal(
+      (await engine.call<Row>("job_status", { job_id: submitted.job_id }))
+        .preflight.external_calls,
+      0,
+    );
+    await engine.connection((connection) =>
+      connection.query(
+        `UPDATE ${engine.table("results")} SET revoked=1 WHERE id=$1`,
+        [saved.result_id],
+      ),
+    );
     for (const method of ["job_status", "start_job", "cancel_job"])
-      await assert.rejects(engine.call(method, { job_id: submitted.job_id }), { code: "unauthorized" });
+      await assert.rejects(engine.call(method, { job_id: submitted.job_id }), {
+        code: "unauthorized",
+      });
     assert.equal(h.submissions, 1);
   } finally {
     await h.close();

@@ -926,6 +926,111 @@ html[data-table-transition="out"] {
   scrollbar-width: thin;
   pointer-events: none;
 }
+.research-job-workspace {
+  position: relative;
+  min-width: 0;
+}
+.research-job-workspace .workspace-notifications {
+  max-height: calc(100% - 24px);
+}
+.usage-notice-layer {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  flex: none;
+  pointer-events: none;
+}
+.usage-notice-layer[data-state="hidden"] {
+  height: 0;
+}
+.usage-notice-layer[data-state="visible"] {
+  margin-bottom: 8px;
+}
+.usage-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+  width: max-content;
+  max-width: min(560px, 100%);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow:
+    0 6px 24px #00000016,
+    0 1px 4px #00000008;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(10px);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--overlay-duration) var(--overlay-easing),
+    transform var(--overlay-duration) var(--overlay-easing),
+    visibility 0s linear var(--overlay-duration);
+}
+.usage-notice[data-state="visible"] {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+.usage-notice-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+  color: var(--primary);
+}
+.usage-notice-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 180px;
+  overflow-wrap: anywhere;
+}
+.usage-notice-copy strong {
+  font-weight: 600;
+}
+.usage-notice-copy span {
+  color: var(--muted);
+}
+.usage-notice-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  gap: 8px;
+  min-width: 0;
+}
+.usage-notice-actions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--link);
+  text-decoration: none;
+}
+.usage-notice-actions a:hover {
+  text-decoration: underline;
+}
+.usage-notice-actions a svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.usage-notice .button {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 7px;
+  border-radius: 999px;
+}
 .workspace-notifications .feedback-layer {
   position: relative;
   inset: auto;

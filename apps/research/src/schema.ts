@@ -624,6 +624,7 @@ export type RefreshChange = {
   canAccept: boolean;
 };
 export type ResearchView = {
+  usageNotices?: import("./usage.js").UsageNotice[];
   snapshot: Snapshot;
   preview?: {
     offset: number;

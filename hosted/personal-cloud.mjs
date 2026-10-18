@@ -29,7 +29,8 @@ const fail = (code) => {
 function exaPolicy(provider) {
   return {
     approvedCostMicrousd: provider.approved_cost_microusd,
-    dailyCostMicrousd: provider.daily_cost_microusd,
+    dailyCostMicrousd:
+      provider.daily_cost_microusd ?? provider.approved_cost_microusd,
     secretName: provider.secret_name,
     policyVersion:
       provider.model || provider.embedding
@@ -97,12 +98,10 @@ export function assertCapabilities(config, capabilities) {
     capabilities.flight_submission_enabled !==
       (config.enable_execution === true) ||
     capabilities.max_flight_runtime_seconds !== 120 ||
-    capabilities.monthly_execution_reserve_seconds !==
-      config.monthly_flight_seconds ||
-    capabilities.monthly_provider_reserve_microusd !==
-      config.monthly_provider_cost_microusd ||
-    capabilities.daily_execution_reserve_seconds !==
-      (config.daily_flight_seconds ?? null)
+    capabilities.usage_mode !== "provider_managed" ||
+    capabilities.monthly_execution_reserve_seconds !== null ||
+    capabilities.monthly_provider_reserve_microusd !== null ||
+    capabilities.daily_execution_reserve_seconds !== null
   )
     fail("hosted_capabilities_mismatch");
   for (const name of liveNames) {
@@ -203,19 +202,14 @@ export function validateConfig(config) {
   ])
     if (config[key] !== undefined && typeof config[key] !== "boolean")
       fail("invalid_configuration");
-  const monthlyFlight =
-    config.monthly_flight_seconds === undefined
-      ? 18000
-      : config.monthly_flight_seconds;
-  const monthlyProvider =
-    config.monthly_provider_cost_microusd === undefined
-      ? 10000000
-      : config.monthly_provider_cost_microusd;
   for (const [value, maximum] of [
-    [monthlyFlight, 2678400],
-    [monthlyProvider, 1000000000],
+    [config.monthly_flight_seconds, 2678400],
+    [config.monthly_provider_cost_microusd, 1000000000],
   ])
-    if (!Number.isSafeInteger(value) || value < 0 || value > maximum)
+    if (
+      value !== undefined &&
+      (!Number.isSafeInteger(value) || value < 0 || value > maximum)
+    )
       fail("invalid_configuration");
   const seconds = config.daily_flight_seconds;
   if (
@@ -314,12 +308,16 @@ export function validateConfig(config) {
     }
     for (const key of ["approved_cost_microusd", "daily_cost_microusd"])
       if (
-        !Number.isSafeInteger(provider[key]) ||
-        provider[key] < 1 ||
-        provider[key] > 1000000
+        (key === "approved_cost_microusd" || provider[key] !== undefined) &&
+        (!Number.isSafeInteger(provider[key]) ||
+          provider[key] < 1 ||
+          provider[key] > 1000000)
       )
         fail("invalid_provider_configuration");
-    if (provider.daily_cost_microusd < provider.approved_cost_microusd)
+    if (
+      provider.daily_cost_microusd !== undefined &&
+      provider.daily_cost_microusd < provider.approved_cost_microusd
+    )
       fail("invalid_provider_configuration");
     if (
       ["brave", "serper"].includes(provider.name) &&
@@ -329,20 +327,25 @@ export function validateConfig(config) {
     )
       fail("invalid_provider_configuration");
   }
-  const {
-    monthly_flight_seconds: _monthlyFlight,
-    monthly_provider_cost_microusd: _monthlyProvider,
-    daily_flight_seconds: _dailyFlight,
-    ...baseConfig
-  } = config;
   return {
-    ...baseConfig,
+    ...config,
     motherduck_host: host,
     provider,
-    monthly_flight_seconds: monthlyFlight,
-    monthly_provider_cost_microusd: monthlyProvider,
-    ...(seconds !== undefined ? { daily_flight_seconds: seconds } : {}),
   };
+}
+
+export function usageWarnings(config) {
+  const fields = [
+    "monthly_flight_seconds",
+    "monthly_provider_cost_microusd",
+    "daily_flight_seconds",
+  ].filter((key) => config[key] !== undefined);
+  if (config.provider?.daily_cost_microusd !== undefined)
+    fields.push("provider.daily_cost_microusd");
+  return fields.map(
+    (field) =>
+      `${field} is deprecated metadata and no longer limits usage. Provider-managed billing controls availability; sourcesQL usage estimates do not measure account balances or free credits.`,
+  );
 }
 
 /** A first Vercel deployment is Production; never upload the app into that slot. */
@@ -614,13 +617,20 @@ export function createPlan(config, root, workspace) {
     ],
     limits: {
       plan_default: "Hobby for eligible personal use; never upgrades accounts",
-      reservation_period: "UTC calendar month",
-      allowance: "configured",
-      flight_seconds_per_month: config.monthly_flight_seconds,
-      provider_cost_microusd_per_month: config.monthly_provider_cost_microusd,
-      ...(config.daily_flight_seconds !== undefined
-        ? { flight_seconds_per_day: config.daily_flight_seconds }
-        : {}),
+      usage_mode: "provider_managed",
+      max_flight_runtime_seconds: 120,
+      ...(config.provider.name === "fixture"
+        ? {}
+        : {
+            provider_cost_microusd_per_job:
+              config.provider.approved_cost_microusd,
+          }),
+      reference_notices: {
+        exa: { cost_microusd: 10000000, period: "UTC calendar month" },
+        motherduck_f4: { runtime_seconds: 1800, period: "UTC day" },
+        basis:
+          "Estimated sourcesQL usage; account plan, payment method and remaining credits are unknown",
+      },
       scheduled_jobs: 0,
       active_jobs: 1,
       queued_jobs: "explicit resume",
@@ -646,9 +656,10 @@ export function createPlan(config, root, workspace) {
                 ? ["openai"]
                 : []),
             ],
-      reservation_basis:
-        "Configured estimates; provider balances and billing hard stops are not measured",
+      usage_basis:
+        "Operation estimates and observed runtime; provider account totals, credits, payment methods and final bills are not measured",
     },
+    warnings: usageWarnings(config),
     manual_steps: [
       "Create accounts and configure OAuth API/PKCE client; no signup or paid feature is automated",
       "Grant sourcesql:access to the intended client, with the sole owner subject above",
@@ -673,20 +684,25 @@ export function environmentSettings(config, settings, secrets) {
     secrets.RESEARCH_BEARER_TOKEN.length < 32
   )
     fail("missing_credentials");
-  // The lower-level setup retains its legacy daily default. Personal-cloud
-  // plans use monthly reservations unless a daily guard was explicitly chosen.
-  const { SOURCESQL_FLIGHT_DAILY_SECONDS: _legacyDaily, ...baseSettings } =
-    settings;
+  // Keep per-job bounds and identity settings; accumulated reservations are
+  // deprecated metadata, never a provider balance or an availability gate.
+  const accumulatedCapSettings = new Set([
+    "SOURCESQL_FLIGHT_DAILY_SECONDS",
+    "SOURCESQL_FLIGHT_MONTHLY_SECONDS",
+    "SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD",
+    ...["EXA", "BRAVE", "SERPER"].map(
+      (provider) => `SOURCESQL_${provider}_DAILY_COST_MICROUSD`,
+    ),
+  ]);
+  const baseSettings = Object.fromEntries(
+    Object.entries(settings).filter(
+      ([key]) => !accumulatedCapSettings.has(key),
+    ),
+  );
   return {
     ...baseSettings,
+    SOURCESQL_USAGE_MODE: "provider_managed",
     SOURCESQL_ALLOW_FLIGHT_SUBMISSION: config.enable_execution ? "1" : "0",
-    SOURCESQL_FLIGHT_MONTHLY_SECONDS: String(config.monthly_flight_seconds),
-    SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD: String(
-      config.monthly_provider_cost_microusd,
-    ),
-    ...(config.daily_flight_seconds !== undefined
-      ? { SOURCESQL_FLIGHT_DAILY_SECONDS: String(config.daily_flight_seconds) }
-      : {}),
     RESEARCH_AUTH_MODE: "protected",
     RESEARCH_PUBLIC_ORIGIN: "https://" + config.alias,
     RESEARCH_BEARER_TOKEN: secrets.RESEARCH_BEARER_TOKEN,
@@ -762,7 +778,7 @@ export function setupArguments(config, workspace) {
       `--${provider.name}-approved-cost-microusd`,
       String(provider.approved_cost_microusd),
       `--${provider.name}-daily-cost-microusd`,
-      String(provider.daily_cost_microusd),
+      String(provider.daily_cost_microusd ?? provider.approved_cost_microusd),
     );
     if (["brave", "serper"].includes(provider.name))
       args.push(

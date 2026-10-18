@@ -61,6 +61,8 @@ import {
 import "./styles.css";
 import { FeedbackToast } from "./feedback-toast.js";
 import { ResearchStatusOverlay } from "./research-status-overlay.js";
+import { UsageNoticeOverlay } from "./usage-notice-overlay.js";
+import type { UsageNotice } from "./usage.js";
 import { ResearchTreePanel } from "./research-tree-panel.js";
 import { ResearchJobStatusPanel } from "./job-status-panel.js";
 import {
@@ -102,6 +104,15 @@ const app = new App(
   {},
   { autoResize: false },
 );
+function dismissUsageNotice(notice: UsageNotice) {
+  if (!/^[a-f0-9]{64}$/.test(notice.id)) return;
+  void app
+    .callServerTool({
+      name: "research_dismiss_usage_notice",
+      arguments: { notice_id: notice.id },
+    })
+    .catch(() => {});
+}
 function extractView(result: CallToolResult): ResearchView {
   if (result.isError)
     throw new Error(
@@ -1495,19 +1506,28 @@ function Workspace() {
   }
   if (jobView)
     return (
-      <ResearchJobStatusPanel
-        view={jobView}
-        busy={busy || !ready}
-        error={error}
-        onOpenBilling={(url) => void visitSource(url)}
-        onCheck={() => void perform(() => readResearchJob())}
-        onResume={() => void perform(() => readResearchJob(true))}
-        onOpenResult={
-          jobView.job.status === "completed" && jobView.job.result_id
-            ? () => void perform(openJobResult)
-            : undefined
-        }
-      />
+      <div className="research-job-workspace">
+        <ResearchJobStatusPanel
+          view={jobView}
+          busy={busy || !ready}
+          error={error}
+          onOpenBilling={(url) => void visitSource(url)}
+          onCheck={() => void perform(() => readResearchJob())}
+          onResume={() => void perform(() => readResearchJob(true))}
+          onOpenResult={
+            jobView.job.status === "completed" && jobView.job.result_id
+              ? () => void perform(openJobResult)
+              : undefined
+          }
+        />
+        <div className="workspace-notifications">
+          <UsageNoticeOverlay
+            notices={jobView.usageNotices}
+            onOpenBilling={(url) => void visitSource(url)}
+            onDismiss={dismissUsageNotice}
+          />
+        </div>
+      </div>
     );
   if (!view)
     return (
@@ -2010,6 +2030,11 @@ function Workspace() {
       </header>
       <div className="workspace-content">
         <div className="workspace-notifications">
+          <UsageNoticeOverlay
+            notices={view.usageNotices}
+            onOpenBilling={(url) => void visitSource(url)}
+            onDismiss={dismissUsageNotice}
+          />
           <FeedbackToast
             message={feedbackMessage}
             kind={feedbackKind}

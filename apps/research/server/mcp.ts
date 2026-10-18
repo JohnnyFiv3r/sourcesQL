@@ -283,6 +283,45 @@ export function createServer(
     "failed",
     "cancelled",
   ]);
+  // Advisory usage cannot make a valid saved table fail to open.
+  const currentUsageNotices = async () =>
+    options.engine?.supportsUsageReporting &&
+    options.access?.mode !== "fixture-anonymous"
+      ? options.engine
+          .call<import("../src/usage.js").UsageNotice[]>("usage_notices")
+          .catch(() => [])
+      : [];
+  if (options.engine?.supportsUsageReporting)
+    registerAppTool(
+      tools,
+      "research_dismiss_usage_notice",
+      {
+        description:
+          "Dismiss this owner's estimated usage notice for its provider allowance period. Does not change billing, limits, jobs or research.",
+        inputSchema: z
+          .object({ notice_id: z.string().regex(/^[a-f0-9]{64}$/) })
+          .strict(),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        _meta: { ui: { visibility: ["app"] } },
+      },
+      (args) =>
+        safe(async () => {
+          if (options.access?.mode === "fixture-anonymous")
+            throw new Error("Usage notices require authenticated owner access");
+          return {
+            content: [],
+            structuredContent: await options.engine!.call(
+              "dismiss_usage_notice",
+              args,
+            ),
+          };
+        }),
+    );
   const jobResult = async (
     receipt: Record<string, unknown>,
     continuation?: string,
@@ -330,6 +369,7 @@ export function createServer(
       "finished_at",
       "dispatch_blocked",
       "capacity",
+      "usageNotices",
       "can_resume",
       ...(completed
         ? preflight
@@ -354,6 +394,8 @@ export function createServer(
         result.run_id = receipt.run_id;
     }
     result.pending = pending;
+    if (!pending && options.engine?.supportsUsageReporting)
+      result.usageNotices = await currentUsageNotices();
     if (feedback) result.query_feedback = feedback;
     const guidance =
       receipt.status === "submission_unknown"
@@ -475,7 +517,10 @@ export function createServer(
           : (offset ?? 0);
         if (start < 0 || start > full.snapshot.rows.length)
           throw new Error("Research row or window not found");
-        const result = viewResult(full, start);
+        const result = viewResult(
+          { ...full, usageNotices: await currentUsageNotices() },
+          start,
+        );
         result.content.push({
           type: "text",
           text: SOURCESQL_OPEN_RESEARCH_HANDOFF,
@@ -2122,6 +2167,36 @@ export function createServer(
       },
       () => safe(async () => engineResult(await engine.call("capabilities"))),
     );
+    if (engine.supportsUsageReporting)
+      tools.registerTool(
+        "sourcesql_usage_report",
+        {
+          title: "Research usage report",
+          description:
+            "Report sourcesQL provider requests, response cost estimates, model tokens and observed MotherDuck Flight runtime for an ISO time interval (default current UTC calendar month), optionally one job_id. Includes failed/cancelled work and explicit unknown costs. This is sourcesQL activity, not an account-wide invoice or remaining credit balance. No searches, models or Flights are started. Separate MotherDuck SQL compute/storage and unobserved runtime remain unknown. A research workflow can contain several jobs; specify the interval to include all of them.",
+          inputSchema: z
+            .object({
+              start: z.iso.datetime().optional(),
+              end: z.iso.datetime().optional(),
+              job_id: z.uuid().optional(),
+            })
+            .strict(),
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        (args) =>
+          safe(async () => {
+            if (options.access?.mode === "fixture-anonymous")
+              throw new Error(
+                "Usage reports require authenticated owner access",
+              );
+            return engineResult(await engine.call("usage_report", args));
+          }),
+      );
     if (engine.supportsExplain !== false)
       tools.registerTool(
         "sourcesql_explain",

@@ -1,5 +1,7 @@
 // Generated from sourcesql.storage.motherduck; additive migrations preserve retained records.
 export const tableDefinitions = [
+  "CREATE TABLE IF NOT EXISTS usage_notice_dismissals(id VARCHAR PRIMARY KEY,dismissed_at VARCHAR NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS usage_flights(run_id VARCHAR PRIMARY KEY,job_id UUID NOT NULL,started_at VARCHAR NOT NULL,ended_at VARCHAR NOT NULL,elapsed_seconds DOUBLE NOT NULL,instance_type VARCHAR NOT NULL)",
   "CREATE TABLE IF NOT EXISTS control(id INTEGER PRIMARY KEY, namespace VARCHAR NOT NULL, revision BIGINT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS results(id VARCHAR PRIMARY KEY, hash VARCHAR NOT NULL, metadata VARCHAR NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, payload VARCHAR NOT NULL, wire_payload VARCHAR NOT NULL, wire_hash VARCHAR NOT NULL)",
   "CREATE TABLE IF NOT EXISTS runs(id VARCHAR PRIMARY KEY, request_id VARCHAR UNIQUE NOT NULL, request_hash VARCHAR NOT NULL, receipt VARCHAR NOT NULL)",
@@ -9,9 +11,9 @@ export const tableDefinitions = [
   "CREATE TABLE IF NOT EXISTS flight_allowances(day VARCHAR PRIMARY KEY, reserved_seconds BIGINT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS provider_allowances(day VARCHAR PRIMARY KEY, reserved_microusd BIGINT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS app_state(id INTEGER PRIMARY KEY, revision BIGINT NOT NULL, state_json VARCHAR NOT NULL)",
-  "CREATE TABLE IF NOT EXISTS app_state_history(revision BIGINT PRIMARY KEY, state_json VARCHAR NOT NULL, created_at VARCHAR NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS app_state_history(revision BIGINT PRIMARY KEY, state_json VARCHAR NOT NULL, created_at VARCHAR NOT NULL)",
 ] as const;
 export const tableMigrations = [
   "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS provider_policy_sha256 VARCHAR",
-  "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS provider_cost_reserved_microusd BIGINT DEFAULT 0"
+  "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS provider_cost_reserved_microusd BIGINT DEFAULT 0",
 ] as const;

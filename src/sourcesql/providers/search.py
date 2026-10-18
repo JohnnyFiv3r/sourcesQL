@@ -13,6 +13,7 @@ import httpx
 from ..contracts import Budget, SourcesQLError
 from .common import (
     api_json,
+    capture_provider_failure,
     normalized_text,
     normalized_url,
     provider_usage,
@@ -171,6 +172,7 @@ class BraveProvider:
                     self.endpoint,
                     headers={"X-Subscription-Token": self.api_key, "Accept": "application/json"},
                     params=params,
+                    provider="brave",
                 )
                 hits = body.get("web", {}).get("results", [])
                 if not isinstance(hits, list):
@@ -219,6 +221,7 @@ class BraveProvider:
                 query_coverage.update(status="completed", retained_hits=len(retained))
                 result.extend(retained)
             except SourcesQLError as error:
+                capture_provider_failure(event, error)
                 event["status"] = (
                     "remote_outcome_unknown"
                     if getattr(error, "remote_outcome_unknown", False)
@@ -325,6 +328,7 @@ class ExaProvider:
                 self.endpoint + path,
                 headers={"x-api-key": self.api_key},
                 body=body,
+                provider="exa",
             )
             event.update(
                 status="completed",
@@ -338,6 +342,7 @@ class ExaProvider:
                 event["resolved_search_type"] = resolved if isinstance(resolved, str) else None
             return result
         except SourcesQLError as error:
+            capture_provider_failure(event, error)
             event["status"] = (
                 "not_dispatched"
                 if event["status"] == "reserved"
@@ -815,6 +820,7 @@ class SerperProvider:
                     self.endpoint,
                     headers={"X-API-KEY": self.api_key},
                     body=body,
+                    provider="serper",
                 )
                 hits = result.get("organic")
                 if not isinstance(hits, list):
@@ -850,6 +856,7 @@ class SerperProvider:
                 query_coverage.update(status="completed", retained_hits=len(retained))
                 rows.extend(retained)
             except SourcesQLError as error:
+                capture_provider_failure(event, error)
                 event["status"] = (
                     "remote_outcome_unknown"
                     if getattr(error, "remote_outcome_unknown", False)

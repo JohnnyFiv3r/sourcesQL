@@ -7,15 +7,23 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
 import math
+import re
 from time import monotonic
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from pydantic.json_schema import SkipJsonSchema
 
 from ..contracts import Budget, SemanticOutcome, SourcesQLError, canonical
-from .common import ProviderTransportError, json_object, read_response, text_hash
+from .common import (
+    ProviderTransportError,
+    capture_provider_failure,
+    json_object,
+    read_response,
+    text_hash,
+)
 from .tokenization import get_embedding_tokenizer
 
 TYPES = {"VARCHAR", "BOOLEAN", "BIGINT", "DOUBLE", "DECIMAL(18,2)", "DATE", "TIMESTAMPTZ"}
@@ -421,7 +429,106 @@ def extraction_item_limit(options: dict) -> int:
     return maximum
 
 
-def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
+_OPENAI_CREDIT_CODES = {"credit_balance_exhausted"}
+_OPENAI_SPEND_CODES = {"organization_spend_limit_exceeded", "project_spend_limit_exceeded"}
+_OPENAI_RATE_CODES = {"rate_limit_exceeded", "slow_down"}
+_OPENAI_ERROR_CODES = (
+    _OPENAI_CREDIT_CODES
+    | _OPENAI_SPEND_CODES
+    | _OPENAI_RATE_CODES
+    | {"organization_usage_limit_exceeded", "insufficient_quota"}
+)
+
+
+def _official_openai_endpoint(value: str, path: str) -> bool:
+    """Compatible endpoints must never inherit OpenAI billing attribution."""
+    try:
+        url = urlsplit(value)
+        return (
+            url.scheme == "https"
+            and url.hostname == "api.openai.com"
+            and url.port in {None, 443}
+            and url.path.rstrip("/") == path
+            and url.username is None
+            and url.password is None
+            and not url.query
+            and not url.fragment
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _openai_refusal(status: int, body: Any, headers: Any = None) -> dict:
+    """Read only bounded, allowlisted fields; provider messages remain private."""
+    if isinstance(body, str):
+        try:
+            body = json_object(body.encode("utf-8")) if len(body) <= 16_384 else None
+        except (SourcesQLError, UnicodeError, RecursionError):
+            body = None
+    details = body.get("error", body) if isinstance(body, dict) else None
+    code = details.get("code") if isinstance(details, dict) else None
+    kind = details.get("type") if isinstance(details, dict) else None
+    code = code if isinstance(code, str) and code in _OPENAI_ERROR_CODES else None
+    kind = (
+        kind
+        if isinstance(kind, str) and kind in {"insufficient_quota", "rate_limit_error"}
+        else None
+    )
+    result = {
+        **({"provider_error_code": code} if code else {}),
+        **({"provider_error_type": kind} if kind else {}),
+    }
+    retry_after = headers.get("retry-after", "") if headers is not None else ""
+    if isinstance(retry_after, str) and re.fullmatch(r"[0-9]{1,8}", retry_after):
+        seconds = int(retry_after)
+        if seconds <= 604_800:
+            result["retry_after_seconds"] = seconds
+    if status in {402, 429}:
+        limit_kind = (
+            "credits"
+            if code in _OPENAI_CREDIT_CODES
+            else "spend"
+            if code in _OPENAI_SPEND_CODES
+            else "unknown"
+            if code == "organization_usage_limit_exceeded"
+            else "unknown"
+            if kind == "insufficient_quota"
+            else "rate"
+            if code in _OPENAI_RATE_CODES or kind == "rate_limit_error"
+            else "unknown"
+        )
+        result["provider_capacity"] = {
+            "resource": "search_model_budget",
+            "reason": "provider_limit",
+            "period": "unknown",
+            "allowance": "unknown",
+            "services": ["openai"],
+            "http_status": status,
+            "limit_kind": limit_kind,
+            **(
+                {"retry_after_seconds": result["retry_after_seconds"]}
+                if "retry_after_seconds" in result
+                else {}
+            ),
+        }
+    return result
+
+
+def _error_response_body(response: httpx.Response) -> Any:
+    raw = bytearray()
+    try:
+        for chunk in response.iter_bytes():
+            if len(raw) + len(chunk) > 16_384:
+                return None
+            raw.extend(chunk)
+        return json_object(bytes(raw))
+    except (SourcesQLError, httpx.HTTPError, RecursionError):
+        return None
+
+
+def semantic_failure(
+    error: Exception, *, remote_outcome_unknown: bool, official_openai: bool = False
+) -> dict:
     """Allowlisted diagnostics only; exception text and provider bodies are private."""
     from openai import (
         APIConnectionError,
@@ -438,6 +545,7 @@ def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
         current = current.__cause__ or current.__context__
     category, code, message = "unknown", "provider_error", "Semantic model request failed"
     http_status = None
+    provider_details = {}
     if any(isinstance(e, (TimeoutError, httpx.TimeoutException, APITimeoutError)) for e in chain):
         category, code, message = "timeout", "provider_timeout", "Semantic model request timed out"
     elif any(isinstance(e, (httpx.TransportError, APIConnectionError)) for e in chain):
@@ -466,6 +574,18 @@ def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
         )
         if type(status) is int and 100 <= status <= 599:
             http_status = status
+            if official_openai:
+                body = (
+                    _error_response_body(response.response)
+                    if isinstance(response, httpx.HTTPStatusError)
+                    else getattr(response, "body", None)
+                )
+                headers = (
+                    response.response.headers
+                    if isinstance(response, (httpx.HTTPStatusError, APIStatusError))
+                    else getattr(response, "headers", None)
+                )
+                provider_details = _openai_refusal(status, body, headers)
     elif any(
         isinstance(e, (ValidationError, APIResponseValidationError, UnexpectedModelBehavior))
         for e in chain
@@ -482,6 +602,7 @@ def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
         "remote_outcome_unknown": remote_outcome_unknown,
         "retryable": False,
         **({"http_status": http_status} if http_status is not None else {}),
+        **provider_details,
     }
 
 
@@ -517,6 +638,7 @@ class PydanticSemanticProvider:
         if type(retries) is not int or not 0 <= retries <= 2:
             raise SourcesQLError("invalid_request", "Semantic retries must be between zero and two")
         self.model, self.retries, self.profile_name = model, retries, profile_name
+        self._official_openai = False
         self.events: list[dict] = []
 
     @classmethod
@@ -577,7 +699,9 @@ class PydanticSemanticProvider:
             # only. Preserve that existing contract rather than probing or
             # silently falling back across endpoints after a failed request.
             model = OpenAIChatModel(model_name, provider=provider)
-        return cls(model, retries=retries, profile_name=model_name)
+        configured = cls(model, retries=retries, profile_name=model_name)
+        configured._official_openai = _official_openai_endpoint(str(client.base_url), "/v1")
+        return configured
 
     def semantic(
         self,
@@ -631,6 +755,7 @@ class PydanticSemanticProvider:
         schema = output_schema(operator, fields, options)
         events = self.events
         first_event = len(events)
+        official_openai = self._official_openai
 
         class ReservedModel(WrapperModel):
             async def request(self, messages, model_settings, model_request_parameters):
@@ -713,10 +838,19 @@ class PydanticSemanticProvider:
                     raise
                 except Exception as error:
                     event["status"] = "remote_outcome_unknown"
-                    failure = semantic_failure(error, remote_outcome_unknown=True)
+                    failure = semantic_failure(
+                        error, remote_outcome_unknown=True, official_openai=official_openai
+                    )
                     event.update(error_code=failure["code"], error_type=failure["error_type"])
-                    if "http_status" in failure:
-                        event["http_status"] = failure["http_status"]
+                    for key in (
+                        "http_status",
+                        "provider_capacity",
+                        "provider_error_code",
+                        "provider_error_type",
+                        "retry_after_seconds",
+                    ):
+                        if key in failure:
+                            event[key] = failure[key]
                     raise
 
         agent = Agent(
@@ -840,6 +974,7 @@ class PydanticSemanticProvider:
         except Exception as error:
             failure = semantic_failure(
                 error,
+                official_openai=official_openai,
                 remote_outcome_unknown=any(
                     e["status"] == "remote_outcome_unknown" for e in events[first_event:]
                 ),
@@ -953,9 +1088,17 @@ class OpenAIEmbeddingProvider:
                         "provider_unavailable", "Unexpected embedding API redirect", "semantic"
                     )
                 if not response.is_success:
-                    raise SourcesQLError(
+                    error = SourcesQLError(
                         "provider_http_error", "Embedding provider rejected the request", "semantic"
                     )
+                    error.http_status = response.status_code
+                    if _official_openai_endpoint(self.endpoint, "/v1/embeddings"):
+                        diagnostics = _openai_refusal(
+                            response.status_code, _error_response_body(response), response.headers
+                        )
+                        for name, value in diagnostics.items():
+                            setattr(error, name, value)
+                    raise error
                 return json_object(read_response(response, self.MAX_RESPONSE_BYTES))
         except httpx.TimeoutException:
             raise ProviderTransportError(
@@ -1249,6 +1392,10 @@ class OpenAIEmbeddingProvider:
             except SourcesQLError as error:
                 if error.code in {"budget_exhausted", "cancelled"}:
                     raise
+                capture_provider_failure(event, error)
+                for name in ("provider_error_code", "provider_error_type"):
+                    if hasattr(error, name):
+                        event[name] = getattr(error, name)
                 unknown = getattr(error, "remote_outcome_unknown", False)
                 event["status"] = (
                     "remote_outcome_unknown"
@@ -1262,6 +1409,17 @@ class OpenAIEmbeddingProvider:
                     "message": error.safe_message,
                     "remote_outcome_unknown": unknown,
                     "retryable": False,
+                    **{
+                        name: event[name]
+                        for name in (
+                            "http_status",
+                            "provider_capacity",
+                            "provider_error_code",
+                            "provider_error_type",
+                            "retry_after_seconds",
+                        )
+                        if name in event
+                    },
                 }
             except (ValueError, KeyError, TypeError, OverflowError):
                 event["status"] = "invalid_output"
