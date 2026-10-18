@@ -1,6 +1,6 @@
 # Search providers in personal-cloud hosting
 
-The Vercel gateway can use Exa, Brave or Serper through a reviewed MotherDuck
+The Vercel gateway can use Exa, Brave, Serper or DeepSeek through a reviewed MotherDuck
 Flight. Choose one live search provider for each Flight. Fixture execution stays
 available, and no provider becomes enabled merely because an API key exists.
 Local and Docker deployments use the same Python search adapters.
@@ -27,20 +27,22 @@ evidence or broad research quality, and do not upgrade the provider workers.
 | `exa_deep`, `exa_deep_reasoning` | Explicit Exa research modes on `exa-research.v2` | Provider text or excerpts | Provider estimate when returned; actual billing unavailable           |
 | `brave`                          | Brave web search with extra snippets             | Excerpts                  | Actual billing unavailable; operator supplies a request cost estimate |
 | `serper`                         | Serper organic web search                        | Excerpts                  | Actual billing unavailable; operator supplies a request cost estimate |
+| `deepseek` | DeepSeek Search with page content | Incomplete provider text or discovery metadata | 750 micro-USD estimate per successful nonempty search/fetch; billing unavailable |
 
 Existing `exa-search.v1` Flights retain their Auto-only profile, fingerprint and
 limits. Adding these options does not enable a new provider, add deep profiles to
 a v1 Flight or replace an existing Flight definition.
 
 The legacy hosted search profiles allow at most two queries, two
-provider requests and ten acquired candidates per job. Brave, Serper and Exa v1
+provider requests and ten acquired candidates per job. Brave, Serper, DeepSeek and Exa v1
 use at most 60 seconds of dispatch time; Exa v2 allows at most 100 seconds. All
 search-only profiles disable page fetching, semantic/model requests and hidden retries. A
 request may lower those limits. Large research needs a separately reviewed
 execution policy; splitting jobs to evade a limit is not supported.
 
 Optional `model` and `embedding` settings select reviewed research policies:
-`exa-research.v3`, `brave-research.v2` or `serper-research.v2`. A language model
+`exa-research.v3`, `brave-research.v2`, `serper-research.v2` or
+`deepseek-research.v1`. A language model
 enables `SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL` and `SEM_NORM`; an embedding
 adapter enables `SEM_SCORE`. Either may be enabled independently. Search keys
 alone never enable semantic work, and existing `brave-search.v1` and
@@ -52,15 +54,19 @@ model, they admit up to 40 semantic documents and 16,000 output tokens; either
 semantic adapter admits up to 200,000 input tokens. These are per-job upper bounds,
 not automatic calls or promised coverage. Requests may lower them. Brave/Serper
 research uses the engine's guarded public-page fetcher for `WEB_FETCH`, including
-public-host and redirect checks. Exa uses its Contents fetch path. Excerpts stay
+public-host and redirect checks. Exa uses its Contents fetch path. DeepSeek uses
+its native Fetch API after source URL authorization; it supports cache-preferred
+Markdown retrieval, with no force-fresh claim. Excerpts and provider text stay
 marked incomplete; semantic processing cannot establish evidence absent from the
 acquired material.
 
 Credential-free tests verify research policy, gateway/Flight agreement and
 synthetic semantic dispatch. Those tests do not extend the dated search-only live
 checks above into qualification of live Brave/Serper semantic research or host UI.
+DeepSeek has credential-free adapter/policy tests only; live DeepSeek retrieval,
+billing and host behavior require separate qualification.
 
-Brave and Serper publication-date filtering is a local post-filter, requiring
+Brave, Serper and DeepSeek publication-date filtering is a local post-filter, requiring
 explicit `allow_post_filter` and `undated_policy`. Missing publication dates stay
 unknown. Serper's non-ISO date strings are not guessed into dates. Provider
 result rank and each query's hit lineage are retained through merging.
@@ -73,7 +79,7 @@ settings and secret references. Keep credentials out of command arguments,
 committed configuration and public setup receipts.
 
 For the lower-level provisioning command, first create a MotherDuck Flight
-secret whose field is `BRAVE_API_KEY` or `SERPER_API_KEY`, then pass its name:
+secret whose field is `BRAVE_API_KEY`, `SERPER_API_KEY` or `DEEPSEEK_API_KEY`, then pass its name:
 
 ```sh
 node hosted/setup.mjs --database sourcesql --principal YOUR_OWNER_ID \
@@ -92,6 +98,14 @@ The approved per-job bound may be lowered and cannot exceed
 supports at most 2,000,000 micro-USD per job; the default stays 50,000. The daily
 field is deprecated metadata in provider-managed usage and does not add a daily
 research gate.
+
+For DeepSeek, select `--deepseek-secret sourcesql_deepseek`. Its request estimate
+defaults to `750` micro-USD for each successful nonempty search or fetch;
+`--deepseek-request-cost-microusd` can supply a conservative reviewed override.
+Search queries are limited to 128 Unicode characters and at most 50 results.
+The `deepseek-search.v1` profile is search-only. There is no assumed
+recurring free allowance and no automatic switch from another provider. See the
+[DeepSeek retrieval contract](providers.md#deepseek-retrieval-contract).
 
 To opt into semantic work, add existing OpenAI Flight secret references to the
 same command:
@@ -118,5 +132,7 @@ and requirements hashes, secret binding, owner and limits before enabling it.
 Changing providers requires a newly reviewed Flight and matching gateway
 configuration. An older job cannot silently run under a different approval.
 
-Reference interfaces: [Brave web search documentation](https://api-dashboard.search.brave.com/app/documentation/web-search/codes)
-and [Serper's search response and account setup](https://serper.dev/).
+Reference interfaces: [Brave web search documentation](https://api-dashboard.search.brave.com/app/documentation/web-search/codes),
+[Serper's search response and account setup](https://serper.dev/), and
+[DeepSeek Search](https://api-docs.deepseek.com/api/search/) and
+[Fetch](https://api-docs.deepseek.com/api/fetch/).

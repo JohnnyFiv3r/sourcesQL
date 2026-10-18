@@ -20,6 +20,7 @@ import {
   type HostedExaPolicy,
 } from "../server/hosted-exa.js";
 import {
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchConfiguration,
   hostedSearchFingerprint,
   hostedSearchOperators,
@@ -1898,7 +1899,7 @@ test("legacy daily Exa metadata permits a sequential Flight after the active Fli
 });
 
 function searchPolicy(
-  provider: "brave" | "serper",
+  provider: HostedSearchPolicy["provider"],
   overrides: Partial<HostedSearchPolicy> = {},
 ): HostedSearchPolicy {
   return {
@@ -1920,14 +1921,15 @@ function configureSearch(h: Harness, policy: HostedSearchPolicy) {
   ];
 }
 
-for (const provider of ["brave", "serper"] as const) {
+for (const provider of ["brave", "serper", "deepseek"] as const) {
   const providerQuery = () => ({ ...liveQuery(), profile: provider });
 
   test(`${provider} malformed research environment returns a structured configuration error before database access`, async () => {
     const prefix = `SOURCESQL_${provider.toUpperCase()}`;
     const environment = {
       [`SOURCESQL_ALLOW_LIVE_${provider.toUpperCase()}`]: "1",
-      [`${prefix}_POLICY_VERSION`]: `${provider}-research.v2`,
+      [`${prefix}_POLICY_VERSION`]:
+        HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[provider],
       [`${prefix}_SECRET_NAME`]: `sourcesql_${provider}`,
       [`${prefix}_APPROVED_COST_MICROUSD`]: "50000",
       [`${prefix}_REQUEST_COST_MICROUSD`]: "5000",
@@ -1956,7 +1958,7 @@ for (const provider of ["brave", "serper"] as const) {
         const model = configured !== "embedding";
         const embedding = configured !== "model";
         const policy = searchPolicy(provider, {
-          policyVersion: `${provider}-research.v2`,
+          policyVersion: HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[provider],
           ...(model
             ? {
                 model: {
@@ -2004,7 +2006,18 @@ for (const provider of ["brave", "serper"] as const) {
           selected.embedding_token_encoding,
           embedding ? "cl100k_base" : null,
         );
-        assert.match(selected.fetched_text_coverage, /Public HTML\/text/);
+        assert.match(
+          selected.fetched_text_coverage,
+          provider === "deepseek"
+            ? /Retained provider Markdown/
+            : /Public HTML\/text/,
+        );
+        if (provider === "deepseek") {
+          assert.deepEqual(selected.fetch_modes, ["cache_preferred"]);
+          assert.equal(selected.provider_ranking_is_sem_score, false);
+          assert.equal(selected.search_query_max_characters, 128);
+          assert.equal(selected.search_per_query_max_results, 50);
+        }
         assert.equal(selected.search_limits.max_fetches, 40);
         assert.equal(
           selected.search_limits.max_semantic_documents,
@@ -2020,7 +2033,8 @@ for (const provider of ["brave", "serper"] as const) {
         assert.equal(selected.live_qualified, false);
         const queued = await engine.call<Row>("query", {
           ...providerQuery(),
-          source_mode: "require_document",
+          source_mode:
+            provider === "deepseek" ? "allow_excerpt" : "require_document",
           budgets: {
             max_search_requests: 3,
             max_search_queries: 3,
@@ -2037,7 +2051,18 @@ for (const provider of ["brave", "serper"] as const) {
           )
         ).rows[0];
         const request = JSON.parse(saved.request_json);
-        assert.equal(request.source_mode, "require_document");
+        assert.equal(
+          request.source_mode,
+          provider === "deepseek" ? "allow_excerpt" : "require_document",
+        );
+        if (provider === "deepseek")
+          await assert.rejects(
+            engine.call("query", {
+              ...providerQuery(),
+              source_mode: "require_document",
+            }),
+            { code: "unsupported_capability" },
+          );
         assert.equal(request.budgets.max_search_requests, 3);
         assert.equal(request.budgets.max_model_requests, 4);
         assert.equal(
@@ -2082,7 +2107,7 @@ for (const provider of ["brave", "serper"] as const) {
     const h = await harness();
     try {
       const policy = searchPolicy(provider, {
-        policyVersion: `${provider}-research.v2`,
+        policyVersion: HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[provider],
         model: {
           name: "gpt-4.1-mini",
           secretName: "sourcesql_openai",
@@ -2181,7 +2206,12 @@ for (const provider of ["brave", "serper"] as const) {
       assert.deepEqual(selected.operators, ["WEB_SEARCH"]);
       assert.equal(selected.model_configured, false);
       assert.equal(selected.embedding_configured, false);
-      assert.equal(selected.cost_reporting, "unavailable");
+      assert.equal(
+        selected.cost_reporting,
+        provider === "deepseek"
+          ? "published_rate_estimate_not_billing"
+          : "unavailable",
+      );
       assert.equal(selected.search_limits.max_search_requests, 2);
       assert.equal(selected.search_limits.max_search_queries, 2);
       assert.equal(selected.search_limits.max_candidates, 10);
@@ -2201,7 +2231,7 @@ for (const provider of ["brave", "serper"] as const) {
         "exa",
         "exa_deep",
         "exa_deep_reasoning",
-        provider === "brave" ? "serper" : "brave",
+        ...["brave", "serper", "deepseek"].filter((name) => name !== provider),
       ])
         await assert.rejects(
           engine.call("query", { ...providerQuery(), profile }),
@@ -2460,7 +2490,7 @@ test("hosted search providers stay opt-in and mixed Exa plus search configuratio
       capabilities.profiles.map((p: Row) => p.name),
       ["fixture"],
     );
-    for (const provider of ["brave", "serper"] as const) {
+    for (const provider of ["brave", "serper", "deepseek"] as const) {
       await assert.rejects(
         fixture.call("query", { ...liveQuery(), profile: provider }),
         { code: "invalid_request" },

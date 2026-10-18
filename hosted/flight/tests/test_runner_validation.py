@@ -133,7 +133,7 @@ def test_hosted_query_owns_one_binding_pass_and_sandbox_without_explain(tmp_path
     ]
 
 
-@pytest.mark.parametrize("provider", ["exa", "brave", "serper"])
+@pytest.mark.parametrize("provider", ["exa", "brave", "serper", "deepseek"])
 def test_binding_failure_precedes_hosted_hydration_and_provider_effects(
     tmp_path, monkeypatch, provider
 ):
@@ -143,7 +143,7 @@ def test_binding_failure_precedes_hosted_hydration_and_provider_effects(
         "SOURCESQL_ALLOW_LIVE_" + provider.upper(): "1",
         prefix + "_POLICY_VERSION": provider + "-research.v3"
         if provider == "exa"
-        else provider + "-research.v2",
+        else policy.SEARCH_RESEARCH_POLICY_VERSIONS[provider],
         prefix + "_SECRET_NAME": "sourcesql_" + provider,
         prefix + "_APPROVED_COST_MICROUSD": "1000000",
         prefix + "_REQUEST_COST_MICROUSD": "5000",

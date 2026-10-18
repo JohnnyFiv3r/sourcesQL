@@ -20,6 +20,8 @@ import {
   validateExaPolicy,
 } from "../apps/research/server/hosted-exa.ts";
 import {
+  HOSTED_SEARCH_POLICY_VERSIONS,
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchConfiguration,
   hostedSearchDescriptor,
   hostedSearchFingerprint,
@@ -46,7 +48,7 @@ export function parseArguments(arguments_, environment = process.env) {
     "--openai-reasoning-effort",
     "--embedding-model",
     "--embedding-secret",
-    ...["brave", "serper"].flatMap((provider) => [
+    ...["brave", "serper", "deepseek"].flatMap((provider) => [
       `--${provider}-secret`,
       `--${provider}-approved-cost-microusd`,
       `--${provider}-daily-cost-microusd`,
@@ -168,7 +170,7 @@ export function parseArguments(arguments_, environment = process.env) {
     throw Error("invalid_configuration");
   }
   let search;
-  for (const provider of ["brave", "serper"]) {
+  for (const provider of ["brave", "serper", "deepseek"]) {
     const secret = selected.get(`--${provider}-secret`);
     const costFlags = ["approved", "daily", "request"].map(
       (kind) => `--${provider}-${kind}-cost-microusd`,
@@ -201,7 +203,10 @@ export function parseArguments(arguments_, environment = process.env) {
       "1000000",
       research ? 50_000_000 : 1_000_000,
     );
-    const requestCost = integer("request");
+    const requestCost = integer(
+      "request",
+      provider === "deepseek" ? "750" : undefined,
+    );
     if (daily < approved || requestCost > approved)
       throw Error("invalid_configuration");
     const policy = {
@@ -210,7 +215,9 @@ export function parseArguments(arguments_, environment = process.env) {
       dailyCostMicrousd: daily,
       requestCostMicrousd: requestCost,
       secretName: secret,
-      policyVersion: `${provider}-${research ? "research.v2" : "search.v1"}`,
+      policyVersion: (research
+        ? HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS
+        : HOSTED_SEARCH_POLICY_VERSIONS)[provider],
       ...adapters,
     };
     try {
@@ -343,10 +350,10 @@ export async function main(arguments_ = process.argv.slice(2)) {
     const options = parseArguments(arguments_);
     if (options.help) {
       console.log(
-        "Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--openai-model MODEL --openai-secret NAME [--openai-reasoning-effort low]] [--embedding-model text-embedding-3-small --embedding-secret NAME] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]",
+        "Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--openai-model MODEL --openai-secret NAME [--openai-reasoning-effort low]] [--embedding-model text-embedding-3-small --embedding-secret NAME] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N | --deepseek-secret NAME [--deepseek-request-cost-microusd 750]] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]",
       );
       console.log(
-        "Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Select exactly one live search provider. Optional OpenAI model/embedding flags bind existing OpenAI secrets under its research policy; either may share one OpenAI secret. Brave/Serper require an operator-set conservative request cost estimate; provider billing is unavailable. Saves token-free settings with submission disabled.",
+        "Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Select exactly one live search provider. Optional OpenAI model/embedding flags bind existing OpenAI secrets under its research policy; either may share one OpenAI secret. Brave/Serper require an operator-set conservative request cost estimate. DeepSeek defaults to 750 micro-USD per successful nonempty search or fetch; an explicit conservative estimate may override it. Final provider billing is unavailable. Saves token-free settings with submission disabled.",
       );
       return;
     }

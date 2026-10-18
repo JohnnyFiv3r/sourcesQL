@@ -37,6 +37,7 @@ import {
   exaSearchTypes,
 } from "../apps/research/server/hosted-exa.ts";
 import {
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchBudgets,
   hostedSearchOperators,
 } from "../apps/research/server/hosted-search.ts";
@@ -188,7 +189,7 @@ test("semantic setup rejects fixtures, keys, partial models and conflicting shar
 });
 
 test("low-grant research onboarding verifies the actual gateway's affordable search limits", () => {
-  for (const name of ["brave", "serper"]) {
+  for (const name of ["brave", "serper", "deepseek"]) {
     const path = workspace();
     const plan = createPlan(
       {
@@ -256,7 +257,7 @@ console.log(JSON.stringify(await engine.call('capabilities')));
   }
 });
 
-for (const name of ["brave", "serper"]) {
+for (const name of ["brave", "serper", "deepseek"]) {
   test(`${name} guided research preserves exact adapter and budget choices through plan, setup and verification`, () => {
     const path = workspace();
     for (const included of ["model", "embedding", "both"]) {
@@ -271,7 +272,10 @@ for (const name of ["brave", "serper"]) {
       const plan = createPlan({ ...config(), provider }, root, path);
       const options = parseSetup(setupArguments(plan.config, path), {});
       const { policy, descriptor, providerPolicySha256 } = options.search;
-      assert.equal(descriptor.version, `${name}-research.v2`);
+      assert.equal(
+        descriptor.version,
+        HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[name],
+      );
       assert.equal(
         descriptor.model?.name ?? null,
         provider.model?.name ?? null,
@@ -869,6 +873,7 @@ test("provider-managed settings omit accumulated limits even from explicit legac
     SOURCESQL_EXA_DAILY_COST_MICROUSD: "1000000",
     SOURCESQL_BRAVE_DAILY_COST_MICROUSD: "1000000",
     SOURCESQL_SERPER_DAILY_COST_MICROUSD: "1000000",
+    SOURCESQL_DEEPSEEK_DAILY_COST_MICROUSD: "1000000",
     SOURCESQL_FLIGHT_MAX_RUNTIME_SEC: "120",
     SOURCESQL_EXA_APPROVED_COST_MICROUSD: "50000",
   };
@@ -953,7 +958,7 @@ test("reviewed plans disclose reference estimates and bind deprecated inputs wit
   );
 });
 test("provider daily allowance metadata is optional and never emitted as an accumulated cap", () => {
-  for (const name of ["exa", "brave", "serper"]) {
+  for (const name of ["exa", "brave", "serper", "deepseek"]) {
     const provider = {
       name,
       secret_name: "sourcesql_" + name,
@@ -1521,8 +1526,50 @@ test("unknown or multiple deployment matches never trigger a replacement submiss
     );
   }
 });
-test("Brave and Serper bind explicit cost policies through existing setup flags", () => {
-  for (const name of ["brave", "serper"]) {
+
+test("DeepSeek guided setup normalizes the published estimate and preserves a conservative override", () => {
+  const rawProvider = {
+    name: "deepseek",
+    secret_name: "personal_deepseek",
+    approved_cost_microusd: 50000,
+  };
+  const original = structuredClone(rawProvider);
+  const configured = validateConfig({ ...config(), provider: rawProvider });
+  assert.equal(configured.provider.request_cost_microusd, 750);
+  assert.deepEqual(rawProvider, original);
+  const path = workspace();
+  const plan = createPlan({ ...config(), provider: rawProvider }, root, path);
+  const options = parseSetup(setupArguments(plan.config, path), {});
+  assert.equal(options.search.descriptor.version, "deepseek-search.v1");
+  assert.equal(options.search.descriptor.request_cost_microusd, 750);
+  assert.deepEqual(plan.research.third_party_processors, ["deepseek"]);
+  assert.deepEqual(
+    providerBindings(plan.config).map(({ name, keyName }) => [name, keyName]),
+    [["personal_deepseek", "DEEPSEEK_API_KEY"]],
+  );
+  assert.ok(!Object.hasOwn(plan.limits.reference_notices, "deepseek"));
+  const override = validateConfig({
+    ...config(),
+    provider: { ...rawProvider, request_cost_microusd: 1000 },
+  });
+  assert.equal(
+    parseSetup(setupArguments(override, path), {}).search.descriptor
+      .request_cost_microusd,
+    1000,
+  );
+  for (const request_cost_microusd of [0, -1, 749, 1.5, 50001, "750", null])
+    assert.throws(
+      () =>
+        validateConfig({
+          ...config(),
+          provider: { ...rawProvider, request_cost_microusd },
+        }),
+      /invalid_(?:provider_)?configuration/,
+    );
+});
+
+test("Search providers bind reviewed cost policies through existing setup flags", () => {
+  for (const name of ["brave", "serper", "deepseek"]) {
     const configured = validateConfig({
       ...config(),
       provider: {

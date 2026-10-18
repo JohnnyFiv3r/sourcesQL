@@ -28,6 +28,7 @@ import {
   exaFingerprint,
 } from "../apps/research/server/hosted-exa.ts";
 import {
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchConfiguration,
   hostedSearchDescriptor,
   hostedSearchFingerprint,
@@ -185,7 +186,7 @@ test("partial model configuration and search-secret collisions refuse before pro
 });
 
 test("research limits require explicit opt-in and the selected provider's bounded grant", () => {
-  for (const provider of ["exa", "brave", "serper"]) {
+  for (const provider of ["exa", "brave", "serper", "deepseek"]) {
     const providerFlags = [
       `--${provider}-secret`,
       `personal_${provider}`,
@@ -237,7 +238,7 @@ test("research limits require explicit opt-in and the selected provider's bounde
   }
 });
 
-for (const provider of ["brave", "serper"]) {
+for (const provider of ["brave", "serper", "deepseek"]) {
   test(`${provider} model, embedding and shared-secret research configurations match gateway and Flight`, () => {
     const configurations = [
       [
@@ -279,7 +280,10 @@ for (const provider of ["brave", "serper"]) {
     );
     for (const options of configurations) {
       const { policy, descriptor } = options.search;
-      assert.equal(descriptor.version, `${provider}-research.v2`);
+      assert.equal(
+        descriptor.version,
+        HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[provider],
+      );
       assert.deepEqual(descriptor, hostedSearchDescriptor(policy));
       assert.equal(
         options.search.providerPolicySha256,
@@ -434,9 +438,9 @@ print(json.dumps([{'descriptor': policy.load_configuration(env)['descriptor'], '
         .digest("hex"),
     );
   });
-  test(`${provider} setup requires explicit estimates and refuses mixed live providers`, () => {
+  test(`${provider} setup rejects invalid estimates and mixed live providers`, () => {
     for (const extra of [
-      [`--${provider}-secret`, "name"],
+      ...(provider === "deepseek" ? [] : [[`--${provider}-secret`, "name"]]),
       [`--${provider}-request-cost-microusd`, "5000"],
       [
         `--${provider}-secret`,
@@ -487,6 +491,57 @@ print(json.dumps([{'descriptor': policy.load_configuration(env)['descriptor'], '
       );
   });
 }
+
+test("DeepSeek defaults to its published search/fetch estimate without enabling semantics or execution", () => {
+  const options = parseArguments(
+    [...base, "--deepseek-secret", "personal_deepseek"],
+    {},
+  );
+  assert.deepEqual(options.search.descriptor, {
+    approved_cost_microusd: 50000,
+    provider: "deepseek",
+    request_cost_microusd: 750,
+    secret_name: "personal_deepseek",
+    version: "deepseek-search.v1",
+  });
+  assert.deepEqual(flightSecretNames(options), ["personal_deepseek"]);
+  const settings = outputSettings(options, receipt);
+  assert.equal(settings.SOURCESQL_DEEPSEEK_REQUEST_COST_MICROUSD, "750");
+  assert.equal(settings.SOURCESQL_ALLOW_FLIGHT_SUBMISSION, "0");
+  assert.equal(settings.SOURCESQL_OPENAI_MODEL, undefined);
+  assert.throws(
+    () =>
+      parseArguments(
+        [
+          ...base,
+          "--deepseek-secret",
+          "personal_deepseek",
+          "--deepseek-request-cost-microusd",
+          "749",
+        ],
+        {},
+      ),
+    /invalid_configuration/,
+  );
+  for (const other of ["exa", "brave", "serper"])
+    assert.throws(
+      () =>
+        parseArguments(
+          [
+            ...base,
+            "--deepseek-secret",
+            "personal_deepseek",
+            `--${other}-secret`,
+            `personal_${other}`,
+            ...(other === "exa"
+              ? []
+              : [`--${other}-request-cost-microusd`, "5000"]),
+          ],
+          {},
+        ),
+      /invalid_configuration/,
+    );
+});
 
 test("fixture provisioning stays unscheduled, bounded and without secrets or Exa enablement", () => {
   const options = parseArguments(base, {});

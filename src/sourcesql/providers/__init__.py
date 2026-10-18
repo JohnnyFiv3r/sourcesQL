@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from ..contracts import Budget, SemanticOutcome, SourcesQLError
 from .common import SafeFetcher, normalized_url, resolve_public, project_search_provenance
 from .fixture import FixtureProvider
+from .deepseek import DeepSeekProvider
 from .search import BraveProvider, ExaProvider, SerperProvider, search_options, validate_queries
 from .semantic import OpenAIEmbeddingProvider, PydanticSemanticProvider, TYPES
 
@@ -18,6 +19,7 @@ __all__ = [
     "BraveProvider",
     "ExaProvider",
     "SerperProvider",
+    "DeepSeekProvider",
     "SafeFetcher",
     "PydanticSemanticProvider",
     "OpenAIEmbeddingProvider",
@@ -38,7 +40,12 @@ class ProviderRegistry:
         self._extra_events: list[dict] = []
         if self.mode == "live":
             provider = self.profile.get("provider", "brave")
-            providers = {"brave": BraveProvider, "exa": ExaProvider, "serper": SerperProvider}
+            providers = {
+                "brave": BraveProvider,
+                "exa": ExaProvider,
+                "serper": SerperProvider,
+                "deepseek": DeepSeekProvider,
+            }
             if provider not in providers:
                 raise SourcesQLError("unsupported_capability", "Unknown search provider")
             credentials = self.profile.get("api_key")
@@ -47,7 +54,9 @@ class ProviderRegistry:
             kwargs = {"api_key": credentials or "", "client": self.profile.get("http_client")}
             if provider == "exa":
                 kwargs["search_type"] = self.profile.get("search_type", "auto")
-            if provider == "exa" and self.profile.get("resolver") is not None:
+            if provider == "deepseek":
+                kwargs["request_cost_microusd"] = self.profile.get("request_cost_microusd", 750)
+            if provider in {"exa", "deepseek"} and self.profile.get("resolver") is not None:
                 kwargs["resolver"] = self.profile["resolver"]
             self.search_provider = providers[provider](**kwargs)
             self.fetch_provider = SafeFetcher(
@@ -59,7 +68,7 @@ class ProviderRegistry:
                 ),
                 **({"resolver": self.profile["resolver"]} if self.profile.get("resolver") else {}),
             )
-            if self.profile.get("fetch_adapter") == "exa" and provider == "exa":
+            if provider in {"exa", "deepseek"} and self.profile.get("fetch_adapter") == provider:
                 self.fetch_provider = self.search_provider
             self.semantic_provider = None
             self.embedding_provider = None
@@ -214,14 +223,20 @@ class ProviderRegistry:
     def search(self, queries: list[str], options: dict, budget: Budget) -> list[dict]:
         self._authorize(budget)
         validate_queries(queries)
+        if isinstance(self.search_provider, DeepSeekProvider):
+            self.search_provider.validate_queries(queries)
         search_settings = (
             {"per_query_limit": 10, **options}
-            if self.mode == "live" and self.profile.get("provider") == "exa"
+            if self.mode == "live" and self.profile.get("provider") in {"exa", "deepseek"}
             else options
         )
         requested_limit = search_options(
             search_settings,
-            maximum=100 if self.mode == "live" and self.profile.get("provider") == "exa" else 20,
+            maximum=(
+                {"exa": 100, "deepseek": 50}.get(self.profile.get("provider", ""), 20)
+                if self.mode == "live"
+                else 20
+            ),
         )
         remaining = budget.limits["max_candidates"] - budget.counts.get("candidates", 0)
         per_query_limit = min(requested_limit, remaining // len(queries))
@@ -326,6 +341,8 @@ class ProviderRegistry:
                     )
                 resolver = self.profile.get("resolver")
                 resolve_public(url, resolver) if resolver else resolve_public(url)
+        if isinstance(self.fetch_provider, DeepSeekProvider):
+            self.fetch_provider.validate_fetch(urls, options)
         if hasattr(self, "stage_call"):
             rows = []
             for url in urls:

@@ -22,6 +22,8 @@ import {
   validateExaPolicy,
 } from "../apps/research/server/hosted-exa.ts";
 import {
+  HOSTED_SEARCH_POLICY_VERSIONS,
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchDescriptor,
   hostedSearchFingerprint,
   hostedSearchBudgets,
@@ -72,7 +74,9 @@ function searchPolicy(provider) {
     ...exaPolicy(provider),
     provider: provider.name,
     requestCostMicrousd: provider.request_cost_microusd,
-    policyVersion: `${provider.name}-${provider.model || provider.embedding ? "research.v2" : "search.v1"}`,
+    policyVersion: (provider.model || provider.embedding
+      ? HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS
+      : HOSTED_SEARCH_POLICY_VERSIONS)[provider.name],
   };
 }
 
@@ -278,7 +282,11 @@ export function validateConfig(config) {
   } catch {
     fail("invalid_oauth_configuration");
   }
-  const provider = config.provider ?? { name: "fixture" };
+  const configuredProvider = config.provider ?? { name: "fixture" };
+  const provider =
+    configuredProvider.name === "deepseek"
+      ? { request_cost_microusd: 750, ...configuredProvider }
+      : configuredProvider;
   strictKeys(provider, [
     "name",
     "secret_name",
@@ -289,7 +297,9 @@ export function validateConfig(config) {
     "model",
     "embedding",
   ]);
-  if (!["fixture", "exa", "brave", "serper"].includes(provider.name))
+  if (
+    !["fixture", "exa", "brave", "serper", "deepseek"].includes(provider.name)
+  )
     fail("invalid_provider_configuration");
   if (provider.name === "fixture" && Object.keys(provider).length !== 1)
     fail("invalid_provider_configuration");
@@ -359,7 +369,7 @@ export function validateConfig(config) {
     )
       fail("invalid_provider_configuration");
     if (
-      ["brave", "serper"].includes(provider.name) &&
+      ["brave", "serper", "deepseek"].includes(provider.name) &&
       (!Number.isSafeInteger(provider.request_cost_microusd) ||
         provider.request_cost_microusd < 1 ||
         provider.request_cost_microusd > provider.approved_cost_microusd ||
@@ -734,7 +744,7 @@ export function environmentSettings(config, settings, secrets) {
     "SOURCESQL_FLIGHT_DAILY_SECONDS",
     "SOURCESQL_FLIGHT_MONTHLY_SECONDS",
     "SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD",
-    ...["EXA", "BRAVE", "SERPER"].map(
+    ...["EXA", "BRAVE", "SERPER", "DEEPSEEK"].map(
       (provider) => `SOURCESQL_${provider}_DAILY_COST_MICROUSD`,
     ),
   ]);
@@ -824,7 +834,7 @@ export function setupArguments(config, workspace) {
       `--${provider.name}-daily-cost-microusd`,
       String(provider.daily_cost_microusd ?? provider.approved_cost_microusd),
     );
-    if (["brave", "serper"].includes(provider.name))
+    if (["brave", "serper", "deepseek"].includes(provider.name))
       args.push(
         `--${provider.name}-request-cost-microusd`,
         String(provider.request_cost_microusd),

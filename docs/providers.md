@@ -1,6 +1,6 @@
 # Provider setup
 
-Fixture mode is the default and uses fictional Aurora/Birch sources without network calls or spending. The [profile template](../examples/profiles.example.json) also defines Exa, Brave and Serper profiles with live dispatch disabled. Configuration, adapter tests and live research quality are separate checks; see [current qualification](../STATUS.md) for the recorded deployment and host evidence.
+Fixture mode is the default and uses fictional Aurora/Birch sources without network calls or spending. The [profile template](../examples/profiles.example.json) also defines Exa, Brave, Serper and DeepSeek profiles with live dispatch disabled. Configuration, adapter tests and live research quality are separate checks; see [current qualification](../STATUS.md) for the recorded deployment and host evidence.
 
 Copy the template to an operator-controlled file outside published artifacts. Load it through `SOURCESQL_PROFILES_FILE` in the CLI or JSON-lines bridge; the Python SDK accepts the same name-to-profile mapping through `Engine(..., profiles=mapping)`. Supply credentials through the named environment variables. Replace both `SET_APPROVED_*_MODEL_NAME` placeholders with exact approved model identifiers before configuring semantic work. No credentials belong in the example file.
 
@@ -13,7 +13,7 @@ This command reads configuration and creates a local store; it does not contact 
 | Trusted profile field | Actual behavior |
 |---|---|
 | `mode` | `fixture` or `live`; default is `fixture`. |
-| `provider` | Live search adapter: `exa`, `brave` or `serper`. One adapter per profile; no automatic switching. |
+| `provider` | Live search adapter: `exa`, `brave`, `serper` or `deepseek`. One adapter per profile; no automatic switching. |
 | `api_key_env` | Environment variable containing the search credential. |
 | `allow_live` | Must be `true` in trusted configuration before live dispatch. |
 | `approved_cost_microusd` | Positive integer approval ceiling for a run request. One million micro-USD equals USD 1. This is not a debited account balance or an enforced billing cap. |
@@ -59,12 +59,13 @@ credential can serve both model adapters, but both capabilities must be opted
 into separately. The OpenAI adapter returns cosine similarity of the bounded
 source text and criterion. It does not score truth or establish source support.
 Inspect omissions and unavailable outcomes instead of interpreting them as a
-zero score. Hosted Exa, Brave and Serper can independently opt into the same model
+zero score. Hosted Exa, Brave, Serper and DeepSeek can independently opt into the same model
 and embedding adapters; see the [hosted provider guide](providers-hosted.md) and
 [guided onboarding](personal-cloud-setup.md#opt-into-model-extraction-and-embedding-ranking).
 The search provider remains responsible for discovery: hosted Brave/Serper
 research can fetch public pages through the engine's guarded fetcher, while Exa
-research uses Contents fetching.
+research uses Contents fetching. DeepSeek research uses its native Markdown
+fetch endpoint.
 No semantic adapter establishes evidence missing from the acquired material.
 
 Scoring batches unique source inputs sharing a criterion and embeds that criterion
@@ -141,3 +142,48 @@ retries. The key came from a bound MotherDuck Flight secret. The stored result
 then passed MCP open/save and fresh-factory reopening without another Flight.
 Operator receipts remain outside public artifacts under
 `artifacts/hosted-exa-20261014/`.
+
+## DeepSeek retrieval contract
+
+The `deepseek` adapter uses the official [Search API](https://api-docs.deepseek.com/api/search/)
+and [Fetch API](https://api-docs.deepseek.com/api/fetch/) with `DEEPSEEK_API_KEY`.
+Search requests ask for page content, default to ten results and accept an
+explicit `per_query_limit` from one to 50. Queries must contain one to 128 Unicode
+characters. The complete query batch is checked before dispatch; long queries are
+not truncated. Narrow or split a long criterion deliberately in the authored SQL.
+Ordinary SQL may shortlist and reconcile acquired sources before semantic work.
+Publication-date options use the shared explicit local post-filter contract;
+missing dates remain unknown. Domain and query syntax do not become implicit
+relevance gates.
+
+Page content is retained as incomplete provider text. A summary or snippet
+without page content remains discovery metadata rather than quoted page evidence.
+The provider's `rerank_score` and `authority` values are source metadata; neither
+replaces the separately configured embedding `SEM_SCORE` or proves a claim true.
+`SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL` and `SEM_NORM` use the independently
+configured model on acquired text, with the same missing-evidence behavior as
+other search providers.
+
+Set `"fetch_adapter": "deepseek"` in a local profile to use native Fetch instead
+of the guarded direct-page fetcher. Explicit source hosts or a public-source
+grant are still required; public DNS and permitted HTTP ports are checked before
+sending the source URL. Fetch returns incomplete provider Markdown. Only
+`mode := 'cache_preferred'` is supported: the API has no documented force-fresh
+option, so `mode := 'live'` refuses before dispatch instead of promising freshness.
+DeepSeek supports `source_mode: "allow_excerpt"` only: provider text cannot
+establish whole-source completeness. `require_document` refuses before paid
+acquisition rather than spending on an impossible completeness guarantee.
+No application retries, hidden fetches or provider fallback are added.
+
+As checked on October 18, 2026, DeepSeek lists search and fetch at **$0.75 per
+1,000 successful nonempty requests**. The adapter records a 750 micro-USD
+operation estimate for such a response and zero for a valid empty result.
+Unavailable usage or an uncertain remote outcome stays unknown. This is an
+estimate, not a provider billing statement. No recurring free allowance for these
+endpoints is documented; setup does not assume one. Check the account's own
+credit and billing state before enabling live work. See DeepSeek's
+[Search and Fetch guide](https://api-docs.deepseek.com/guides/search/).
+
+DeepSeek is an optional explicitly selected provider. Configuration, mocked
+adapter tests and packaging do not qualify live retrieval quality, billing,
+hosted execution or ChatGPT/Claude behavior for an adopter's account.

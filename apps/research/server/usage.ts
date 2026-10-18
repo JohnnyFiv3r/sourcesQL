@@ -67,7 +67,7 @@ const providerName = (event: Row) => {
     name === "openai_embeddings"
   )
     return "openai";
-  return ["exa", "brave", "serper"].includes(name)
+  return ["exa", "brave", "serper", "deepseek"].includes(name)
     ? (name as string)
     : undefined;
 };

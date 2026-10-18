@@ -9,6 +9,7 @@ import pytest
 from sourcesql.contracts import Budget, SourcesQLError
 from sourcesql.providers.common import read_response
 from sourcesql.providers.search import BraveProvider, ExaProvider, SerperProvider
+from sourcesql.providers.deepseek import DeepSeekProvider
 
 
 def provider(kind, response):
@@ -19,17 +20,22 @@ def provider(kind, response):
         return response
 
     client = httpx.Client(transport=httpx.MockTransport(reply), trust_env=False)
-    factory = {"exa": ExaProvider, "brave": BraveProvider, "serper": SerperProvider}[kind]
+    factory = {
+        "exa": ExaProvider,
+        "brave": BraveProvider,
+        "serper": SerperProvider,
+        "deepseek": DeepSeekProvider,
+    }[kind]
     return factory("synthetic", client=client), calls
 
 
-@pytest.mark.parametrize("kind", ["exa", "brave", "serper"])
+@pytest.mark.parametrize("kind", ["exa", "brave", "serper", "deepseek"])
 @pytest.mark.parametrize("status,limit_kind", [(402, "unknown"), (429, "rate")])
 def test_known_provider_refusals_remain_distinct_from_free_allowance(kind, status, limit_kind):
     adapter, calls = provider(
         kind, httpx.Response(status, headers={"Retry-After": "17"}, json={"error": "PRIVATE-BODY"})
     )
-    budget = Budget({"max_search_queries": 1, "max_search_requests": 1})
+    budget = Budget({"max_search_queries": 1, "max_search_requests": 1, "max_cost_microusd": 750})
     with pytest.raises(SourcesQLError) as failed:
         adapter.search(["test query"], {}, budget)
     assert len(calls) == 1

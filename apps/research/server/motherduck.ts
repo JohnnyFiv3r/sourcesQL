@@ -953,7 +953,9 @@ export class MotherDuckEngine implements ResearchEngine {
         }
         request.source_mode = params.source_mode ?? "allow_excerpt";
       } else if (isHostedSearchProfile(request.profile)) {
-        const research = isHostedSearchResearch(this.options.search!);
+        const research =
+          isHostedSearchResearch(this.options.search!) &&
+          request.profile !== "deepseek";
         if (
           params.source_mode !== undefined &&
           !(
@@ -1200,6 +1202,7 @@ export class MotherDuckEngine implements ResearchEngine {
         if (
           config.SOURCESQL_ALLOW_LIVE_BRAVE === "1" ||
           config.SOURCESQL_ALLOW_LIVE_SERPER === "1" ||
+          config.SOURCESQL_ALLOW_LIVE_DEEPSEEK === "1" ||
           Object.entries(required).some(
             ([key, value]) => configuredPolicy[key] !== value,
           ) ||
@@ -1226,7 +1229,7 @@ export class MotherDuckEngine implements ResearchEngine {
         const policy = this.options.search;
         const required = hostedSearchConfiguration(policy);
         const secrets = JSON.parse(detail.secrets_json ?? "[]");
-        const enabled = ["EXA", "BRAVE", "SERPER"].filter(
+        const enabled = ["EXA", "BRAVE", "SERPER", "DEEPSEEK"].filter(
           (provider) => config[`SOURCESQL_ALLOW_LIVE_${provider}`] === "1",
         );
         if (
@@ -1669,14 +1672,30 @@ export class MotherDuckEngine implements ResearchEngine {
                   fetched_text_coverage: isHostedSearchResearch(
                     this.options.search,
                   )
-                    ? "Public HTML/text fetched directly; rendered JavaScript and PDF extraction are unavailable"
+                    ? this.options.search.provider === "deepseek"
+                      ? "Retained provider Markdown/text; completeness and forced freshness are not established"
+                      : "Public HTML/text fetched directly; rendered JavaScript and PDF extraction are unavailable"
                     : null,
                   search_limits: hostedSearchBudgets(
                     {},
                     this.options.search,
                     this.maxRuntime - 20,
                   ),
-                  cost_reporting: "unavailable",
+                  cost_reporting:
+                    this.options.search.provider === "deepseek"
+                      ? "published_rate_estimate_not_billing"
+                      : "unavailable",
+                  ...(this.options.search.provider === "deepseek"
+                    ? {
+                        source_modes: ["allow_excerpt"],
+                        search_query_max_characters: 128,
+                        search_per_query_max_results: 50,
+                        fetch_modes: isHostedSearchResearch(this.options.search)
+                          ? ["cache_preferred"]
+                          : [],
+                        provider_ranking_is_sem_score: false,
+                      }
+                    : {}),
                   estimated_request_cost_microusd:
                     this.options.search.requestCostMicrousd,
                   broad_discovery:
@@ -1884,7 +1903,7 @@ export async function createMotherDuckBackend(
       "unsupported_capability",
       "Hosted private/live profiles require separate configuration",
     );
-  const enabledProviders = ["EXA", "BRAVE", "SERPER"].filter(
+  const enabledProviders = ["EXA", "BRAVE", "SERPER", "DEEPSEEK"].filter(
     (provider) => environment[`SOURCESQL_ALLOW_LIVE_${provider}`] === "1",
   );
   if (enabledProviders.length > 1)
@@ -1922,7 +1941,7 @@ export async function createMotherDuckBackend(
       : {}),
   };
   let search: HostedSearchPolicy | undefined;
-  if (selected === "brave" || selected === "serper") {
+  if (isHostedSearchProfile(selected)) {
     const prefix = `SOURCESQL_${selected.toUpperCase()}`;
     search = {
       provider: selected,

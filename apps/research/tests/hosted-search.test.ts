@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import {
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchBudgets,
   hostedSearchConfiguration,
   hostedSearchDescriptor,
@@ -21,7 +22,7 @@ import {
   exaResearchLimits,
 } from "../server/hosted-exa.js";
 
-for (const provider of ["brave", "serper"] as const) {
+for (const provider of ["brave", "serper", "deepseek"] as const) {
   const policy: HostedSearchPolicy = {
     provider,
     secretName: `sourcesql_${provider}`,
@@ -112,7 +113,7 @@ for (const provider of ["brave", "serper"] as const) {
 
   const research = (model = false, embedding = false): HostedSearchPolicy => ({
     ...policy,
-    policyVersion: `${provider}-research.v2`,
+    policyVersion: HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[provider],
     approvedCostMicrousd: 1_000_000,
     dailyCostMicrousd: 5_000_000,
     ...(model
@@ -202,7 +203,7 @@ for (const provider of ["brave", "serper"] as const) {
         const config = hostedSearchConfiguration(selected);
         assert.equal(
           config[`SOURCESQL_${provider.toUpperCase()}_POLICY_VERSION`],
-          `${provider}-research.v2`,
+          HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[provider],
         );
         assert.equal(config.SOURCESQL_OPENAI_MODEL, selected.model?.name);
         assert.equal(
@@ -430,6 +431,29 @@ print(json.dumps([{
     }
   });
 }
+
+test("DeepSeek published request estimate is a floor and does not enable unselected processing", () => {
+  const policy: HostedSearchPolicy = {
+    provider: "deepseek",
+    secretName: "sourcesql_deepseek",
+    approvedCostMicrousd: 50_000,
+    dailyCostMicrousd: 100_000,
+    requestCostMicrousd: 750,
+    policyVersion: "deepseek-research.v1",
+  };
+  assert.deepEqual(hostedSearchOperators(policy), ["WEB_SEARCH", "WEB_FETCH"]);
+  const budgets = hostedSearchBudgets({}, policy, 100);
+  assert.equal(budgets.max_search_requests, 48);
+  assert.equal(budgets.max_fetches, 40);
+  assert.equal(budgets.max_model_requests, 0);
+  assert.equal(budgets.max_cost_microusd, 50_000);
+  assert.throws(() =>
+    validateHostedSearchPolicy({ ...policy, requestCostMicrousd: 749 }),
+  );
+  assert.throws(() =>
+    validateHostedSearchPolicy({ ...policy, policyVersion: "deepseek-research.v2" }),
+  );
+});
 
 test("legacy Exa descriptors and fingerprints are unchanged", () => {
   const policy = {

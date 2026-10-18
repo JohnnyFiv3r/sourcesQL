@@ -1,4 +1,4 @@
-"""Hosted Brave/Serper policy plus real-adapter dispatch using synthetic HTTP."""
+"""Hosted search policy plus real-adapter dispatch using synthetic HTTP."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def request(profile_name, **overrides):
     }
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 def test_configuration_binds_only_selected_profile_and_public_policy(provider):
     env = environment(provider)
     settings = policy.load_configuration(env)
@@ -68,12 +68,12 @@ def test_configuration_binds_only_selected_profile_and_public_policy(provider):
     assert "SAFE-SYNTHETIC-KEY" not in json.dumps(settings)
     assert settings["profiles"][provider]["allowed_source_hosts"] == []
     policy.validate_request(request(provider), settings, env)
-    for other in {"exa", "exa_deep", "brave", "serper"} - {provider}:
+    for other in {"exa", "exa_deep", "brave", "serper", "deepseek"} - {provider}:
         with pytest.raises(SourcesQLError):
             policy.validate_request(request(other), settings, env)
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 def test_real_adapter_limits_results_and_preserves_lineage_and_unknown_billing(
     provider, monkeypatch
 ):
@@ -104,6 +104,29 @@ def test_real_adapter_limits_results_and_preserves_lineage_and_unknown_billing(
                     }
                 },
             )
+        if provider == "deepseek":
+            assert call.url.host == "api.deepseek.com"
+            assert call.url.path == "/v1/tools/search"
+            assert call.headers["authorization"] == "Bearer SAFE-SYNTHETIC-KEY"
+            assert json.loads(call.content)["count"] == 5
+            assert json.loads(call.content)["need_content"] is True
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Public archive",
+                            "url": "https://example.org/archive",
+                            "snippet": "Evidence excerpt",
+                            "summary": "A provider summary is not source content",
+                            "content": "Evidence excerpt",
+                            "date": "2026-10-18T00:00:00Z",
+                            "rerank_score": 2.5,
+                            "authority": 3,
+                        }
+                    ]
+                },
+            )
         assert call.url.host == "google.serper.dev"
         assert call.headers["X-API-KEY"] == "SAFE-SYNTHETIC-KEY"
         assert json.loads(call.content)["num"] == 5
@@ -128,17 +151,22 @@ def test_real_adapter_limits_results_and_preserves_lineage_and_unknown_billing(
         assert len(captured) == 2 and len(rows) == 1
         assert len(rows[0]["hits"]) == 2
         assert {hit["query_index"] for hit in rows[0]["hits"]} == {0, 1}
-        assert rows[0]["content_basis"] == "excerpt" and rows[0]["coverage"]["complete"] is False
+        assert rows[0]["content_basis"] == (
+            "provider_text" if provider == "deepseek" else "excerpt"
+        )
+        assert rows[0]["coverage"]["complete"] is False
         for event in registry.search_provider.events:
             assert event["usage"]["cost_microusd"] is None
-            assert event["usage"]["cost_basis"] == "unavailable"
+            assert event["usage"]["cost_basis"] == (
+                "published_rate_estimate" if provider == "deepseek" else "unavailable"
+            )
         with pytest.raises(SourcesQLError) as error:
             registry.search(["third request"], {}, budget)
         assert error.value.code == "budget_exhausted"
         assert len(captured) == 2
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 def test_policy_refuses_implicit_enablement_mixed_providers_and_invalid_estimates(provider):
     assert policy.load_configuration({provider.upper() + "_API_KEY": "SAFE-KEY"})[
         "allowed_profiles"
@@ -160,7 +188,7 @@ def test_policy_refuses_implicit_enablement_mixed_providers_and_invalid_estimate
         )
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 def test_policy_rejects_unaffordable_attempts_missing_secret_and_expensive_work(provider):
     env = environment(provider)
     settings = policy.load_configuration(env)
@@ -197,12 +225,33 @@ def test_legacy_exa_v1_fingerprint_modes_and_deadline_are_unchanged():
         policy.validate_request(request("exa_deep"), settings, env)
 
 
+@pytest.mark.parametrize("version", ["deepseek-search.v1", "deepseek-research.v1"])
+def test_deepseek_request_estimate_is_bound_and_not_below_published_unit_rate(version):
+    env = environment(
+        "deepseek",
+        SOURCESQL_DEEPSEEK_POLICY_VERSION=version,
+        SOURCESQL_DEEPSEEK_REQUEST_COST_MICROUSD="750",
+    )
+    settings = policy.load_configuration(env)
+    profile = settings["profiles"]["deepseek"]
+    assert profile["request_cost_microusd"] == 750
+    assert profile.get("fetch_adapter") == (
+        "deepseek" if version == "deepseek-research.v1" else None
+    )
+    policy.validate_request(request("deepseek"), settings, env)
+    profile["request_cost_microusd"] = 1
+    with pytest.raises(SourcesQLError, match="policy mismatch"):
+        policy.validate_request(request("deepseek"), settings, env)
+    with pytest.raises(ValueError, match="published unit rate"):
+        policy.load_configuration({**env, "SOURCESQL_DEEPSEEK_REQUEST_COST_MICROUSD": "749"})
+
+
 def research_environment(provider, *, model=True, embedding=True, **overrides):
     prefix = "SOURCESQL_" + provider.upper()
     return environment(
         provider,
         **{
-            prefix + "_POLICY_VERSION": provider + "-research.v2",
+            prefix + "_POLICY_VERSION": policy.SEARCH_RESEARCH_POLICY_VERSIONS[provider],
             prefix + "_APPROVED_COST_MICROUSD": "1000000",
             **(
                 {
@@ -236,7 +285,7 @@ def research_request(provider, settings, **overrides):
     )
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 @pytest.mark.parametrize("model", [False, True])
 @pytest.mark.parametrize("embedding", [False, True])
 def test_research_descriptor_binds_optional_semantics_independently_of_search(
@@ -245,7 +294,7 @@ def test_research_descriptor_binds_optional_semantics_independently_of_search(
     env = research_environment(provider, model=model, embedding=embedding)
     settings = policy.load_configuration(env)
     descriptor = settings["descriptor"]
-    assert descriptor["version"] == provider + "-research.v2"
+    assert descriptor["version"] == policy.SEARCH_RESEARCH_POLICY_VERSIONS[provider]
     assert descriptor["provider"] == provider
     assert descriptor["secret_name"] == "sourcesql_" + provider
     assert descriptor["approved_cost_microusd"] == 1_000_000
@@ -282,7 +331,10 @@ def test_research_descriptor_binds_optional_semantics_independently_of_search(
     )
     profile = settings["profiles"][provider]
     assert profile["allow_public_source_hosts"] is True
-    assert profile["allowed_source_hosts"] == [] and "fetch_adapter" not in profile
+    assert profile["allowed_source_hosts"] == []
+    assert profile.get("fetch_adapter") == ("deepseek" if provider == "deepseek" else None)
+    if provider == "deepseek":
+        assert profile["request_cost_microusd"] == descriptor["request_cost_microusd"]
     assert profile.get("model") == (
         {
             "name": "gpt-4.1-mini",
@@ -295,9 +347,14 @@ def test_research_descriptor_binds_optional_semantics_independently_of_search(
     )
     assert "SYNTHETIC-" not in json.dumps(settings)
     for source_mode in ["allow_excerpt", "require_document"]:
-        policy.validate_request(
-            research_request(provider, settings, source_mode=source_mode), settings, env
-        )
+        requested = research_request(provider, settings, source_mode=source_mode)
+        if provider == "deepseek" and source_mode == "require_document":
+            for credentials in (env, {}):
+                with pytest.raises(SourcesQLError, match="complete document coverage") as error:
+                    policy.validate_request(requested, settings, credentials)
+                assert error.value.code == "unsupported_capability"
+        else:
+            policy.validate_request(requested, settings, env)
     allowed = {"WEB_SEARCH", "WEB_FETCH", "SOURCE_WINDOW"}
     if model:
         allowed.update(policy.SEMANTIC_OPERATORS)
@@ -318,7 +375,7 @@ def test_research_descriptor_binds_optional_semantics_independently_of_search(
     assert policy.load_configuration(rotated) == settings
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 def test_legacy_search_profiles_ignore_semantic_settings_and_retain_fingerprint(provider):
     original = policy.load_configuration(environment(provider))
     enabled = research_environment(
@@ -336,7 +393,7 @@ def test_legacy_search_profiles_ignore_semantic_settings_and_retain_fingerprint(
             )
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 @pytest.mark.parametrize("credential", ["search", "model", "embedding"])
 @pytest.mark.parametrize("value", [None, "", "bad key", "bad\nkey", "x" * 4097])
 def test_research_credentials_must_be_exact_bound_validated_secrets(provider, credential, value):
@@ -357,7 +414,7 @@ def test_research_credentials_must_be_exact_bound_validated_secrets(provider, cr
     assert error.value.code == "provider_unavailable"
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 @pytest.mark.parametrize("name", list(policy.RESEARCH_LIMITS))
 def test_research_request_cannot_exceed_execution_ceiling(provider, name):
     env = research_environment(provider)
@@ -369,7 +426,7 @@ def test_research_request_cannot_exceed_execution_ceiling(provider, name):
     assert error.value.code in {"unauthorized", "invalid_request"}
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 @pytest.mark.parametrize(
     "change",
     [
@@ -391,7 +448,7 @@ def test_research_runtime_profile_cannot_drift_from_descriptor(provider, change)
     assert error.value.code == "unauthorized"
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 @pytest.mark.parametrize(
     "override",
     [
@@ -413,7 +470,7 @@ def test_research_request_cannot_override_trusted_provider_or_semantic_settings(
     assert error.value.code == "unauthorized"
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 def test_research_cost_reservations_and_explicit_version_are_still_required(provider):
     prefix = "SOURCESQL_" + provider.upper()
     env = research_environment(provider, **{prefix + "_APPROVED_COST_MICROUSD": "2000000"})
@@ -443,7 +500,7 @@ def test_research_cost_reservations_and_explicit_version_are_still_required(prov
         )
 
 
-@pytest.mark.parametrize("provider", ["brave", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
 def test_research_search_fetch_semantics_and_embeddings_use_selected_adapters(
     provider, monkeypatch, tmp_path
 ):
@@ -500,6 +557,27 @@ def test_research_search_fetch_semantics_and_embeddings_use_selected_adapters(
                     ]
                 },
             )
+        if call.url.host == "api.deepseek.com":
+            assert provider == "deepseek"
+            assert call.headers["authorization"] == "Bearer SAFE-SYNTHETIC-KEY"
+            if call.url.path == "/v1/tools/search":
+                return httpx.Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "title": "Aurora",
+                                "url": "https://example.org/archive",
+                                "snippet": "Aurora",
+                                "summary": "An independently generated summary",
+                                "content": "Aurora",
+                            }
+                        ]
+                    },
+                )
+            assert call.url.path == "/v1/tools/fetch"
+            assert json.loads(call.content) == {"url": "https://example.org/archive"}
+            return httpx.Response(200, json={"title": "Aurora", "content": "Aurora 500"})
         if call.url.host == "93.184.216.34":
             assert call.headers["host"] == "example.org"
             assert "authorization" not in call.headers and "x-api-key" not in call.headers
@@ -540,7 +618,9 @@ def test_research_search_fetch_semantics_and_embeddings_use_selected_adapters(
         )
         hits = registry.search(["public archive"], {}, budget)
         row = registry.fetch([hits[0]["url"]], {}, budget)[0]
-        assert row["content"] == "Aurora 500" and row["coverage"]["complete"]
+        assert row["content"] == "Aurora 500"
+        assert row["coverage"]["complete"] is (provider != "deepseek")
+        assert row["content_basis"] == ("provider_text" if provider == "deepseek" else "document")
         support = {"quote": "Aurora", "start": 0, "end": 6, "field": "value"}
         outputs.append({"value": True, "status": "processed", "support": [support]})
         assert (
@@ -632,7 +712,12 @@ def test_research_search_fetch_semantics_and_embeddings_use_selected_adapters(
         outputs.append({"value": "Aurora", "status": "supported_text", "support": [support]})
         reused_request = research_request(provider, settings)
         reused_request.update(
-            query="SELECT SEM_EXTRACT(content,'name of campus') AS name FROM input.saved WHERE content_basis='document'",
+            query="SELECT SEM_EXTRACT(content,'name of campus') AS name FROM input.saved "
+            + (
+                "WHERE content = 'Aurora 500'"
+                if provider == "deepseek"
+                else "WHERE content_basis='document'"
+            ),
             inputs={"saved": {"result_id": result["result_id"], "view": "sources"}},
         )
         reused_request["budgets"].update(

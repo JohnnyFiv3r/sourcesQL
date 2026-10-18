@@ -197,7 +197,7 @@ def test_download_deadline_covers_slow_chunks_not_only_individual_reads(tmp_path
 
 @pytest.mark.parametrize("operator", ["WEB_SEARCH", "SEM_SCORE"])
 @pytest.mark.parametrize("hydration_fails", [False, True])
-@pytest.mark.parametrize("profile", ["fixture", "exa", "brave", "serper"])
+@pytest.mark.parametrize("profile", ["fixture", "exa", "brave", "serper", "deepseek"])
 def test_only_validated_scoring_hydrates_before_dispatch_and_preserves_request(
     tmp_path, monkeypatch, operator, hydration_fails, profile
 ):

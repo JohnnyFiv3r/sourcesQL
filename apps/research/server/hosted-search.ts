@@ -10,7 +10,7 @@ import {
 
 /** One operator-selected search provider per reviewed Flight. */
 export type HostedSearchPolicy = HostedResearchOptions & {
-  provider: "brave" | "serper";
+  provider: "brave" | "serper" | "deepseek";
   secretName: string;
   approvedCostMicrousd: number;
   dailyCostMicrousd: number;
@@ -20,10 +20,12 @@ export type HostedSearchPolicy = HostedResearchOptions & {
 export const HOSTED_SEARCH_POLICY_VERSIONS = {
   brave: "brave-search.v1",
   serper: "serper-search.v1",
+  deepseek: "deepseek-search.v1",
 } as const;
 export const HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS = {
   brave: "brave-research.v2",
   serper: "serper-research.v2",
+  deepseek: "deepseek-research.v1",
 } as const;
 export const HOSTED_SEARCH_LIMITS = {
   max_search_queries: 2,
@@ -42,8 +44,8 @@ export const HOSTED_SEARCH_LIMITS = {
 
 export function isHostedSearchProfile(
   profile: unknown,
-): profile is "brave" | "serper" {
-  return profile === "brave" || profile === "serper";
+): profile is "brave" | "serper" | "deepseek" {
+  return profile === "brave" || profile === "serper" || profile === "deepseek";
 }
 
 export function validateHostedSearchPolicy(policy: HostedSearchPolicy): void {
@@ -61,6 +63,7 @@ export function validateHostedSearchPolicy(policy: HostedSearchPolicy): void {
         Number.isSafeInteger(value) && value >= 1 && value <= maximum,
     ) ||
     policy.dailyCostMicrousd < policy.approvedCostMicrousd ||
+    (policy.provider === "deepseek" && policy.requestCostMicrousd < 750) ||
     policy.requestCostMicrousd > policy.approvedCostMicrousd ||
     (policy.policyVersion !== undefined &&
       ![
