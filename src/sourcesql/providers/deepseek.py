@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
+from types import MappingProxyType
+from typing import Mapping
 from time import monotonic
 from urllib.parse import urlsplit
 
@@ -10,6 +13,7 @@ import httpx
 
 from ..contracts import Budget, SourcesQLError
 from .common import (
+    DEEPSEEK_REQUEST_COST_MICROUSD,
     api_json,
     capture_provider_failure,
     normalized_text,
@@ -25,6 +29,22 @@ from .common import (
 from .search import actual_date, publication_filter, search_options, validate_queries
 
 
+@dataclass(frozen=True)
+class _PreparedSearch:
+    owner: object
+    queries: tuple[str, ...]
+    count: int
+    filters: Mapping
+    include: tuple[str, ...]
+    exclude: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PreparedFetch:
+    owner: object
+    urls: tuple[str, ...]
+
+
 class DeepSeekProvider:
     endpoint = "https://api.deepseek.com/v1/tools"
 
@@ -34,9 +54,12 @@ class DeepSeekProvider:
         client: httpx.Client | None = None,
         resolver=None,
         *,
-        request_cost_microusd: int = 750,
+        request_cost_microusd: int = DEEPSEEK_REQUEST_COST_MICROUSD,
     ):
-        if type(request_cost_microusd) is not int or request_cost_microusd < 750:
+        if (
+            type(request_cost_microusd) is not int
+            or request_cost_microusd < DEEPSEEK_REQUEST_COST_MICROUSD
+        ):
             raise SourcesQLError(
                 "invalid_request", "Invalid DeepSeek request estimate", "acquisition"
             )
@@ -162,6 +185,7 @@ class DeepSeekProvider:
             budget.reserve(
                 "estimated_provider_cost_microusd", self.request_cost_microusd, "max_cost_microusd"
             )
+            event["reservation_microusd"] = self.request_cost_microusd
             self._check_dispatch(budget, deadline)
             event["status"] = "dispatched"
             result = api_json(
@@ -181,61 +205,74 @@ class DeepSeekProvider:
             raise
 
     @staticmethod
-    def _rows(body: dict) -> list[dict]:
+    def _optional_text(value) -> str | None:
+        if isinstance(value, str):
+            try:
+                value.encode("utf-8")
+                return value
+            except UnicodeError:
+                pass
+        return None
+
+    @classmethod
+    def _rows(cls, body: dict, count: int) -> tuple[list[tuple[int, dict]], int]:
         hits = body.get("results")
         if not isinstance(hits, list):
             raise SourcesQLError("invalid_output", "Invalid DeepSeek results", "acquisition")
-        rows = []
-        for hit in hits:
-            if not isinstance(hit, dict) or not isinstance(hit.get("url"), str):
-                raise SourcesQLError("invalid_output", "Invalid DeepSeek hit", "acquisition")
-            for key in ("url", "title", "snippet", "summary", "content"):
-                if key in hit and not isinstance(hit[key], str):
-                    raise SourcesQLError(
-                        "invalid_output", "Invalid DeepSeek source text", "acquisition"
-                    )
-                if key in hit:
-                    try:
-                        hit[key].encode("utf-8")
-                    except UnicodeError:
-                        raise SourcesQLError(
-                            "invalid_output", "Invalid DeepSeek source encoding", "acquisition"
-                        ) from None
-            content = hit.get("content")
-            if content is None:
-                raise SourcesQLError(
-                    "invalid_output", "Missing DeepSeek page content", "acquisition"
-                )
+        rows, omitted = [], 0
+        for rank, hit in enumerate(hits[:count], 1):
+            if not isinstance(hit, dict) or cls._optional_text(hit.get("url")) is None:
+                omitted += 1
+                continue
+            text = {
+                key: cls._optional_text(hit.get(key))
+                for key in ("title", "snippet", "summary", "content")
+            }
+            unavailable = [
+                key for key, value in text.items() if hit.get(key) is not None and value is None
+            ]
+            content = text["content"]
             score, authority = hit.get("rerank_score"), hit.get("authority")
             if score is not None and (
                 type(score) not in {int, float} or not math.isfinite(score) or not 0 <= score <= 3
             ):
-                raise SourcesQLError(
-                    "invalid_output", "Invalid DeepSeek ranking metadata", "acquisition"
-                )
+                score = None
+                unavailable.append("rerank_score")
             if authority is not None and (type(authority) is not int or not -1 <= authority <= 4):
-                raise SourcesQLError(
-                    "invalid_output", "Invalid DeepSeek authority metadata", "acquisition"
+                authority = None
+                unavailable.append("authority")
+            try:
+                row = source_record(
+                    hit["url"],
+                    content if content and normalized_text(content) else None,
+                    title=text["title"],
+                    snippet=text["snippet"],
+                    basis="provider_text",
+                    complete=False,
+                    published_at=actual_date(hit.get("date")),
+                    provider="deepseek",
                 )
-            row = source_record(
-                hit["url"],
-                content if normalized_text(content) else None,
-                title=hit.get("title"),
-                snippet=hit.get("snippet"),
-                basis="provider_text",
-                complete=False,
-                published_at=actual_date(hit.get("date")),
-                provider="deepseek",
-            )
+            except SourcesQLError:
+                # An unidentifiable hit cannot be attached to evidence; retain its omission count.
+                omitted += 1
+                continue
             row["provider_metadata"] = {
-                "summary": hit.get("summary"),
+                "summary": text["summary"],
                 "rerank_score": score,
                 "authority": authority,
             }
-            rows.append(row)
-        return rows
+            if row["content"] is None:
+                row["content_basis"] = None
+                row["provider_metadata"]["content_unavailable_reason"] = (
+                    "provider_page_text_unavailable"
+                )
+            if unavailable:
+                row["provider_metadata"]["unavailable_fields"] = unavailable
+            rows.append((rank, row))
+        return rows, omitted
 
-    def search(self, queries: list[str], options: dict, budget: Budget) -> list[dict]:
+    def prepare_search(self, queries: list[str], options: dict) -> _PreparedSearch:
+        """Authorize a complete batch once, before any checkpoint can dispatch a part."""
         self.validate_queries(queries)
         if options.get("source_mode") == "require_document":
             raise SourcesQLError(
@@ -244,11 +281,14 @@ class DeepSeekProvider:
                 "acquisition",
             )
         count = search_options({"per_query_limit": 10, **options}, maximum=50)
-        include, exclude = (
-            self._domains(options, "include_domains"),
-            self._domains(options, "exclude_domains"),
-        )
-        dated = any(options.get(k) is not None for k in ("published_after", "published_before"))
+        include = tuple(self._domains(options, "include_domains"))
+        exclude = tuple(self._domains(options, "exclude_domains"))
+        filters = {
+            key: options[key]
+            for key in ("published_after", "published_before", "undated_policy")
+            if key in options
+        }
+        dated = any(filters.get(k) is not None for k in ("published_after", "published_before"))
         if dated and options.get("allow_post_filter") is not True:
             raise SourcesQLError(
                 "unsupported_capability",
@@ -256,8 +296,41 @@ class DeepSeekProvider:
                 "acquisition",
             )
         if dated:
-            publication_filter([], options)
-        coverage = search_coverage_record("deepseek", queries, count)
+            publication_filter([], filters)
+        return _PreparedSearch(
+            self, tuple(queries), count, MappingProxyType(filters), include, exclude
+        )
+
+    @staticmethod
+    def _prepared_values(
+        prepared: _PreparedSearch | _PreparedFetch, expected: type, owner: object, index: int | None
+    ) -> tuple[str, ...]:
+        if type(prepared) is not expected or prepared.owner is not owner:
+            raise SourcesQLError("invalid_request", "Invalid prepared acquisition", "acquisition")
+        values = prepared.queries if isinstance(prepared, _PreparedSearch) else prepared.urls
+        if index is None:
+            return values
+        if type(index) is not int or not 0 <= index < len(values):
+            raise SourcesQLError("invalid_request", "Invalid prepared index", "acquisition")
+        return (values[index],)
+
+    def search(self, queries: list[str], options: dict, budget: Budget) -> list[dict]:
+        return self.search_prepared(self.prepare_search(queries, options), budget)
+
+    def search_prepared(
+        self,
+        prepared: _PreparedSearch,
+        budget: Budget,
+        *,
+        index: int | None = None,
+        per_query_limit: int | None = None,
+    ) -> list[dict]:
+        queries = self._prepared_values(prepared, _PreparedSearch, self, index)
+        count = prepared.count if per_query_limit is None else per_query_limit
+        if type(count) is not int or not 1 <= count <= prepared.count:
+            raise SourcesQLError("invalid_request", "Invalid prepared result bound", "acquisition")
+        options, include, exclude = prepared.filters, prepared.include, prepared.exclude
+        coverage = search_coverage_record("deepseek", list(queries), count)
         self.search_coverage.append(coverage)
         deadline, rows = monotonic() + budget.limits["dispatch_deadline_seconds"], []
         for index, query in enumerate(queries):
@@ -275,30 +348,29 @@ class DeepSeekProvider:
                 )
                 hits = body.get("results")
                 query_coverage["returned_hits"] = len(hits) if isinstance(hits, list) else None
-                parsed = self._rows(body)[:count]
-                for rank, row in enumerate(parsed, 1):
+                ranked, omitted = self._rows(body, count)
+                query_coverage["omitted_hits"] = omitted
+                event["omitted_hits"] = omitted
+                parsed = []
+                for rank, row in ranked:
                     row["hits"] = [
                         search_hit("deepseek", coverage["search_id"], query, index, rank)
                     ]
                     project_search_provenance(row)
-                retained = publication_filter(parsed, options)
-                retained = [
-                    row
-                    for row in retained
-                    if (
-                        not include
-                        or any(
-                            (urlsplit(row["url"]).hostname or "") == host
-                            or (urlsplit(row["url"]).hostname or "").endswith("." + host)
-                            for host in include
-                        )
-                    )
-                    and not any(
-                        (urlsplit(row["url"]).hostname or "") == host
-                        or (urlsplit(row["url"]).hostname or "").endswith("." + host)
-                        for host in exclude
-                    )
-                ]
+                    parsed.append(row)
+                retained = publication_filter(parsed, dict(options))
+                filtered = []
+                for row in retained:
+                    host = urlsplit(row["url"]).hostname or ""
+
+                    def matches(domain):
+                        return host == domain or host.endswith("." + domain)
+
+                    if (not include or any(map(matches, include))) and not any(
+                        map(matches, exclude)
+                    ):
+                        filtered.append(row)
+                retained = filtered
                 query_coverage.update(status="completed", retained_hits=len(retained))
                 for row in retained:
                     self.hits.extend(row["hits"])
@@ -318,8 +390,10 @@ class DeepSeekProvider:
                 raise
         return rows
 
-    def validate_fetch(self, urls: list[str], options: dict) -> list[str]:
-        """Validate the complete batch before registry checkpoint splitting can dispatch."""
+    def prepare_fetch(
+        self, urls: list[str], options: dict, *, allowed_hosts: list[str] | None = None
+    ) -> _PreparedFetch:
+        """Authorize every normalized URL before any paid request in this batch."""
         if options.get("source_mode") == "require_document":
             raise SourcesQLError(
                 "unsupported_capability",
@@ -330,79 +404,93 @@ class DeepSeekProvider:
             raise SourcesQLError(
                 "unsupported_capability", "DeepSeek cannot force a fresh fetch", "acquisition"
             )
-        if not isinstance(urls, list) or any(
-            not isinstance(url, str) or not url or len(url) > 8192 for url in urls
-        ):
+        if not isinstance(urls, list) or any(not isinstance(url, str) for url in urls):
             raise SourcesQLError(
                 "invalid_request", "DeepSeek fetch requires bounded HTTP URLs", "acquisition"
             )
-        try:
-            for url in urls:
-                url.encode("utf-8")
-        except UnicodeError:
-            raise SourcesQLError(
-                "invalid_request", "DeepSeek fetch requires valid Unicode URLs", "acquisition"
-            ) from None
-        requested = [normalized_url(url) for url in urls]
-        try:
-            for url in requested:
-                url.encode("utf-8")
-        except UnicodeError:
-            raise SourcesQLError(
-                "invalid_request", "DeepSeek fetch requires valid Unicode URLs", "acquisition"
-            ) from None
-        if any(len(url) > 8192 for url in requested):
-            raise SourcesQLError(
-                "invalid_request", "DeepSeek fetch requires bounded HTTP URLs", "acquisition"
-            )
+        requested = tuple(normalized_url(url) for url in urls)
         for url in requested:
+            try:
+                url.encode("utf-8")
+            except UnicodeError:
+                raise SourcesQLError(
+                    "invalid_request", "DeepSeek fetch requires valid Unicode URLs", "acquisition"
+                ) from None
+            if len(url) > 8192:
+                raise SourcesQLError(
+                    "invalid_request", "DeepSeek fetch requires bounded HTTP URLs", "acquisition"
+                )
+        if allowed_hosts is not None:
+            permitted = set(self._domains({"hosts": allowed_hosts}, "hosts"))
+            if any(urlsplit(url).hostname not in permitted for url in requested):
+                raise SourcesQLError(
+                    "unauthorized", "Source destination is not permitted", "acquisition"
+                )
+        for url in dict.fromkeys(requested):
             if self.resolver is None:
                 resolve_public(url)
             else:
                 resolve_public(url, self.resolver)
-        return requested
+        return _PreparedFetch(self, requested)
+
+    def validate_fetch(self, urls: list[str], options: dict) -> list[str]:
+        return list(self.prepare_fetch(urls, options).urls)
 
     def fetch(self, urls: list[str], options: dict, budget: Budget) -> list[dict]:
-        requested = self.validate_fetch(urls, options)
+        return self.fetch_prepared(self.prepare_fetch(urls, options), budget)
+
+    def fetch_prepared(
+        self, prepared: _PreparedFetch, budget: Budget, *, index: int | None = None
+    ) -> list[dict]:
+        requested = self._prepared_values(prepared, _PreparedFetch, self, index)
         deadline, rows = monotonic() + budget.limits["dispatch_deadline_seconds"], []
         for url in requested:
-            body, event = self._request("fetch", {"url": url}, budget, deadline)
             try:
-                if not isinstance(body.get("title"), str) or not isinstance(
-                    body.get("content"), str
-                ):
-                    raise SourcesQLError(
-                        "invalid_output", "Invalid DeepSeek fetched text", "acquisition"
-                    )
-                try:
-                    body["title"].encode("utf-8")
-                    body["content"].encode("utf-8")
-                except UnicodeError:
-                    raise SourcesQLError(
-                        "invalid_output", "Invalid DeepSeek source encoding", "acquisition"
-                    ) from None
-                if not normalized_text(body["content"]):
-                    rows.append(
-                        {
-                            "url": url,
-                            "content": None,
-                            "content_basis": None,
-                            "status": "fetch_failed",
-                            "error_code": "provider_unavailable",
-                        }
-                    )
-                else:
-                    row = source_record(
-                        url,
-                        body["content"],
-                        title=body["title"],
-                        basis="provider_text",
-                        complete=False,
-                        provider="deepseek",
-                    )
-                    row["acquisition_mode"] = "cache_preferred"
-                    rows.append(row)
+                body, event = self._request("fetch", {"url": url}, budget, deadline)
+            except SourcesQLError as error:
+                if getattr(error, "http_status", None) not in {403, 404}:
+                    raise
+                rows.append(
+                    {
+                        "url": url,
+                        "content": None,
+                        "content_basis": None,
+                        "status": "fetch_failed",
+                        "error_code": error.code,
+                    }
+                )
+                continue
+            title, content = (
+                self._optional_text(body.get("title")),
+                self._optional_text(body.get("content")),
+            )
+            if content is None or not normalized_text(content):
+                rows.append(
+                    {
+                        "url": url,
+                        "content": None,
+                        "content_basis": None,
+                        "status": "fetch_failed",
+                        "error_code": "provider_unavailable"
+                        if content is not None
+                        else "invalid_output",
+                    }
+                )
+                # A valid HTTP response completed even when it contained unusable page text.
+                event["content_unavailable"] = True
+                continue
+            try:
+                row = source_record(
+                    url,
+                    content,
+                    title=title,
+                    basis="provider_text",
+                    complete=False,
+                    provider="deepseek",
+                )
             except SourcesQLError as error:
                 self._failure(event, error)
                 raise
+            row["acquisition_mode"] = "cache_preferred"
+            rows.append(row)
         return rows

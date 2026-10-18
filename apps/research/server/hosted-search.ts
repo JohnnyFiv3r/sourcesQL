@@ -8,6 +8,9 @@ import {
   type HostedResearchOptions,
 } from "./hosted-research.ts";
 
+/** Published estimate per successful nonempty DeepSeek search or fetch. */
+export const DEEPSEEK_REQUEST_COST_MICROUSD = 750;
+
 /** One operator-selected search provider per reviewed Flight. */
 export type HostedSearchPolicy = HostedResearchOptions & {
   provider: "brave" | "serper" | "deepseek";
@@ -63,7 +66,8 @@ export function validateHostedSearchPolicy(policy: HostedSearchPolicy): void {
         Number.isSafeInteger(value) && value >= 1 && value <= maximum,
     ) ||
     policy.dailyCostMicrousd < policy.approvedCostMicrousd ||
-    (policy.provider === "deepseek" && policy.requestCostMicrousd < 750) ||
+    (policy.provider === "deepseek" &&
+      policy.requestCostMicrousd < DEEPSEEK_REQUEST_COST_MICROUSD) ||
     policy.requestCostMicrousd > policy.approvedCostMicrousd ||
     (policy.policyVersion !== undefined &&
       ![
@@ -176,16 +180,23 @@ export function hostedSearchBudgets(
   if (
     caps.max_cost_microusd < 1 ||
     (caps.max_cost_microusd < policy.requestCostMicrousd &&
-      (!isHostedSearchResearch(policy) || caps.max_search_requests > 0))
+      (!isHostedSearchResearch(policy) ||
+        caps.max_search_requests > 0 ||
+        (policy.provider === "deepseek" && caps.max_fetches > 0)))
   )
     throw Error("Hosted search budget cannot cover one estimated request");
   // API billing is unavailable. Bound attempts by the operator's conservative
-  // per-search-request estimate and reserve the complete job grant before
-  // dispatch. This bounds search attempts, not model or embedding billing.
+  // per-request estimate and reserve the complete job grant before dispatch.
+  // Native DeepSeek fetches use the same paid allowance as its searches. These
+  // are independent stage ceilings, not promises to complete both stages. The
+  // runtime cash budget bounds combined spend; model and embedding calls are
+  // not priced here.
   const affordable = Math.floor(
     caps.max_cost_microusd / policy.requestCostMicrousd,
   );
   caps.max_search_requests = Math.min(caps.max_search_requests, affordable);
+  if (policy.provider === "deepseek")
+    caps.max_fetches = Math.min(caps.max_fetches, affordable);
   caps.max_search_queries = Math.min(
     caps.max_search_queries,
     caps.max_search_requests,

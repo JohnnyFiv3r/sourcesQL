@@ -231,8 +231,12 @@ test("anonymous clients cannot dismiss owner usage notices", async () => {
   }
 });
 
-for (const service of ["exa", "deepseek"])
-  test(`${service} refusals retain the frozen job-card wire while current clients restore optional presentation`, async () => {
+for (const [service, reason] of [
+  ["exa", "provider_limit"],
+  ["deepseek", "provider_limit"],
+  ["deepseek", "operator_limit"],
+] as const)
+  test(`${service} ${reason} retains the frozen job-card wire while current clients restore optional presentation`, async () => {
     const active = await session({
       mode: "protected",
       principal: "owner-a",
@@ -266,19 +270,19 @@ for (const service of ["exa", "deepseek"])
       .strict();
     const capacity = {
       resource: "search_model_budget",
-      reason: "provider_limit",
+      reason,
       period: "unknown",
-      allowance: "unknown",
+      allowance: reason === "operator_limit" ? "configured" : "unknown",
       services: [service],
-      limit_kind: "credits",
-      http_status: 402,
-      retry_after_seconds: 30,
+      ...(reason === "provider_limit"
+        ? { limit_kind: "credits", http_status: 402, retry_after_seconds: 30 }
+        : {}),
     };
     const legacyCapacity = {
       resource: "search_model_budget",
-      reason: "provider_limit",
+      reason,
       period: "unknown",
-      allowance: "unknown",
+      allowance: reason === "operator_limit" ? "configured" : "unknown",
       services: service === "deepseek" ? [] : [service],
     };
     const jobId = "synthetic-provider-refusal";

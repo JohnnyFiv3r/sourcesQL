@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import {
+  DEEPSEEK_REQUEST_COST_MICROUSD,
   HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchBudgets,
   hostedSearchConfiguration,
@@ -356,7 +357,7 @@ for (const provider of ["brave", "serper", "deepseek"] as const) {
       assert.throws(() => hostedSearchBudgets({}, selected, deadline));
   });
 
-  test(`${provider} search estimate bounds search fanout independently of semantic ceilings`, () => {
+  test(`${provider} request estimate bounds paid retrieval independently of semantic ceilings`, () => {
     const selected = research(true, true);
     const caps = hostedSearchBudgets(
       { max_cost_microusd: 10_000 },
@@ -365,6 +366,7 @@ for (const provider of ["brave", "serper", "deepseek"] as const) {
     );
     assert.equal(caps.max_search_requests, 2);
     assert.equal(caps.max_search_queries, 2);
+    assert.equal(caps.max_fetches, provider === "deepseek" ? 2 : 40);
     assert.equal(caps.max_model_requests, 96);
     assert.equal(caps.max_input_tokens, 200_000);
     assert.equal(caps.max_output_tokens, 16_000);
@@ -391,6 +393,8 @@ for (const provider of ["brave", "serper", "deepseek"] as const) {
         "-c",
         `
 import importlib.util, json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]).resolve().parents[2] / "src"))
 spec = importlib.util.spec_from_file_location("reviewed_search_policy", sys.argv[1])
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
@@ -456,6 +460,73 @@ test("DeepSeek published request estimate is a floor and does not enable unselec
       policyVersion: "deepseek-research.v2",
     }),
   );
+});
+
+test("DeepSeek fetch-only work requires a paid request allowance", () => {
+  const policy: HostedSearchPolicy = {
+    provider: "deepseek",
+    secretName: "sourcesql_deepseek",
+    approvedCostMicrousd: 50_000,
+    dailyCostMicrousd: 100_000,
+    requestCostMicrousd: DEEPSEEK_REQUEST_COST_MICROUSD,
+    policyVersion: "deepseek-research.v1",
+  };
+  const fingerprint = hostedSearchFingerprint(policy);
+  assert.throws(
+    () =>
+      hostedSearchBudgets(
+        {
+          max_search_queries: 0,
+          max_search_requests: 0,
+          max_fetches: 5,
+          max_cost_microusd: 500,
+        },
+        policy,
+        100,
+      ),
+    /cannot cover one estimated request/,
+  );
+  const fetchOnly = hostedSearchBudgets(
+    {
+      max_search_requests: 0,
+      max_fetches: 5,
+      max_cost_microusd: 1_500,
+    },
+    policy,
+    100,
+  );
+  assert.equal(fetchOnly.max_search_queries, 0);
+  assert.equal(fetchOnly.max_search_requests, 0);
+  assert.equal(fetchOnly.max_fetches, 2);
+
+  // Stage maxima are optional ceilings, not a promise to execute both stages.
+  // Their actual combined dispatches share the job's runtime cash budget.
+  const mixed = hostedSearchBudgets(
+    {
+      max_search_requests: 5,
+      max_fetches: 5,
+      max_cost_microusd: 1_500,
+    },
+    policy,
+    100,
+  );
+  assert.equal(mixed.max_search_queries, 2);
+  assert.equal(mixed.max_search_requests, 2);
+  assert.equal(mixed.max_fetches, 2);
+  assert.equal(mixed.max_cost_microusd, 1_500);
+  const saved = hostedSearchBudgets(
+    {
+      max_search_requests: 0,
+      max_fetches: 0,
+      max_cost_microusd: 500,
+    },
+    policy,
+    100,
+  );
+  assert.equal(saved.max_search_queries, 0);
+  assert.equal(saved.max_fetches, 0);
+  assert.equal(saved.max_cost_microusd, 500);
+  assert.equal(hostedSearchFingerprint(policy), fingerprint);
 });
 
 test("legacy Exa descriptors and fingerprints are unchanged", () => {

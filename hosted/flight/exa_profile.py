@@ -12,6 +12,8 @@ import os
 import re
 from collections.abc import Mapping
 
+from sourcesql.provider_rates import DEEPSEEK_REQUEST_COST_MICROUSD
+
 POLICY_VERSION = "exa-research.v2"
 RESEARCH_POLICY_VERSION = "exa-research.v3"
 SEARCH_TYPES = {
@@ -175,7 +177,7 @@ def _load_search_configuration(provider: str, environment: Mapping[str, str]) ->
         ceiling=MAX_RESEARCH_APPROVED_COST_MICROUSD if research else MAX_APPROVED_COST_MICROUSD,
     )
     request_cost = _approved_integer(environment, prefix + "_REQUEST_COST_MICROUSD")
-    if provider == "deepseek" and request_cost < 750:
+    if provider == "deepseek" and request_cost < DEEPSEEK_REQUEST_COST_MICROUSD:
         raise ValueError("DeepSeek request estimate is below its published unit rate")
     if request_cost > approved:
         raise ValueError("Search approval cannot cover one estimated request")
@@ -382,10 +384,18 @@ def validate_request(
             != (_embedding_profile(embedding) if embedding is not None else None)
         ):
             raise SourcesQLError("unauthorized", "Hosted research policy mismatch", "dispatch")
-    if provider == "deepseek" and request.get("source_mode") != "allow_excerpt":
+    source_modes = (
+        {"allow_excerpt", "require_document"}
+        if research and provider != "deepseek"
+        else {"allow_excerpt"}
+    )
+    source_mode = request.get("source_mode")
+    if not isinstance(source_mode, str) or source_mode not in source_modes:
         raise SourcesQLError(
             "unsupported_capability",
-            "DeepSeek cannot establish complete document coverage; use allow_excerpt",
+            "DeepSeek cannot establish complete document coverage; use allow_excerpt"
+            if provider == "deepseek"
+            else "Hosted profile does not permit this source mode",
             "dispatch",
         )
     if not _credential_available(environment, profile["api_key_env"]):
@@ -400,11 +410,6 @@ def validate_request(
         raise SourcesQLError(
             "provider_unavailable", "Semantic model credentials are not configured", "dispatch"
         )
-    source_modes = (
-        {"allow_excerpt", "require_document"}
-        if research and provider != "deepseek"
-        else {"allow_excerpt"}
-    )
     if (
         research
         and embedding is not None
@@ -412,11 +417,6 @@ def validate_request(
     ):
         raise SourcesQLError(
             "provider_unavailable", "Embedding credentials are not configured", "dispatch"
-        )
-    source_mode = request.get("source_mode")
-    if not isinstance(source_mode, str) or source_mode not in source_modes:
-        raise SourcesQLError(
-            "unsupported_capability", "Hosted profile does not permit this source mode", "dispatch"
         )
     limits = Budget(request.get("budgets")).limits
     approved = profile["approved_cost_microusd"]
@@ -433,9 +433,14 @@ def validate_request(
         )
     if provider != "exa":
         request_cost = settings["descriptor"]["request_cost_microusd"]
-        if limits["max_search_requests"] * request_cost > limits["max_cost_microusd"]:
+        if limits["max_search_requests"] * request_cost > limits["max_cost_microusd"] or (
+            provider == "deepseek"
+            and limits["max_fetches"] * request_cost > limits["max_cost_microusd"]
+        ):
             raise SourcesQLError(
-                "unauthorized", "Search attempts exceed the operator cost estimate", "dispatch"
+                "unauthorized",
+                "Paid provider attempts exceed the operator cost estimate",
+                "dispatch",
             )
 
 

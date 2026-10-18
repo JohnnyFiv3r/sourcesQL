@@ -102,6 +102,8 @@ research gate.
 For DeepSeek, select `--deepseek-secret sourcesql_deepseek`. Its request estimate
 defaults to `750` micro-USD for each successful nonempty search or fetch;
 `--deepseek-request-cost-microusd` can supply a conservative reviewed override.
+This controls the reservation per attempt; successful-response usage retains the
+published 750 micro-USD estimate, and actual billed cost remains unavailable.
 Search queries are limited to 128 Unicode characters and at most 50 results.
 The `deepseek-search.v1` profile is search-only. There is no assumed
 recurring free allowance and no automatic switch from another provider. See the
@@ -120,8 +122,14 @@ search secret. The generated gateway and Flight settings bind the same research
 policy, model names, limits and secret references. Guided setup creates or reuses
 these named secrets within the reviewed account; see [semantic onboarding](personal-cloud-setup.md#opt-into-model-extraction-and-embedding-ranking).
 
-The worker applies the complete per-job grant before dispatch. The attempt limit is also bounded
-by the job grant divided by the per-request estimate. Provider attempts count
+The worker applies the complete per-job grant before dispatch. The search-attempt
+limit is also bounded by the job grant divided by the per-request estimate. For
+DeepSeek research, the fetch-attempt limit is independently bounded by that same
+quotient because native fetches are also paid requests. These are optional stage
+ceilings, not a promise to complete both maxima: actual search and fetch attempts
+reserve from one shared runtime allowance. A positive allowance below one request
+is accepted only when both DeepSeek retrieval limits are zero, for example when
+processing saved sources without new acquisition. Provider attempts count
 even if they fail or the remote outcome is unknown. Missing billing data never
 appears as a zero charge. These controls do not cancel or modify a provider's
 billing plan and cannot guarantee a cash ceiling if its configured estimate is

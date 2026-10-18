@@ -77,7 +77,7 @@ def test_fixed_post_contract_retains_content_and_unthresholded_discovery_metadat
     assert "synthetic" not in json.dumps(adapter.events)
 
 
-@pytest.mark.parametrize("content", ["", " \n "])
+@pytest.mark.parametrize("content", ["", " \n ", None])
 def test_summaries_are_never_quoted_when_page_content_is_absent(content):
     adapter = provider(lambda _: httpx.Response(200, json={"results": [hit(content=content)]}))
     row = adapter.search(["question"], {}, funded())[0]
@@ -173,26 +173,86 @@ def test_post_filters_keep_original_rank_and_report_returned_vs_retained_counts(
 
 
 @pytest.mark.parametrize(
-    "mutation",
+    "mutation,field",
     [
-        {"url": False},
-        {"content": 4},
-        {"summary": ["invalid"]},
-        {"rerank_score": 7},
-        {"rerank_score": True},
-        {"authority": "4"},
+        ({"content": 4}, "content"),
+        ({"summary": ["invalid"]}, "summary"),
+        ({"rerank_score": 7}, "rerank_score"),
+        ({"rerank_score": True}, "rerank_score"),
+        ({"authority": "4"}, "authority"),
     ],
 )
-def test_local_row_rejection_keeps_completed_billed_effect(mutation):
-    adapter = provider(lambda _: httpx.Response(200, json={"results": [hit(**mutation)]}))
-    with pytest.raises(SourcesQLError) as caught:
-        adapter.search(["query"], {}, funded())
-    assert caught.value.effect_state == "completed_unretained"
-    assert not caught.value.remote_outcome_unknown
+def test_bad_optional_search_fields_retain_hit_and_neighbors_with_completed_paid_usage(
+    mutation, field
+):
+    adapter = provider(
+        lambda _: httpx.Response(
+            200,
+            json={
+                "results": [
+                    hit(url="https://official.example/first"),
+                    hit(url="https://official.example/partial", **mutation),
+                    hit(url="https://official.example/last"),
+                ]
+            },
+        )
+    )
+    rows = adapter.search(["query"], {}, funded())
+    assert len(rows) == 3
+    assert rows[1]["provider_metadata"]["unavailable_fields"] == [field]
+    if field == "content":
+        assert rows[1]["content"] is None and rows[1]["windows"] == []
+        assert rows[1]["content_basis"] is None
     assert adapter.events[0]["status"] == "completed"
     assert adapter.events[0]["usage"]["estimated_cost_microusd"] == 750
-    assert adapter.hits == []
-    assert adapter.search_coverage[0]["queries"][0]["status"] == "failed"
+    assert adapter.search_coverage[0]["queries"][0]["status"] == "completed"
+
+
+@pytest.mark.parametrize("incomplete", [{"title": None, "content": None}, {"title": None}, {}])
+def test_missing_page_text_and_nullable_title_remain_metadata_only(incomplete):
+    metadata = {key: value for key, value in hit().items() if key not in {"title", "content"}}
+    metadata.update(incomplete)
+    adapter = provider(
+        lambda _: httpx.Response(
+            200, json={"results": [metadata, hit(url="https://official.example/valid")]}
+        )
+    )
+    rows = adapter.search(["query"], {}, funded())
+    assert len(rows) == 2 and rows[1]["content"] == "Original page content."
+    assert rows[0]["title"] is None and rows[0]["content"] is None
+    assert rows[0]["windows"] == [] and rows[0]["content_sha256"] is None
+    assert (
+        rows[0]["provider_metadata"]["content_unavailable_reason"]
+        == "provider_page_text_unavailable"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_hit", [None, False, {}, {"url": False}, {"url": "file:///etc/passwd"}]
+)
+def test_unidentifiable_search_hits_are_omitted_without_renumbering_valid_neighbors(bad_hit):
+    adapter = provider(
+        lambda _: httpx.Response(
+            200,
+            json={
+                "results": [
+                    hit(url="https://official.example/first"),
+                    bad_hit,
+                    hit(url="https://official.example/last"),
+                ]
+            },
+        )
+    )
+    rows = adapter.search(["query"], {}, funded())
+    assert [row["best_search_rank"] for row in rows] == [1, 3]
+    coverage = adapter.search_coverage[0]["queries"][0]
+    assert (coverage["returned_hits"], coverage["retained_hits"], coverage["omitted_hits"]) == (
+        3,
+        2,
+        1,
+    )
+    assert adapter.events[0]["status"] == "completed"
+    assert adapter.events[0]["usage"]["estimated_cost_microusd"] == 750
 
 
 @pytest.mark.parametrize(
@@ -353,24 +413,72 @@ def test_empty_fetch_is_unavailable_and_has_zero_estimated_charge():
 
 
 @pytest.mark.parametrize(
-    "body,estimate",
+    "body,estimate,acquired",
     [
-        ({"title": "Bad", "content": 1}, None),
-        ({"title": False, "content": "Source text."}, 750),
-        ({"title": "Bad", "content": "\udfff"}, 750),
+        ({"title": "Bad", "content": 1}, None, False),
+        ({"title": None, "content": None}, None, False),
+        ({"title": "Bad"}, None, False),
+        ({"title": False, "content": "Source text."}, 750, True),
+        ({"title": None, "content": "Source text."}, 750, True),
+        ({"content": "Source text."}, 750, True),
+        ({"title": "Bad", "content": "\udfff"}, 750, False),
     ],
 )
-def test_successful_fetch_local_schema_failure_remains_completed_with_estimate_if_known(
-    body, estimate
+def test_malformed_fetch_content_is_a_failed_row_and_valid_neighbors_are_retained(
+    body, estimate, acquired
 ):
-    adapter = provider(
-        lambda _: httpx.Response(200, content=json.dumps(body).encode()), resolver=public_dns
-    )
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        response = body if len(calls) == 2 else {"title": "Valid", "content": "Neighbor text."}
+        return httpx.Response(200, content=json.dumps(response).encode())
+
+    adapter = provider(respond, resolver=public_dns)
+    urls = [
+        "https://official.example/first",
+        "https://official.example/partial",
+        "https://official.example/last",
+    ]
+    rows = adapter.fetch(urls, {}, funded())
+    assert len(calls) == 3 and len(rows) == 3
+    assert [row["url"] for row in rows] == urls
+    assert [rows[0]["content"], rows[2]["content"]] == ["Neighbor text."] * 2
+    assert rows[1]["status"] == ("acquired" if acquired else "fetch_failed")
+    if acquired:
+        assert rows[1]["title"] is None and rows[1]["content"] == "Source text."
+    else:
+        assert rows[1]["content"] is None and rows[1]["error_code"] == "invalid_output"
+    assert all(event["status"] == "completed" for event in adapter.events)
+    assert adapter.events[1]["usage"].get("estimated_cost_microusd") == estimate
+
+
+@pytest.mark.parametrize("response", [httpx.Response(402), httpx.Response(429)])
+def test_fetch_provider_refusal_stops_without_retrying_or_dispatching_later_url(response):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return (
+            httpx.Response(200, json={"content": "First source text."})
+            if len(calls) == 1
+            else response
+        )
+
+    adapter = provider(respond, resolver=public_dns)
     with pytest.raises(SourcesQLError) as caught:
-        adapter.fetch(["https://official.example/"], {}, funded())
-    assert caught.value.effect_state == "completed_unretained"
-    assert adapter.events[0]["status"] == "completed"
-    assert adapter.events[0]["usage"].get("estimated_cost_microusd") == estimate
+        adapter.fetch(
+            [
+                "https://official.example/first",
+                "https://official.example/refused",
+                "https://official.example/unstarted",
+            ],
+            {},
+            funded(),
+        )
+    assert len(calls) == 2
+    assert caught.value.effect_state == "rejected" and not caught.value.remote_outcome_unknown
+    assert [event["status"] for event in adapter.events] == ["completed", "failed"]
 
 
 def test_search_and_fetch_share_the_same_attempt_reservation_without_refunding_empty_calls():
@@ -407,6 +515,7 @@ def test_custom_request_reservation_uses_reviewed_estimate_not_provider_claims()
     adapter.search(["first", "second"], {}, budget)
     assert len(calls) == 2 and budget.counts["estimated_provider_cost_microusd"] == 2_000
     assert all(event["usage"]["estimated_cost_microusd"] == 0 for event in adapter.events)
+    assert all(event["reservation_microusd"] == 1_000 for event in adapter.events)
 
 
 @pytest.mark.parametrize("estimate", [0, -1, 749, 1.5, True, "750"])
@@ -522,17 +631,20 @@ def test_invalid_date_is_unavailable_without_replacing_it_with_retrieval_time():
 
 
 @pytest.mark.parametrize("field", ["title", "summary", "content", "url"])
-def test_malformed_unicode_is_a_structured_local_failure_after_completed_search(field):
+def test_malformed_unicode_remains_unavailable_or_omitted_after_completed_search(field):
     adapter = provider(
         lambda _: httpx.Response(
             200,
-            content=json.dumps({"results": [hit(**{field: "\udfff"})]}).encode(),
+            content=json.dumps(
+                {"results": [hit(**{field: "\udfff"}), hit(url="https://official.example/valid")]}
+            ).encode(),
         )
     )
-    with pytest.raises(SourcesQLError) as caught:
-        adapter.search(["query"], {}, funded())
-    assert caught.value.code == "invalid_output"
-    assert caught.value.effect_state == "completed_unretained"
+    rows = adapter.search(["query"], {}, funded())
+    assert len(rows) == (1 if field == "url" else 2)
+    if field != "url":
+        assert rows[0]["provider_metadata"]["unavailable_fields"] == [field]
+    assert rows[-1]["content"] == "Original page content."
     assert adapter.events[0]["status"] == "completed"
     assert adapter.events[0]["usage"]["estimated_cost_microusd"] == 750
 
@@ -562,3 +674,143 @@ def test_complete_document_requirement_refuses_before_paid_work_even_if_content_
     assert caught.value.code == "unsupported_capability"
     assert calls == [] and adapter.events == [] and budget.counts == {}
     assert adapter.capabilities()["source_modes"] == ["allow_excerpt"]
+
+
+def test_prepared_fetch_checks_each_unique_normalized_url_once_before_dispatch():
+    lookups, calls = [], []
+
+    def resolve(host, port, **kwargs):
+        lookups.append(host)
+        return public_dns(host, port, **kwargs)
+
+    adapter = provider(
+        lambda request: (
+            calls.append(request) or httpx.Response(200, json={"content": "Source text."})
+        ),
+        resolver=resolve,
+    )
+    prepared = adapter.prepare_fetch(
+        [
+            "https://official.example/a",
+            "https://official.example/b",
+            "https://OFFICIAL.example:443/a#fragment",
+        ],
+        {},
+    )
+    assert len(lookups) == 2 and calls == []
+    for index in range(3):
+        assert adapter.fetch_prepared(prepared, funded(), index=index)[0]["status"] == "acquired"
+    assert len(lookups) == 2 and len(calls) == 3
+
+
+def test_prepared_batches_are_adapter_bound_and_copy_original_inputs():
+    calls = []
+    adapter = provider(
+        lambda request: calls.append(request) or httpx.Response(200, json={"results": []}),
+        resolver=public_dns,
+    )
+    queries = ["original"]
+    prepared = adapter.prepare_search(queries, {})
+    queries[0] = "changed"
+    adapter.search_prepared(prepared, funded(), index=0, per_query_limit=2)
+    assert json.loads(calls[0].content)["query"] == "original"
+    other = provider(
+        lambda _: pytest.fail("Foreign prepared batch must not dispatch"), resolver=public_dns
+    )
+    with pytest.raises(SourcesQLError):
+        other.search_prepared(prepared, funded())
+    with pytest.raises(SourcesQLError):
+        adapter.search_prepared(prepared, funded(), per_query_limit=11)
+    with pytest.raises(SourcesQLError):
+        adapter.search_prepared(prepared, funded(), index=-1)
+    fetch = adapter.prepare_fetch(["https://official.example/"], {})
+    with pytest.raises(SourcesQLError):
+        other.fetch_prepared(fetch, funded())
+    assert len(calls) == 1
+
+
+def test_nonempty_response_reports_published_estimate_separately_from_larger_reservation():
+    adapter = DeepSeekProvider(
+        "synthetic",
+        httpx.Client(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"results": [hit()]}))
+        ),
+        request_cost_microusd=1_000,
+    )
+    budget = funded()
+    adapter.search(["query"], {}, budget)
+    event = adapter.events[0]
+    assert event["reservation_microusd"] == 1_000
+    assert event["usage"]["estimated_cost_microusd"] == 750
+    assert budget.counts["estimated_provider_cost_microusd"] == 1_000
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_known_per_url_fetch_refusal_keeps_failed_event_and_continues_neighbors(status):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return (
+            httpx.Response(status)
+            if len(calls) == 2
+            else httpx.Response(200, json={"content": "Available source text."})
+        )
+
+    adapter = provider(respond, resolver=public_dns)
+    rows = adapter.fetch(
+        [
+            "https://official.example/first",
+            "https://official.example/unavailable",
+            "https://official.example/last",
+        ],
+        {},
+        funded(),
+    )
+    assert len(calls) == 3
+    assert [row["status"] for row in rows] == ["acquired", "fetch_failed", "acquired"]
+    assert rows[1]["content"] is None and rows[1]["error_code"] == "provider_unavailable"
+    assert [event["status"] for event in adapter.events] == ["completed", "failed", "completed"]
+    assert adapter.events[1]["http_status"] == status
+    assert adapter.events[1]["usage"]["estimated_cost_microusd"] == 0
+
+
+def test_fetch_transport_timeout_stops_with_unknown_outcome_and_no_retry():
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("PRIVATE", request=request)
+
+    adapter = provider(respond, resolver=public_dns)
+    with pytest.raises(SourcesQLError) as caught:
+        adapter.fetch(
+            ["https://official.example/unknown", "https://official.example/unstarted"], {}, funded()
+        )
+    assert len(calls) == 1 and caught.value.effect_state == "outcome_unknown"
+    assert caught.value.remote_outcome_unknown is True
+    assert adapter.events[0]["status"] == "remote_outcome_unknown"
+    assert adapter.events[0]["usage"].get("estimated_cost_microusd") is None
+    assert adapter.events[0]["reservation_microusd"] == 750
+    assert "PRIVATE" not in json.dumps(adapter.events)
+
+
+@pytest.mark.parametrize("unapproved", ["https://other.example/", "https://sub.official.example/"])
+def test_prepared_fetch_enforces_trusted_exact_host_allowlist_before_any_dns(unapproved):
+    lookups, calls = [], []
+
+    def resolve(host, port, **kwargs):
+        lookups.append(host)
+        return public_dns(host, port, **kwargs)
+
+    adapter = provider(lambda request: calls.append(request), resolver=resolve)
+    with pytest.raises(SourcesQLError) as caught:
+        adapter.prepare_fetch(
+            ["https://official.example/first", unapproved], {}, allowed_hosts=["official.example"]
+        )
+    assert caught.value.code == "unauthorized"
+    assert lookups == [] and calls == []
+    prepared = adapter.prepare_fetch(
+        ["https://official.example/"], {}, allowed_hosts=["OFFICIAL.example."]
+    )
+    assert prepared.urls == ("https://official.example/",) and lookups == ["official.example"]

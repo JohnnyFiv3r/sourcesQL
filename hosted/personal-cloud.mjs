@@ -22,6 +22,7 @@ import {
   validateExaPolicy,
 } from "../apps/research/server/hosted-exa.ts";
 import {
+  DEEPSEEK_REQUEST_COST_MICROUSD,
   HOSTED_SEARCH_POLICY_VERSIONS,
   HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchDescriptor,
@@ -285,7 +286,10 @@ export function validateConfig(config) {
   const configuredProvider = config.provider ?? { name: "fixture" };
   const provider =
     configuredProvider.name === "deepseek"
-      ? { request_cost_microusd: 750, ...configuredProvider }
+      ? {
+          request_cost_microusd: DEEPSEEK_REQUEST_COST_MICROUSD,
+          ...configuredProvider,
+        }
       : configuredProvider;
   strictKeys(provider, [
     "name",

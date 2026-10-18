@@ -165,9 +165,14 @@ configured model on acquired text, with the same missing-evidence behavior as
 other search providers.
 
 Set `"fetch_adapter": "deepseek"` in a local profile to use native Fetch instead
-of the guarded direct-page fetcher. Explicit source hosts or a public-source
-grant are still required; public DNS and permitted HTTP ports are checked before
-sending the source URL. Fetch returns incomplete provider Markdown. Only
+of the guarded direct-page fetcher. The example profile explicitly sets
+`"allow_public_source_hosts": true`, allowing public source URLs after the owner
+enables live dispatch and approves a finite spending grant. The example keeps
+`allow_live: false` and `approved_cost_microusd: 0`, so copying it does not enable
+provider calls. To permit only selected sources, remove that public-source grant
+and populate `allowed_source_hosts` with exact approved hostnames instead.
+Both configurations still check public DNS and permitted HTTP ports before
+sending a source URL; private addresses remain refused. Fetch returns incomplete provider Markdown. Only
 `mode := 'cache_preferred'` is supported: the API has no documented force-fresh
 option, so `mode := 'live'` refuses before dispatch instead of promising freshness.
 DeepSeek supports `source_mode: "allow_excerpt"` only: provider text cannot
@@ -178,6 +183,9 @@ No application retries, hidden fetches or provider fallback are added.
 As checked on October 18, 2026, DeepSeek lists search and fetch at **$0.75 per
 1,000 successful nonempty requests**. The adapter records a 750 micro-USD
 operation estimate for such a response and zero for a valid empty result.
+Before each attempt, the adapter reserves the configured `request_cost_microusd`
+from the shared search/fetch execution allowance; a larger conservative reservation
+does not change the published response estimate or establish an actual charge.
 Unavailable usage or an uncertain remote outcome stays unknown. This is an
 estimate, not a provider billing statement. No recurring free allowance for these
 endpoints is documented; setup does not assume one. Check the account's own

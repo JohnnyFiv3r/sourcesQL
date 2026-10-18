@@ -17,6 +17,7 @@ from uuid import uuid4
 import httpx
 
 from ..contracts import Budget, SourcesQLError, digest
+from ..provider_rates import DEEPSEEK_REQUEST_COST_MICROUSD
 
 
 class ProviderTransportError(SourcesQLError):
@@ -337,7 +338,7 @@ def provider_usage(
             billable = bool(body["content"].strip())
         if billable is not None:
             usage.update(
-                estimated_cost_microusd=750 if billable else 0,
+                estimated_cost_microusd=DEEPSEEK_REQUEST_COST_MICROUSD if billable else 0,
                 cost_basis="published_rate_estimate",
                 cost_unavailable_reason="published_rate_is_not_billing",
             )

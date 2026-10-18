@@ -294,6 +294,7 @@ export function createServer(
     "failed",
     "cancelled",
   ]);
+  // Frozen enum from published cards. New identities remain in versioned metadata.
   const legacyCapacity = (capacity: Record<string, unknown>) =>
     Object.fromEntries(
       [
@@ -421,10 +422,7 @@ export function createServer(
     const capacity = capacitySchema.safeParse(receipt.capacity);
     if (capacity.success) {
       result.capacity = legacyCapacity(capacity.data);
-      if (
-        capacity.data.limit_kind !== undefined ||
-        capacity.data.services?.includes("deepseek")
-      )
+      if (JSON.stringify(result.capacity) !== JSON.stringify(capacity.data))
         result.provider_capacity_v1 = capacity.data;
     }
     if (receipt.status === "failed") {

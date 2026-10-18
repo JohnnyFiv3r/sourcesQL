@@ -19,6 +19,7 @@ import { tableDefinitions, tableMigrations } from "./motherduck-schema.js";
 import type { HostedResearchOptions } from "./hosted-research.js";
 import {
   isHostedSearchProfile,
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   validateHostedSearchPolicy,
   hostedSearchFingerprint,
   hostedSearchBudgets,
@@ -972,10 +973,14 @@ export class MotherDuckEngine implements ResearchEngine {
             this.options.search!,
             deadline,
           );
-        } catch {
+        } catch (error) {
           throw new BackendError(
             "invalid_request",
-            "Hosted search budget exceeds operator approval",
+            error instanceof Error &&
+              error.message ===
+                "Hosted search budget cannot cover one estimated request"
+              ? "The allowance cannot cover one search or native fetch request; adjust the budget or use saved sources only"
+              : "Hosted search budget is outside the configured execution limits",
           );
         }
         request.source_mode = params.source_mode ?? "allow_excerpt";
@@ -1238,13 +1243,16 @@ export class MotherDuckEngine implements ResearchEngine {
           Object.entries(required).some(
             ([key, value]) => config[key] !== value,
           ) ||
-          (!policy.model?.reasoningEffort &&
+          (isHostedSearchResearch(policy) &&
+            !policy.model?.reasoningEffort &&
             config.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined) ||
-          (!policy.model &&
+          (isHostedSearchResearch(policy) &&
+            !policy.model &&
             (config.SOURCESQL_OPENAI_MODEL !== undefined ||
               config.SOURCESQL_OPENAI_SECRET_NAME !== undefined ||
               config.SOURCESQL_OPENAI_REASONING_EFFORT !== undefined)) ||
-          (!policy.embedding &&
+          (isHostedSearchResearch(policy) &&
+            !policy.embedding &&
             (config.SOURCESQL_OPENAI_EMBEDDING_MODEL !== undefined ||
               config.SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME !== undefined)) ||
           !Array.isArray(secrets) ||
@@ -1957,7 +1965,10 @@ export async function createMotherDuckBackend(
       requestCostMicrousd: Number(
         environment[`${prefix}_REQUEST_COST_MICROUSD`],
       ),
-      ...researchAdapters,
+      ...(environment[`${prefix}_POLICY_VERSION`] ===
+      HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[selected]
+        ? researchAdapters
+        : {}),
     };
     try {
       validateHostedSearchPolicy(search);

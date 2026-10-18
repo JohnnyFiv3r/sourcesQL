@@ -71,3 +71,13 @@ account reconciliation and exact invoices are outside this initial implementatio
 References: [Exa pricing](https://exa.ai/pricing),
 [Exa response estimates](https://exa.ai/docs/reference/search),
 [MotherDuck Flight billing](https://motherduck.com/docs/about-motherduck/billing/flight-sizes/).
+
+
+DeepSeek receipts keep two amounts separate. `estimated_cost_microusd` uses the
+published rate for successful nonempty results, while `reserved_cost_microusd`
+in the report sums the operator-configured request reservations recorded in
+receipts. A conservative 1,000-microUSD reservation can therefore correspond to
+a 750-microUSD usage estimate. Valid empty responses can estimate zero while
+retaining their reservation. Older receipts without reservation metadata report
+that amount as unavailable; uncertain provider outcomes remain unknown. Neither
+field is an invoice, remaining balance or a claim about consumed free credits.

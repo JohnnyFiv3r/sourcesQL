@@ -20,6 +20,7 @@ import {
   validateExaPolicy,
 } from "../apps/research/server/hosted-exa.ts";
 import {
+  DEEPSEEK_REQUEST_COST_MICROUSD,
   HOSTED_SEARCH_POLICY_VERSIONS,
   HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
   hostedSearchConfiguration,
@@ -205,7 +206,9 @@ export function parseArguments(arguments_, environment = process.env) {
     );
     const requestCost = integer(
       "request",
-      provider === "deepseek" ? "750" : undefined,
+      provider === "deepseek"
+        ? String(DEEPSEEK_REQUEST_COST_MICROUSD)
+        : undefined,
     );
     if (daily < approved || requestCost > approved)
       throw Error("invalid_configuration");
@@ -350,10 +353,10 @@ export async function main(arguments_ = process.argv.slice(2)) {
     const options = parseArguments(arguments_);
     if (options.help) {
       console.log(
-        "Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--openai-model MODEL --openai-secret NAME [--openai-reasoning-effort low]] [--embedding-model text-embedding-3-small --embedding-secret NAME] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N | --deepseek-secret NAME [--deepseek-request-cost-microusd 750]] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]",
+        `Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--openai-model MODEL --openai-secret NAME [--openai-reasoning-effort low]] [--embedding-model text-embedding-3-small --embedding-secret NAME] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N | --deepseek-secret NAME [--deepseek-request-cost-microusd ${DEEPSEEK_REQUEST_COST_MICROUSD}]] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]`,
       );
       console.log(
-        "Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Select exactly one live search provider. Optional OpenAI model/embedding flags bind existing OpenAI secrets under its research policy; either may share one OpenAI secret. Brave/Serper require an operator-set conservative request cost estimate. DeepSeek defaults to 750 micro-USD per successful nonempty search or fetch; an explicit conservative estimate may override it. Final provider billing is unavailable. Saves token-free settings with submission disabled.",
+        `Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Select exactly one live search provider. Optional OpenAI model/embedding flags bind existing OpenAI secrets under its research policy; either may share one OpenAI secret. Brave/Serper require an operator-set conservative request cost estimate. DeepSeek defaults to ${DEEPSEEK_REQUEST_COST_MICROUSD} micro-USD per successful nonempty search or fetch; an explicit conservative estimate may override it. Final provider billing is unavailable. Saves token-free settings with submission disabled.`,
       );
       return;
     }

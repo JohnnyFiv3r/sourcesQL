@@ -1939,16 +1939,44 @@ for (const provider of ["brave", "serper", "deepseek"] as const) {
       { SOURCESQL_OPENAI_MODEL: "gpt-4.1-mini" },
       { SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME: "sourcesql_openai" },
       { SOURCESQL_OPENAI_REASONING_EFFORT: "low" },
-      {
-        [`${prefix}_POLICY_VERSION`]: `${provider}-search.v1`,
-        SOURCESQL_OPENAI_MODEL: "gpt-4.1-mini",
-        SOURCESQL_OPENAI_SECRET_NAME: "sourcesql_openai",
-      },
     ])
       await assert.rejects(
         createMotherDuckBackend({ ...environment, ...change }, "owner-a"),
         { code: "invalid_request" },
       );
+  });
+
+  test(`${provider} search-only factory ignores leftover OpenAI settings for implicit and explicit v1`, async (context) => {
+    context.mock.method(
+      MotherDuckEngine.prototype,
+      "initialize",
+      async () => {},
+    );
+    const prefix = `SOURCESQL_${provider.toUpperCase()}`;
+    for (const version of [undefined, `${provider}-search.v1`]) {
+      const { engine } = await createMotherDuckBackend(
+        {
+          MOTHERDUCK_DB: "synthetic",
+          MOTHERDUCK_HOST: "pg.us-east-1-aws.motherduck.com",
+          MOTHERDUCK_TOKEN: "synthetic-unused-token",
+          SOURCESQL_FLIGHT_ID: flightId,
+          [`SOURCESQL_ALLOW_LIVE_${provider.toUpperCase()}`]: "1",
+          [`${prefix}_POLICY_VERSION`]: version,
+          [`${prefix}_SECRET_NAME`]: `sourcesql_${provider}`,
+          [`${prefix}_APPROVED_COST_MICROUSD`]: "50000",
+          [`${prefix}_REQUEST_COST_MICROUSD`]: "5000",
+          SOURCESQL_OPENAI_MODEL: "unrelated leftover",
+          SOURCESQL_OPENAI_SECRET_NAME: "not-a-valid-secret!",
+          SOURCESQL_OPENAI_EMBEDDING_MODEL: "not-an-embedding",
+          SOURCESQL_OPENAI_REASONING_EFFORT: "unrelated",
+        },
+        "owner-a",
+      );
+      const caps = await engine.call<Row>("capabilities");
+      assert.deepEqual(caps.profiles[1].operators, ["WEB_SEARCH"]);
+      assert.equal(caps.profiles[1].model_configured, false);
+      assert.equal(caps.profiles[1].embedding_configured, false);
+    }
   });
 
   for (const configured of ["model", "embedding", "both"] as const) {
@@ -2018,7 +2046,10 @@ for (const provider of ["brave", "serper", "deepseek"] as const) {
           assert.equal(selected.search_query_max_characters, 128);
           assert.equal(selected.search_per_query_max_results, 50);
         }
-        assert.equal(selected.search_limits.max_fetches, 40);
+        assert.equal(
+          selected.search_limits.max_fetches,
+          provider === "deepseek" ? 10 : 40,
+        );
         assert.equal(
           selected.search_limits.max_semantic_documents,
           model ? 40 : 0,
@@ -2160,7 +2191,7 @@ for (const provider of ["brave", "serper", "deepseek"] as const) {
     }
   });
 
-  test(`${provider} search-only Flight cannot silently acquire unapproved model configuration`, async () => {
+  test(`${provider} search-only Flight ignores unrelated model settings without enabling semantic work`, async () => {
     const h = await harness();
     try {
       const policy = searchPolicy(provider);
@@ -2175,11 +2206,12 @@ for (const provider of ["brave", "serper", "deepseek"] as const) {
       h.flightConfig.SOURCESQL_OPENAI_MODEL = "gpt-4.1-mini";
       h.flightConfig.SOURCESQL_OPENAI_SECRET_NAME = "sourcesql_openai";
       h.flightSecrets.push("sourcesql_openai");
-      await assert.rejects(
-        engine.call("start_job", { job_id: queued.job_id }),
-        { code: "unsupported_capability" },
-      );
-      assert.equal(h.submissions, 0);
+      const caps = await engine.call<Row>("capabilities");
+      assert.deepEqual(caps.profiles[1].operators, ["WEB_SEARCH"]);
+      assert.equal(caps.profiles[1].model_configured, false);
+      assert.equal(caps.profiles[1].embedding_configured, false);
+      await engine.call("start_job", { job_id: queued.job_id });
+      assert.equal(h.submissions, 1);
     } finally {
       await h.close();
     }
@@ -3927,3 +3959,59 @@ for (const [failure, code] of [
     }
   });
 }
+
+test("DeepSeek fetch-only admission rejects an unfundable job before queuing and advertises affordable fetches", async () => {
+  const h = await harness();
+  try {
+    const policy = searchPolicy("deepseek", {
+      policyVersion: "deepseek-research.v1",
+      requestCostMicrousd: 750,
+    });
+    const engine = h.engine("owner-a", { search: policy });
+    await engine.initialize();
+    await assert.rejects(
+      engine.call("query", {
+        ...liveQuery(),
+        profile: "deepseek",
+        budgets: {
+          max_search_requests: 0,
+          max_search_queries: 0,
+          max_fetches: 5,
+          max_cost_microusd: 500,
+        },
+      }),
+      (error: any) =>
+        error.code === "invalid_request" &&
+        /cannot cover one search or native fetch/.test(error.message),
+    );
+    const count = (
+      await engine.connection((client) =>
+        client.query(`SELECT count(*) AS count FROM ${engine.table("jobs")}`),
+      )
+    ).rows[0];
+    assert.equal(Number(count.count), 0);
+    assert.equal(h.submissions, 0);
+    const queued = await engine.call<Row>("query", {
+      ...liveQuery(),
+      profile: "deepseek",
+      budgets: {
+        max_search_requests: 0,
+        max_search_queries: 0,
+        max_fetches: 5,
+        max_cost_microusd: 1500,
+      },
+    });
+    const saved = (
+      await engine.connection((client) =>
+        client.query(
+          `SELECT request_json FROM ${engine.table("jobs")} WHERE id=$1::UUID`,
+          [queued.job_id],
+        ),
+      )
+    ).rows[0];
+    assert.equal(JSON.parse(saved.request_json).budgets.max_fetches, 2);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});

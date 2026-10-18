@@ -26,9 +26,22 @@ saved work and expose a fixed provider-owned billing destination. No recurring
 DeepSeek free allowance is assumed. Versioned job presentation preserves the
 strict wire shape accepted by previously published widgets.
 
-Offline DeepSeek qualification passes 1,414 Python/Flight tests (44 opt-in
-cases skipped), including 69 adapter cases, plus 507 app/MCP tests and 77
-onboarding checks. The final wheel passes 289 installed regressions, and its
+DeepSeek now retains identifiable search hits when optional fields or page text
+are unavailable. Bad fetch payloads and URL-specific 403/404 refusals produce
+per-URL failure records while valid neighbors continue; account refusals and
+unknown outcomes still stop without retries. Admission bounds paid fetches as
+well as searches, with a shared runtime reservation across both. Stage ceilings
+remain independent optional maxima, not a promised total execution cost.
+Search-only deployments ignore unrelated OpenAI variables without enabling
+semantic operators. Full-batch preparation performs URL authorization and one
+DNS check per unique URL before checkpoint splitting. Rate estimates have one
+shared constant per language; reports distinguish operator reservations from
+published usage estimates. Legacy card projection remains frozen and preserves
+the complete capacity reason and service identities in versioned metadata.
+
+Offline qualification covers 1,453 Python/Flight cases (44 opt-in cases skipped),
+including 91 DeepSeek adapter cases, plus 515 app/MCP tests and 77 onboarding
+checks. The final wheel passes 326 installed regressions, and its
 materialized templates load under native Node 24. Gateway and frozen-widget
 compatibility checks, Python lint and typing pass. The Docker compiler path emits
 loadable JavaScript policy modules while native Node setup still loads TypeScript;

@@ -66,6 +66,7 @@
     "approved_cost_microusd": 0,
     "metering_policy": "estimated",
     "allowed_source_hosts": [],
+    "allow_public_source_hosts": true,
     "model": {
       "name": "SET_APPROVED_MODEL_NAME",
       "api_key_env": "OPENAI_API_KEY",

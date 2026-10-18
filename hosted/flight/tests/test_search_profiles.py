@@ -729,3 +729,48 @@ def test_research_search_fetch_semantics_and_embeddings_use_selected_adapters(
         assert reused["receipt"]["counts"].get("search_requests", 0) == 0
         assert reused["receipt"]["counts"].get("fetches", 0) == 0
         assert len(http_calls) == 6 and len(model_calls) == 7
+
+
+@pytest.mark.parametrize(
+    "searches,fetches,grant,permitted",
+    [
+        (0, 5, 500, False),
+        (0, 5, 1500, False),
+        (0, 2, 1500, True),
+        (2, 2, 1500, True),
+        (0, 0, 500, True),
+    ],
+)
+def test_deepseek_preflight_bounds_both_paid_stages_without_summing_optional_ceilings(
+    searches, fetches, grant, permitted
+):
+    env = research_environment("deepseek", SOURCESQL_DEEPSEEK_REQUEST_COST_MICROUSD="750")
+    settings = policy.load_configuration(env)
+    requested = research_request("deepseek", settings)
+    requested["budgets"].update(
+        max_search_requests=searches,
+        max_search_queries=searches,
+        max_fetches=fetches,
+        max_cost_microusd=grant,
+    )
+    if permitted:
+        policy.validate_request(requested, settings, env)
+    else:
+        with pytest.raises(SourcesQLError, match="cost estimate") as error:
+            policy.validate_request(requested, settings, env)
+        assert error.value.code == "unauthorized"
+
+
+@pytest.mark.parametrize("provider", ["brave", "serper", "deepseek"])
+def test_search_only_policy_ignores_unrelated_openai_configuration(provider):
+    env = environment(
+        provider,
+        SOURCESQL_OPENAI_MODEL="leftover invalid value",
+        SOURCESQL_OPENAI_SECRET_NAME="invalid!",
+        SOURCESQL_OPENAI_EMBEDDING_MODEL="unknown",
+        SOURCESQL_OPENAI_REASONING_EFFORT="unknown",
+    )
+    settings = policy.load_configuration(env)
+    assert "model" not in settings["profiles"][provider]
+    assert "embedding" not in settings["profiles"][provider]
+    policy.validate_request(request(provider), settings, env)
