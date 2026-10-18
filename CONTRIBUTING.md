@@ -11,6 +11,7 @@ uv run --frozen ruff check src tests scripts/qualify_python.py
 uv run --frozen mypy src
 uv run --frozen pytest -q tests hosted/flight/tests
 npm ci --prefix apps/research
+export SOURCESQL_PYTHON="$PWD/.venv/bin/python"
 npm run check --prefix apps/research
 node --test hosted/setup.test.mjs hosted/personal-cloud.test.mjs
 ```
