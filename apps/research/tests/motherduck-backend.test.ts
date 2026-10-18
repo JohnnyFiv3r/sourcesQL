@@ -153,6 +153,7 @@ class Harness {
   definitionPatch: Row = {};
   flightConfig: Row = {};
   flightSecrets: string[] = [];
+  statements: string[] = [];
   runAckPatch: Row = {};
   resultLookups = new Map<string, number>();
   loseSubmissionResponse = false;
@@ -204,6 +205,7 @@ class Harness {
         await this.sql.request(connectionId, "end");
       },
       query: async (sql, values = []) => {
+        this.statements.push(sql);
         if (sql.includes("md_get_flight(")) {
           this.definitionsRead++;
           return {
@@ -3096,6 +3098,112 @@ test("terminal Flight observations meter runtime once across failures, cancellat
     );
     assert.equal(await runtimeReserve(engine), "0");
     assert.equal(h.submissions, 2);
+  } finally {
+    await h.close();
+  }
+});
+
+test("usage notices observe Flights once and summarize month/day from one owner-scoped snapshot", async (t) => {
+  t.mock.timers.enable({
+    apis: ["Date"],
+    now: Date.parse("2026-10-18T12:00:00Z"),
+  });
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    await engine.call("query", query());
+    // An in-progress native run stays unobserved, so repeating metadata reads
+    // cannot be hidden by a first pass that happened to settle all the runs.
+    assert.equal(h.runs[0].status, "RUN_STATUS_RUNNING");
+    for (const [date, cost] of [
+      ["2026-10-17", 6_000_000],
+      ["2026-10-18", 5_000_000],
+    ] as const) {
+      const runId = randomUUID();
+      await engine.connection((client) =>
+        client.query(
+          `INSERT INTO ${engine.table("runs")} VALUES($1,$2,$3,$4)`,
+          [
+            runId,
+            randomUUID(),
+            digest(runId),
+            JSON.stringify({
+              started_at: `${date}T10:00:00.000Z`,
+              provider_events: [
+                {
+                  provider: "exa",
+                  kind: "search",
+                  status: "completed",
+                  request_id: runId,
+                  usage: { estimated_cost_microusd: cost },
+                },
+              ],
+            }),
+          ],
+        ),
+      );
+    }
+    for (const date of ["2026-10-17", "2026-10-18"]) {
+      for (let index = 0; index < 16; index++) {
+        await engine.connection((client) =>
+          client.query(
+            `INSERT INTO ${engine.table("usage_flights")} VALUES($1,$2::UUID,$3,$4,120,'F4')`,
+            [
+              randomUUID(),
+              randomUUID(),
+              `${date}T10:00:00.000Z`,
+              `${date}T10:02:00.000Z`,
+            ],
+          ),
+        );
+      }
+    }
+    h.statements.length = 0;
+    h.inspections = 0;
+    const notices = await engine.call<Row[]>("usage_notices");
+    assert.equal(
+      h.inspections,
+      1,
+      "One advisory response observes native metadata once",
+    );
+    assert.equal(
+      h.statements.filter((sql) => sql.includes("SELECT id AS run_id")).length,
+      1,
+    );
+    assert.equal(
+      h.statements.filter((sql) =>
+        sql.includes("SELECT run_id,CAST(job_id AS VARCHAR)"),
+      ).length,
+      1,
+    );
+    assert.equal(
+      h.statements.filter((sql) => sql === "BEGIN TRANSACTION").length,
+      1,
+      "Monthly/day totals and dismissals use the same read transaction",
+    );
+    assert.deepEqual(
+      notices.map(({ service, used, period }) => ({ service, used, period })),
+      [
+        { service: "exa", used: 11_000_000, period: "month" },
+        { service: "motherduck", used: 1920, period: "day" },
+      ],
+    );
+    assert.equal(notices[0].period_start, "2026-10-01T00:00:00.000Z");
+    assert.equal(notices[1].period_start, "2026-10-18T00:00:00.000Z");
+    h.inspections = 0;
+    h.runs[0].config_json = "invalid native metadata";
+    assert.deepEqual(
+      await engine.call("usage_notices"),
+      notices,
+      "Optional observation failure preserves the retained metering snapshot",
+    );
+    assert.equal(h.inspections, 1, "Failed observations are not retried");
+    const other = h.engine("owner-b");
+    await other.initialize();
+    assert.deepEqual(await other.call("usage_notices"), []);
+    assert.equal(h.submissions, 1, "Notices never submit or replay research");
+    assert.equal(h.cancellations, 0);
   } finally {
     await h.close();
   }

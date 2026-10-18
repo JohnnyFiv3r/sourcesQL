@@ -9,7 +9,6 @@ from sourcesql.contracts import Column, SourcesQLError, Table, canonical, digest
 from sourcesql.storage.motherduck import MotherDuckStore
 from sourcesql.storage.stages import (
     MAX_FAILURE_METADATA_BYTES,
-    MAX_JOURNAL_STAGES,
     MAX_STAGE_BYTES,
 )
 from sourcesql.storage.store import Store
@@ -203,7 +202,7 @@ def test_noncanonical_payload_is_rejected_without_publication(stores, value):
 
 
 def test_stage_storage_counts_toward_result_storage_and_other_stage_payloads(stores):
-    store = stores(quota=1024)
+    store = stores(quota=1100)
     store.stage_begin("run_one", "stage_one")
     store.stage_finish("run_one", "stage_one", "x" * 800)
     store.stage_begin("run_one", "stage_two")
@@ -239,15 +238,17 @@ def test_postdispatch_failure_can_record_only_bounded_metadata_after_quota_exhau
         store.stage_begin("run_one", "new_stage")
 
 
-def test_per_journal_stage_count_is_finite_and_existing_rows_remain_recoverable(stores):
+def test_journal_count_uses_byte_quota_without_an_unrelated_256_stage_cap(stores):
     store = stores()
-    for index in range(MAX_JOURNAL_STAGES):
+    for index in range(300):
         store.stage_begin("run_one", f"stage_{index}")
-    with pytest.raises(SourcesQLError, match="stage allowance"):
-        store.stage_begin("run_one", "stage_over")
+    with store.db() as db:
+        store.quota = store.retained_size(db)
+    with pytest.raises(SourcesQLError, match="quota"):
+        store.stage_begin("run_one", "stage_over_quota")
     existing, created = store.stage_begin("run_one", "stage_0")
     assert not created and existing["status"] == "intent"
-    assert store.stage_summaries("run_one")["total"] == MAX_JOURNAL_STAGES
+    assert store.stage_summaries("run_one")["total"] == 300
 
 
 def test_owner_and_journal_namespaces_do_not_reveal_other_checkpoints(stores):

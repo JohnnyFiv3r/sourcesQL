@@ -30,7 +30,12 @@ TOKENIZER_HYDRATION = {
     "timeout_seconds": 10,
     "restoration": "gzip-mtime-0",
 }
-EXECUTION_OMISSIONS = ("sourcesql/_resources/personal-cloud.zip", TOKENIZER_RESOURCE)
+EXECUTION_OMISSIONS = (
+    "sourcesql/_resources/personal-cloud.zip",
+    TOKENIZER_RESOURCE,
+    "sourcesql/resources.py",
+    "sourcesql/onboarding/__init__.py",
+)
 
 
 def digest(data: bytes) -> str:
@@ -142,7 +147,9 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
                     raise ValueError("Wheel RECORD must not hash itself")
                 continue
             data = archive.read(name)
-            encoded = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode("ascii")
+            encoded = (
+                base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode("ascii")
+            )
             if expected_hash != "sha256=" + encoded or expected_size != str(len(data)):
                 raise ValueError("Wheel RECORD content differs from the distribution")
         source_hashes = {}
@@ -168,7 +175,9 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
             raise ValueError("Public provisioning template builder is unavailable")
         resources = importlib.util.module_from_spec(specification)
         specification.loader.exec_module(resources)
-        if resource_path not in names or archive.read(resource_path) != resources.build_personal_cloud_archive(root):
+        if resource_path not in names or archive.read(
+            resource_path
+        ) != resources.build_personal_cloud_archive(root):
             raise ValueError("Wheel provisioning templates differ from current public source")
         if set(names) != set(source_hashes) | allowed_metadata | {resource_path}:
             raise ValueError("Wheel contains files outside the reviewed public allowlist")
@@ -206,11 +215,13 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
 
 
 def execution_wheel(distribution: bytes) -> bytes:
-    """Omit setup templates and tokenizer ranks from the size-bounded Flight.
+    """Omit deployment helpers/templates and tokenizer ranks from the bounded Flight.
 
-    Public wheels retain both. The runner explicitly restores verified tokenizer
-    ranks only for an admitted scoring plan; no tokenizer helper downloads data.
-    RECORD is recalculated so the offline installer validates retained bytes.
+    Public wheels retain every file. The reviewed Flight never provisions itself;
+    ordinary CLI research imports onboarding lazily only for the setup command.
+    The runner explicitly restores verified tokenizer ranks only for an admitted
+    scoring plan; no tokenizer helper downloads data. RECORD is recalculated so
+    the offline installer validates every retained research/runtime/license byte.
     """
     removed = set(EXECUTION_OMISSIONS)
     with zipfile.ZipFile(io.BytesIO(distribution)) as original:
@@ -227,7 +238,11 @@ def execution_wheel(distribution: bytes) -> bytes:
         record = io.StringIO(newline="")
         writer = csv.writer(record, lineterminator="\n")
         for name, content in sorted(entries.items()):
-            encoded = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=").decode("ascii")
+            encoded = (
+                base64.urlsafe_b64encode(hashlib.sha256(content).digest())
+                .rstrip(b"=")
+                .decode("ascii")
+            )
             writer.writerow((name, "sha256=" + encoded, len(content)))
         writer.writerow((record_name, "", ""))
         entries[record_name] = record.getvalue().encode("utf-8")

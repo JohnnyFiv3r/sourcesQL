@@ -151,7 +151,8 @@ def test_invalid_provider_hit_keeps_known_request_coverage_without_retaining_a_s
     with pytest.raises(SourcesQLError):
         provider.search(["topic"], {}, Budget())
     query = provider.search_coverage[0]["queries"][0]
-    assert query["status"] == provider.events[0]["status"] == "failed"
+    # Local hit validation failed after a known successful provider response.
+    assert query["status"] == "failed" and provider.events[0]["status"] == "completed"
     assert query["request_id"] == "known-provider-request"
     assert query["returned_hits"] == 1 and query["retained_hits"] == 0
     assert provider.hits == []

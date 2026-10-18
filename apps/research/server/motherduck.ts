@@ -33,6 +33,7 @@ import {
   allowanceNotices,
   usageWindow,
   type FlightUsage,
+  type UsageWindow,
 } from "./usage.js";
 import { safeExecutionError, safeFailureContext } from "./execution-errors.js";
 
@@ -566,6 +567,37 @@ export class MotherDuckEngine implements ResearchEngine {
     );
   }
 
+  private async usageData(
+    client: SqlConnection,
+    window: UsageWindow,
+    job?: Row,
+  ) {
+    // Project metering fields only. Prompts, result rows and provider messages stay private.
+    const rows = (
+      await client.query(
+        `SELECT id AS run_id,json_extract_string(receipt,'$.started_at') AS started_at,
+        CAST(json_extract(receipt,'$.provider_events') AS VARCHAR) AS events_json
+        FROM ${this.table("runs")} WHERE CAST(json_extract_string(receipt,'$.started_at') AS TIMESTAMPTZ) >= $1::TIMESTAMPTZ
+        AND CAST(json_extract_string(receipt,'$.started_at') AS TIMESTAMPTZ) < $2::TIMESTAMPTZ${job ? " AND id=$3" : ""}`,
+        [window.start, window.end, ...(job ? [job.engine_run_id ?? ""] : [])],
+      )
+    ).rows;
+    const flights = (
+      await client.query(
+        `SELECT run_id,CAST(job_id AS VARCHAR) AS job_id,started_at,ended_at,elapsed_seconds,instance_type
+        FROM ${this.table("usage_flights")} WHERE started_at >= $1 AND started_at < $2${job ? " AND job_id=$3::UUID" : ""}`,
+        [window.start, window.end, ...(job ? [job.id] : [])],
+      )
+    ).rows as FlightUsage[];
+    return {
+      receipts: rows.map((row) => ({
+        ...row,
+        events: JSON.parse(row.events_json ?? "[]"),
+      })),
+      flights,
+    };
+  }
+
   async usageReport(params: Row = {}): Promise<Row> {
     if (
       Object.keys(params).some(
@@ -592,23 +624,7 @@ export class MotherDuckEngine implements ResearchEngine {
       const job = params.job_id
         ? await this.getJob(client, identity(params.job_id))
         : undefined;
-      // Project metering fields only. Prompts, result rows and provider messages stay private.
-      const rows = (
-        await client.query(
-          `SELECT id AS run_id,json_extract_string(receipt,'$.started_at') AS started_at,
-        CAST(json_extract(receipt,'$.provider_events') AS VARCHAR) AS events_json
-        FROM ${this.table("runs")} WHERE CAST(json_extract_string(receipt,'$.started_at') AS TIMESTAMPTZ) >= $1::TIMESTAMPTZ
-        AND CAST(json_extract_string(receipt,'$.started_at') AS TIMESTAMPTZ) < $2::TIMESTAMPTZ${job ? " AND id=$3" : ""}`,
-          [window.start, window.end, ...(job ? [job.engine_run_id ?? ""] : [])],
-        )
-      ).rows;
-      const flights = (
-        await client.query(
-          `SELECT run_id,CAST(job_id AS VARCHAR) AS job_id,started_at,ended_at,elapsed_seconds,instance_type
-        FROM ${this.table("usage_flights")} WHERE started_at >= $1 AND started_at < $2${job ? " AND job_id=$3::UUID" : ""}`,
-          [window.start, window.end, ...(job ? [job.id] : [])],
-        )
-      ).rows as FlightUsage[];
+      const { receipts, flights } = await this.usageData(client, window, job);
       const unresolved = (
         await client.query(
           `SELECT count(*)::INTEGER AS count FROM ${this.table("jobs")} j
@@ -618,15 +634,7 @@ export class MotherDuckEngine implements ResearchEngine {
         )
       ).rows[0];
       return {
-        ...summarizeUsage(
-          rows.map((row) => ({
-            ...row,
-            events: JSON.parse(row.events_json ?? "[]"),
-          })),
-          flights,
-          window,
-          this.options.host,
-        ),
+        ...summarizeUsage(receipts, flights, window, this.options.host),
         usage_mode: this.usageMode,
         unobserved_flight_jobs: Number(unresolved.count),
         ...(job ? { job_id: job.id } : {}),
@@ -689,28 +697,31 @@ export class MotherDuckEngine implements ResearchEngine {
   async usageNotices() {
     const now = new Date(),
       start = now.toISOString().slice(0, 10) + "T00:00:00.000Z";
-    const month = await this.usageReport();
-    const today = await this.usageReport({
+    const month = usageWindow({}, now);
+    const today = usageWindow({
       start,
       end: new Date(Date.parse(start) + 86400000).toISOString(),
     });
-    const notices = allowanceNotices(
-      month as ReturnType<typeof summarizeUsage>,
-      today as ReturnType<typeof summarizeUsage>,
-    );
-    if (!notices.length) return [];
-    const dismissed = await this.connection(
-      async (client) =>
-        (
-          await client.query(
-            `SELECT id FROM ${this.table("usage_notice_dismissals")} WHERE id IN (${notices.map((_, i) => `$${i + 1}`).join(",")})`,
-            notices.map((n) => n.id),
-          )
-        ).rows,
-    );
-    return notices.filter(
-      (notice) => !dismissed.some((row) => row.id === notice.id),
-    );
+    // The daily window is contained in this UTC month. Observe native metadata
+    // once, then summarize both notices from the same owner-scoped snapshot.
+    await this.observeUsage(month.start, month.end).catch(() => undefined);
+    return this.transaction(false, async (client) => {
+      const { receipts, flights } = await this.usageData(client, month);
+      const notices = allowanceNotices(
+        summarizeUsage(receipts, flights, month, this.options.host),
+        summarizeUsage(receipts, flights, today, this.options.host),
+      );
+      if (!notices.length) return [];
+      const dismissed = (
+        await client.query(
+          `SELECT id FROM ${this.table("usage_notice_dismissals")} WHERE id IN (${notices.map((_, i) => `$${i + 1}`).join(",")})`,
+          notices.map((n) => n.id),
+        )
+      ).rows;
+      return notices.filter(
+        (notice) => !dismissed.some((row) => row.id === notice.id),
+      );
+    });
   }
 
   private async providerCapacity(

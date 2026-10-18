@@ -24,7 +24,6 @@ from sourcesql.contracts import (
     digest,
 )
 from sourcesql.storage.store import Store
-from sourcesql.storage.stages import MAX_JOURNAL_STAGES
 from sourcesql.research_quality import validate_requirements, assess_requirements
 from sourcesql.query_feedback import build_query_feedback, observe_result
 from sourcesql.execution.worker import run_sql, WorkerSession
@@ -240,11 +239,14 @@ class Engine:
         worker=run_sql,
         allow_private: bool = True,
         store: Store | None = None,
+        before_dispatch=None,
     ):
         self.store = store if store is not None else Store(root)
         self.profiles = {"fixture": {"mode": "fixture", "provider": "fixture"}, **(profiles or {})}
         self.worker = worker
         self.allow_private = allow_private
+        # Launcher-owned setup only; a query cannot supply or bypass this hook.
+        self.before_dispatch = before_dispatch
         self.active: dict[str, Budget] = {}
         self.lock = threading.Lock()
         self.worker_checked = False
@@ -451,9 +453,7 @@ class Engine:
                         )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise SourcesQLError(
-                    "budget_exhausted", "Validation deadline exceeded", "worker"
-                )
+                raise SourcesQLError("budget_exhausted", "Validation deadline exceeded", "worker")
             return remaining
 
         def checked_worker(sql, tables, params):
@@ -513,22 +513,16 @@ class Engine:
         ):
             raise SourcesQLError("invalid_request", "Invalid recovery page", "read")
         journal = receipt.get("journal_id", run_id)
-        stages = self.store.stage_summaries(journal)
-        if stages["omitted"]:
-            # Read all admitted stage identifiers, without changing the public summary bound.
-            with self.store.db() as db:
-                keys = [
-                    row[0]
-                    for row in db.execute(
-                        "SELECT stage_key FROM execution_stages WHERE journal_id=? ORDER BY stage_key",
-                        [journal],
-                    ).fetchall()
-                ]
-        else:
-            keys = [stage["stage_key"] for stage in stages["stages"]]
         sources = {}
-        for key in keys:
+        if receipt.get("result_id"):
+            saved = self.read_result(receipt["result_id"])
+            sources.update((s["source_version_id"], s) for s in saved.get("source_versions", []))
+        for key in self.store.iter_stage_keys(journal):
             state = self.store.stage_read(journal, key)
+            if state is None:
+                # A continuation may publish and compact this journal between
+                # key pagination and this read. Recovery never starts effects.
+                continue
             if state["status"] != "completed":
                 continue
             value = state["value"]
@@ -661,7 +655,7 @@ class Engine:
             "finished_at": None,
             "plan_complete": False,
             "result_id": None,
-            "counts": {},
+            "counts": dict(budget.counts),
             "usage": [],
             "warnings": [],
             "errors": [],
@@ -719,6 +713,7 @@ class Engine:
         session = None
         score_batch_scope = False
         score_guard_enabled = False
+        stage_proofs = {}
 
         def check_active(*, force=False):
             if budget.cancelled:
@@ -810,7 +805,9 @@ class Engine:
         def stage_begin(operator, arguments, options):
             check_active()
             key = digest([operator, arguments, options, pinned["profile_revision"], parents])
-            state, created = self.store.stage_begin(receipt["journal_id"], key)
+            state, created = self.store.stage_begin(
+                receipt["journal_id"], key, retry_not_dispatched=continuation is not None
+            )
             if not created:
                 if state["status"] == "completed":
                     budget.reserve("checkpoint_hits", limit="unbounded_counter")
@@ -818,25 +815,74 @@ class Engine:
                 raise SourcesQLError(
                     "execution_outcome_unknown"
                     if state["status"] in {"intent", "outcome_unknown"}
+                    else "storage_unavailable"
+                    if state["status"] == "completed_unretained"
                     else (state["error_code"] or "execution_failed"),
                     "A retained effect requires inspection before further work",
                     "dispatch",
                 )
+            stage_proofs[key] = (
+                {id(e) for e in registry.events},
+                sum(
+                    budget.counts.get(k, 0)
+                    for k in ("search_requests", "fetches", "model_requests")
+                ),
+            )
             return key, None, False
 
         def stage_finish(key, operator, value):
-            self.store.stage_finish(
-                receipt["journal_id"], key, {"operator": operator, "data": value}
-            )
+            try:
+                self.store.stage_finish(
+                    receipt["journal_id"], key, {"operator": operator, "data": value}
+                )
+            except Exception:
+                # Work returned a response. Persistence failure cannot turn it
+                # into an undispatched or safely replayable request.
+                try:
+                    self.store.stage_fail(
+                        receipt["journal_id"],
+                        key,
+                        "storage_unavailable",
+                        False,
+                        completed_unretained=True,
+                    )
+                except Exception:
+                    pass  # The original intent still prevents replay.
+                raise
 
         def stage_fail(key, error):
+            certainty = getattr(error, "effect_state", None)
+            if certainty not in {
+                "not_dispatched",
+                "rejected",
+                "outcome_unknown",
+                "completed_unretained",
+            }:
+                prior_events, attempted = stage_proofs.get(key, (set(), 0))
+                states = {e.get("status") for e in registry.events if id(e) not in prior_events}
+                current_attempts = sum(
+                    budget.counts.get(k, 0)
+                    for k in ("search_requests", "fetches", "model_requests")
+                )
+                certainty = (
+                    "outcome_unknown"
+                    if getattr(error, "remote_outcome_unknown", False)
+                    or states & {"dispatched", "remote_outcome_unknown"}
+                    else "completed_unretained"
+                    if "completed" in states
+                    else "rejected"
+                    if "failed" in states
+                    else "outcome_unknown"
+                    if not states and current_attempts > attempted
+                    else "not_dispatched"
+                )
             self.store.stage_fail(
                 receipt["journal_id"],
                 key,
                 error.code,
-                getattr(error, "remote_outcome_unknown", False)
-                or error.code
-                in {"provider_timeout", "provider_connection_error", "provider_unavailable"},
+                certainty == "outcome_unknown",
+                not_dispatched=certainty == "not_dispatched",
+                completed_unretained=certainty == "completed_unretained",
             )
 
         def checkpoint(operator, arguments, options, work):
@@ -845,11 +891,11 @@ class Engine:
                 return value, True
             try:
                 value = work()
-                stage_finish(key, operator, value)
-                return value, False
             except SourcesQLError as error:
                 stage_fail(key, error)
                 raise
+            stage_finish(key, operator, value)
+            return value, False
 
         def checked_worker(sql, tables, params):
             check_active()
@@ -869,7 +915,6 @@ class Engine:
                 "finish": stage_finish,
                 "fail": stage_fail,
             }
-            registry.preflight(plan.custom_operators, budget)
             if self.worker is run_sql:
                 session = WorkerSession().__enter__()
             # A new protected process is owned by each query. An earlier
@@ -1008,18 +1053,6 @@ class Engine:
                         "not_stated",
                     }:
                         pending.pop(cachekey)
-                with self.store.db() as db:
-                    journal_keys = [
-                        row[0]
-                        for row in db.execute(
-                            "SELECT stage_key FROM execution_stages WHERE journal_id=? ORDER BY stage_key LIMIT ?",
-                            [receipt["journal_id"], MAX_JOURNAL_STAGES + 1],
-                        ).fetchall()
-                    ]
-                if len(journal_keys) > MAX_JOURNAL_STAGES:
-                    raise SourcesQLError(
-                        "evidence_invalid", "Scoring journal exceeds its stage allowance", "storage"
-                    )
                 for instruction, options, all_keys in groups.values():
                     check_active()
                     ordered = sorted(all_keys)
@@ -1041,7 +1074,7 @@ class Engine:
                         )[:48]
                         + "_"
                     )
-                    for journal_key in journal_keys:
+                    for journal_key in self.store.iter_stage_keys(receipt["journal_id"]):
                         if not journal_key.startswith(prefix):
                             continue
                         span = re.fullmatch(r"(\d+)_(\d+)_(\d+)", journal_key[len(prefix) :])
@@ -1055,6 +1088,8 @@ class Engine:
                                 "evidence_invalid", "Scoring checkpoint range is invalid", "storage"
                             )
                         retained = self.store.stage_read(receipt["journal_id"], journal_key)
+                        if retained["status"] == "not_dispatched" and continuation:
+                            continue
                         if retained["status"] != "completed":
                             if any(key in pending for key in ordered[first : last + 1]):
                                 raise SourcesQLError(
@@ -1130,7 +1165,11 @@ class Engine:
                         selected = [positions[keys[index]] for index in indices]
                         ordinal = budget.counts.get("model_requests", 0) + 1
                         journal_key = prefix + f"{min(selected)}_{max(selected)}_{ordinal}"
-                        state, created = self.store.stage_begin(receipt["journal_id"], journal_key)
+                        state, created = self.store.stage_begin(
+                            receipt["journal_id"],
+                            journal_key,
+                            retry_not_dispatched=continuation is not None,
+                        )
                         if not created:
                             raise SourcesQLError(
                                 "execution_outcome_unknown"
@@ -1140,6 +1179,13 @@ class Engine:
                                 "dispatch",
                             )
                         active_batch = {"key": journal_key, "scores": {}}
+                        stage_proofs[journal_key] = (
+                            {id(e) for e in registry.events},
+                            sum(
+                                budget.counts.get(k, 0)
+                                for k in ("search_requests", "fetches", "model_requests")
+                            ),
+                        )
 
                     def persist_score(index, outcome):
                         cachekey = keys[index]
@@ -1182,6 +1228,7 @@ class Engine:
                             "remote_outcome_unknown",
                             failure.get("remote_outcome_unknown") is True,
                         )
+                        error.effect_state = failure.get("effect_state")
                         if active_batch is not None:
                             stage_fail(active_batch["key"], error)
                             active_batch = None
@@ -1490,6 +1537,23 @@ class Engine:
                 # later deadline can continue without repeating completed work.
                 return [dispatch(operator, args, kwargs) for args, kwargs in calls]
 
+            def before_dispatch():
+                # The executor invokes this only after its canonical binding
+                # pass, before acquisition, scoring or semantic provider work.
+                check_active()
+                if self.before_dispatch is not None:
+                    self.before_dispatch(
+                        {
+                            "plan": strict_json(canonical(getattr(plan, "explain", {}))),
+                            "effective_limits": dict(budget.limits),
+                            "profile": request.get("profile", "fixture"),
+                            "mode": profile.get("mode", "fixture"),
+                            "external_calls": 0,
+                        }
+                    )
+                check_active()
+                registry.preflight(plan.custom_operators, budget)
+
             table = execute_plan(
                 plan,
                 inputs,
@@ -1497,6 +1561,7 @@ class Engine:
                 checked_worker,
                 score_batch=dispatch_scores,
                 semantic_batch=semantic_batch,
+                on_validated=before_dispatch,
             )
             if (
                 len(table.rows) > budget.limits["max_output_rows"]

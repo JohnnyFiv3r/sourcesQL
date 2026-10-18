@@ -28,6 +28,8 @@ TABLES = (
     "CREATE TABLE IF NOT EXISTS runs(id VARCHAR PRIMARY KEY, request_id VARCHAR UNIQUE NOT NULL, request_hash VARCHAR NOT NULL, receipt VARCHAR NOT NULL)",
     "CREATE TABLE IF NOT EXISTS semantic_cache(key VARCHAR PRIMARY KEY, value VARCHAR NOT NULL)",
     "CREATE TABLE IF NOT EXISTS execution_stages(journal_id VARCHAR NOT NULL, stage_key VARCHAR NOT NULL, status VARCHAR NOT NULL, value_json VARCHAR, error_code VARCHAR, PRIMARY KEY(journal_id,stage_key))",
+    "CREATE TABLE IF NOT EXISTS execution_journals(journal_id VARCHAR PRIMARY KEY,head_run_id VARCHAR NOT NULL,closed INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS execution_stage_usage(id INTEGER PRIMARY KEY,retained_bytes BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS jobs(id UUID PRIMARY KEY, request_id UUID UNIQUE NOT NULL, operation VARCHAR NOT NULL, request_hash VARCHAR NOT NULL, request_json VARCHAR NOT NULL, status VARCHAR NOT NULL, created_at VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, flight_id UUID NOT NULL, flight_version INTEGER, flight_run_id UUID, flight_run_number UBIGINT, dispatch_intent_at VARCHAR, claim_token UUID, engine_run_id VARCHAR, result_id VARCHAR, cancel_requested BOOLEAN NOT NULL DEFAULT false, error_code VARCHAR, error_message VARCHAR, max_runtime_sec INTEGER NOT NULL, output_json VARCHAR, flight_settled BOOLEAN NOT NULL DEFAULT false, flight_invalid BOOLEAN NOT NULL DEFAULT false, provider_policy_sha256 VARCHAR, provider_cost_reserved_microusd BIGINT NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS flight_allowances(day VARCHAR PRIMARY KEY, reserved_seconds BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS provider_allowances(day VARCHAR PRIMARY KEY, reserved_microusd BIGINT NOT NULL)",
@@ -181,6 +183,7 @@ class MotherDuckStore(Store):
                         "idempotency_conflict", "Request key already has different inputs"
                     )
                 return json.loads(previous[1]), False
+            self._claim_journal(db, receipt)
             db.execute(
                 "INSERT INTO runs VALUES(?,?,?,?)",
                 [receipt["run_id"], request["request_id"], identity, canonical(receipt).decode()],
@@ -274,6 +277,7 @@ class MotherDuckStore(Store):
                         [rid, retained["run_id"], timestamp(), self.job_id],
                     )
                 return retained
+            self._finish_journal(db, metadata.get("receipt"))
             if (
                 self.retained_size(db)
                 + len(payload.encode())

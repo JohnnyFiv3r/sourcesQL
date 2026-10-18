@@ -834,9 +834,12 @@ def execute_plan(
     run_sql: Callable[[str, dict[str, Table], dict[str, Any]], Table],
     score_batch: Callable | None = None,
     semantic_batch: Callable | None = None,
+    on_validated: Callable[[], None] | None = None,
 ) -> Table:
     """Execute one previously admitted plan using coordinator-owned effects."""
     validate_plan(plan, inputs, run_sql)
+    if on_validated is not None:
+        on_validated()
     return _Executor(plan, inputs, dispatch, run_sql, score_batch, semantic_batch).execute(
         plan.tree, {}
     )

@@ -314,31 +314,40 @@ def execute_job(
                 raise SourcesQLError("unauthorized", "Hosted provider policy mismatch", "dispatch")
             helper.validate_request(request, settings)
         report.update(phase="engine_operation", operation=operation)
+
+        def before_dispatch(explanation):
+            if request.get("profile", "fixture") == "fixture":
+                return
+            helper.validate_explain(explanation, settings)
+            if any(
+                stage.get("stage") == "external" and stage.get("operator") == "SEM_SCORE"
+                for stage in explanation.get("plan", {}).get("stages", [])
+            ):
+                report["phase"] = "tokenizer_hydration"
+                report["tokenizer_hydration"] = hydrate_embedding_tokenizer(
+                    root / "installed", BUNDLE_MANIFEST
+                )
+                report["phase"] = "engine_operation"
+
         engine = Engine(
-            root=root / "engine", store=store, allow_private=False, profiles=settings["profiles"]
+            root=root / "engine",
+            store=store,
+            allow_private=False,
+            profiles=settings["profiles"],
+            before_dispatch=before_dispatch,
         )
-        if operation in {"query", "explain"}:
+        if operation == "explain":
             explanation = engine.explain(**request)
             if request.get("profile", "fixture") != "fixture":
                 helper.validate_explain(explanation, settings)
-            if operation == "explain":
-                explanation["validation_compute"] = "on_demand_flight"
-                explanation["external_calls"] = 0
-                store.finish_preflight(config["job_id"], token, explanation)
-                report.update(
-                    status="completed", phase="finished", operation="explain", external_calls=0
-                )
-                return
-            if request.get("profile", "fixture") != "fixture":
-                if any(
-                    stage.get("stage") == "external" and stage.get("operator") == "SEM_SCORE"
-                    for stage in explanation.get("plan", {}).get("stages", [])
-                ):
-                    report["phase"] = "tokenizer_hydration"
-                    report["tokenizer_hydration"] = hydrate_embedding_tokenizer(
-                        root / "installed", BUNDLE_MANIFEST
-                    )
-                    report["phase"] = "engine_operation"
+            explanation["validation_compute"] = "on_demand_flight"
+            explanation["external_calls"] = 0
+            store.finish_preflight(config["job_id"], token, explanation)
+            report.update(
+                status="completed", phase="finished", operation="explain", external_calls=0
+            )
+            return
+        if operation == "query":
             result = engine.query(**request)
         elif operation == "recover_run":
             result = engine.recover_run(**request)

@@ -49,6 +49,7 @@ class Store(StageJournalMixin):
                         "idempotency_conflict", "Request key already has different inputs"
                     )
                 return json.loads(previous[1]), False
+            self._claim_journal(db, receipt)
             db.execute(
                 "INSERT INTO runs VALUES(?,?,?,?)",
                 (receipt["run_id"], request["request_id"], identity, canonical(receipt).decode()),
@@ -150,6 +151,7 @@ class Store(StageJournalMixin):
                         "idempotency_conflict", "Result identity conflict", "publish"
                     )
                 return json.loads(existing[1])
+            self._finish_journal(db, metadata.get("receipt"))
             if self.retained_size(db) + len(payload) + len(canonical(metadata)) > self.quota:
                 raise SourcesQLError("budget_exhausted", "Storage quota exhausted", "publish")
             temp = self.root / ("." + uuid.uuid4().hex + ".tmp")

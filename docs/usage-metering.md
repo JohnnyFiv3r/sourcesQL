@@ -25,6 +25,9 @@ When a Flight reaches a terminal platform state, its exact `started_at`,
 estimate using the published regional rate. Separate MotherDuck SQL compute,
 storage, credits and invoice adjustments are not measured by Flight wall time.
 Older or unobserved platform runtimes remain visible as an unknown count.
+Allowance notices observe recent platform runs once and summarize month/day
+usage from the same read snapshot; they do not repeat the platform scan for each
+window.
 
 The app displays a dismissible, nonblocking overlay when observed sourcesQL
 usage reaches a reference allowance: Exa $10 per UTC calendar month, or no-card

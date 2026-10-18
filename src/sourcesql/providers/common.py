@@ -21,6 +21,18 @@ from ..contracts import Budget, SourcesQLError, digest
 
 class ProviderTransportError(SourcesQLError):
     remote_outcome_unknown = True
+    effect_state = "outcome_unknown"
+
+
+def provider_effect_state(status: Any) -> str:
+    """Translate bounded adapter event state, without guessing from error codes."""
+    if status is None or status in {"reserved", "not_dispatched"}:
+        return "not_dispatched"
+    if status == "failed":
+        return "rejected"
+    if status in {"completed", "completed_validation_failed", "invalid_output"}:
+        return "completed_unretained"
+    return "outcome_unknown"
 
 
 _EXA_ERROR_TAGS = {
@@ -49,6 +61,8 @@ def provider_http_error(response: httpx.Response, provider: str | None = None) -
     or purchased. Likewise, a rate limit does not establish a billing shortage.
     """
     error = SourcesQLError("provider_unavailable", "Provider request failed", "acquisition")
+    error.effect_state = "rejected"
+    error.remote_outcome_unknown = False
     error.http_status = response.status_code
     tag = None
     if provider == "exa":
@@ -377,15 +391,24 @@ def api_json(
             method, url, headers=headers, params=params, json=body, follow_redirects=False
         ) as response:
             if response.is_redirect:
-                raise SourcesQLError(
+                error = SourcesQLError(
                     "provider_unavailable", "Unexpected API redirect", "acquisition"
                 )
-            return json_object(read_response(response, max_bytes, provider=provider))
+                error.effect_state = "rejected"
+                raise error
+            try:
+                return json_object(read_response(response, max_bytes, provider=provider))
+            except SourcesQLError as error:
+                if response.is_success:
+                    # A successful response followed by local parsing/size
+                    # rejection is paid work, never a pre-dispatch refusal.
+                    error.effect_state = "completed_unretained"
+                raise
     except httpx.HTTPError:
-        error = ProviderTransportError(
+        transport_error = ProviderTransportError(
             "provider_unavailable", "Provider transport failed", "acquisition"
         )
-        raise error from None
+        raise transport_error from None
 
 
 def resolve_public(url: str, resolver: Callable = socket.getaddrinfo) -> tuple[str, str, int]:

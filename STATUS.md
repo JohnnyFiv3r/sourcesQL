@@ -8,6 +8,29 @@ and [release notes](docs/releases/0.2.3.md).
 
 ## Unreleased research completion work
 
+PR #3 review repairs distinguish proven pre-dispatch stops, known provider
+refusals, unknown outcomes and completed responses whose payload could not be
+retained. Explicit continuation can rearm only proven undispatched stages;
+an atomic journal-head claim prevents stale or concurrent branches from reusing
+lower counters. Successful publication seals the journal and reclaims duplicate
+checkpoint payloads within the publication transaction. A one-time migration
+also reclaims older published journals while retaining failed work. Transactional
+byte accounting reserves terminal metadata and replaces repeated payload scans;
+the unrelated 256-stage cap is removed. Keyset-paginated storage methods own
+checkpoint traversal, including recovery racing with publication cleanup.
+Hosted validation now runs once before trusted setup and provider preflight;
+usage notices observe platform metadata once and summarize month/day from one
+read snapshot. These repairs have fixture/mocked-provider regression coverage;
+they have not been deployed or published as a new release.
+
+Review-repair validation passes 1,166 Python/Flight tests (44 opt-in cases
+skipped), 445 app/MCP tests and 59 setup/onboarding checks, plus lint, Python
+typing and the Node 24 production build. The built wheel passes 145 targeted
+installed regressions. The compact Flight keeps its existing 200,000-byte
+source guard: omitting deployment-only setup helpers produces 194,370 bytes,
+while the public wheel retains those helpers. No new paid provider or hosted
+Flight execution is included in this qualification.
+
 Provider-managed metering is implemented for new reviewed personal-cloud plans
 and can be explicitly enabled on an existing deployment. Accumulated application
 reservations neither block dispatch nor grow in that mode. Historical counters,

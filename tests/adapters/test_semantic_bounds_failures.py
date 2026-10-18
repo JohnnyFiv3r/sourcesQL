@@ -101,9 +101,11 @@ def test_failed_model_calls_have_safe_taxonomy_without_retry_or_settlement_loss(
     assert outcome.value is None and outcome.status == "failed"
     assert outcome.usage["failure"]["code"] == code
     assert outcome.usage["failure"]["error_type"] == kind
-    assert outcome.usage["failure"]["remote_outcome_unknown"] is True
+    assert outcome.usage["failure"]["remote_outcome_unknown"] is (kind != "http")
     assert outcome.usage["failure"]["retryable"] is False
-    assert provider.events[0]["status"] == "remote_outcome_unknown"
+    assert provider.events[0]["status"] == (
+        "failed" if kind == "http" else "remote_outcome_unknown"
+    )
     assert provider.events[0]["error_code"] == code
     assert len(calls) == budget.counts["model_requests"] == 1
     serialized = json.dumps({"usage": outcome.usage, "events": provider.events})

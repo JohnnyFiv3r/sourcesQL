@@ -38,6 +38,9 @@ def test_failed_fanout_retains_successful_sources_for_provider_free_recovery(tmp
     def search(self, queries, options, budget):
         calls.extend(queries)
         if queries == ["fail"]:
+            # A real HTTP refusal has a known provider event, unlike a local
+            # pre-dispatch deadline or missing-credential check.
+            self.events.append({"kind": "search", "status": "failed"})
             raise SourcesQLError("provider_http_error", "PRIVATE-REJECTION", "acquisition")
         return original(self, queries, options, budget)
 

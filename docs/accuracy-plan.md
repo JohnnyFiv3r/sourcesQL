@@ -48,6 +48,17 @@ No backlog item is complete merely because its instructions were written or
 its mock tests passed. Move an item to live-qualified only with the exercised
 configuration, build identity, task, outcome and limitations recorded.
 
+PR #3 review repairs add atomic continuation ownership: only the latest settled
+failed head can create a child, with cumulative usage preserved. Only an effect
+proven never dispatched can be rearmed by that explicit continuation. Known
+refusals, unknown effects and completed-but-unretained responses stay distinct.
+Publication seals the journal before releasing duplicate checkpoint data in the
+same transaction; failed journals remain recoverable. Legacy published journals
+are compacted during migration. A transactional byte total replaces payload
+rescanning, and admitted work is bounded by execution budgets and retained bytes
+rather than a separate 256-stage count. These are implementation and regression
+claims, not fresh-host research-quality qualification.
+
 ## Workflow contract
 
 The host composes ordinary SQL for the actual question:

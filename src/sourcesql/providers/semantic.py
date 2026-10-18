@@ -474,7 +474,7 @@ def _openai_refusal(status: int, body: Any, headers: Any = None) -> dict:
         if isinstance(kind, str) and kind in {"insufficient_quota", "rate_limit_error"}
         else None
     )
-    result = {
+    result: dict[str, Any] = {
         **({"provider_error_code": code} if code else {}),
         **({"provider_error_type": kind} if kind else {}),
     }
@@ -527,7 +527,11 @@ def _error_response_body(response: httpx.Response) -> Any:
 
 
 def semantic_failure(
-    error: Exception, *, remote_outcome_unknown: bool, official_openai: bool = False
+    error: Exception,
+    *,
+    remote_outcome_unknown: bool,
+    official_openai: bool = False,
+    effect_state: str | None = None,
 ) -> dict:
     """Allowlisted diagnostics only; exception text and provider bodies are private."""
     from openai import (
@@ -567,6 +571,9 @@ def semantic_failure(
             "provider_http_error",
             "Semantic model provider rejected the request",
         )
+        remote_outcome_unknown = False
+        if effect_state != "completed_unretained":
+            effect_state = "rejected"
         status = (
             response.response.status_code
             if isinstance(response, httpx.HTTPStatusError)
@@ -601,6 +608,12 @@ def semantic_failure(
         "error_type": category,
         "remote_outcome_unknown": remote_outcome_unknown,
         "retryable": False,
+        **(
+            {"effect_state": effect_state}
+            if effect_state
+            in {"not_dispatched", "rejected", "outcome_unknown", "completed_unretained"}
+            else {}
+        ),
         **({"http_status": http_status} if http_status is not None else {}),
         **provider_details,
     }
@@ -833,16 +846,30 @@ class PydanticSemanticProvider:
                 except SourcesQLError as error:
                     if event["status"] == "completed":
                         event["status"] = "completed_validation_failed"
+                        error.effect_state = "completed_unretained"
+                        error.remote_outcome_unknown = False
                     if error.code == "invalid_output":
                         event.update(error_code="invalid_output", error_type="schema")
                     raise
                 except Exception as error:
-                    event["status"] = "remote_outcome_unknown"
+                    completed = event["status"] == "completed"
                     failure = semantic_failure(
-                        error, remote_outcome_unknown=True, official_openai=official_openai
+                        error,
+                        remote_outcome_unknown=not completed,
+                        official_openai=official_openai,
+                        effect_state="completed_unretained" if completed else "outcome_unknown",
+                    )
+                    event["status"] = (
+                        "completed_validation_failed"
+                        if completed
+                        else "failed"
+                        if failure["effect_state"] == "rejected"
+                        else "remote_outcome_unknown"
                     )
                     event.update(error_code=failure["code"], error_type=failure["error_type"])
                     for key in (
+                        "effect_state",
+                        "remote_outcome_unknown",
                         "http_status",
                         "provider_capacity",
                         "provider_error_code",
@@ -972,12 +999,23 @@ class PydanticSemanticProvider:
                 },
             )
         except Exception as error:
+            call_events = events[first_event:]
+            effect_state = (
+                "outcome_unknown"
+                if any(e["status"] == "remote_outcome_unknown" for e in call_events)
+                else "completed_unretained"
+                if any(
+                    e["status"] in {"completed", "completed_validation_failed"} for e in call_events
+                )
+                else "rejected"
+                if any(e["status"] == "failed" for e in call_events)
+                else "not_dispatched"
+            )
             failure = semantic_failure(
                 error,
                 official_openai=official_openai,
-                remote_outcome_unknown=any(
-                    e["status"] == "remote_outcome_unknown" for e in events[first_event:]
-                ),
+                remote_outcome_unknown=effect_state == "outcome_unknown",
+                effect_state=effect_state,
             )
             if failure["code"] == "invalid_output":
                 for event in events[first_event:]:
@@ -1084,14 +1122,18 @@ class OpenAIEmbeddingProvider:
                 timeout=timeout,
             ) as response:
                 if response.is_redirect:
-                    raise SourcesQLError(
+                    error = SourcesQLError(
                         "provider_unavailable", "Unexpected embedding API redirect", "semantic"
                     )
+                    error.effect_state = "rejected"
+                    raise error
                 if not response.is_success:
                     error = SourcesQLError(
                         "provider_http_error", "Embedding provider rejected the request", "semantic"
                     )
                     error.http_status = response.status_code
+                    error.effect_state = "rejected"
+                    error.remote_outcome_unknown = False
                     if _official_openai_endpoint(self.endpoint, "/v1/embeddings"):
                         diagnostics = _openai_refusal(
                             response.status_code, _error_response_body(response), response.headers
@@ -1099,7 +1141,11 @@ class OpenAIEmbeddingProvider:
                         for name, value in diagnostics.items():
                             setattr(error, name, value)
                     raise error
-                return json_object(read_response(response, self.MAX_RESPONSE_BYTES))
+                try:
+                    return json_object(read_response(response, self.MAX_RESPONSE_BYTES))
+                except SourcesQLError as error:
+                    error.effect_state = "completed_unretained"
+                    raise
         except httpx.TimeoutException:
             raise ProviderTransportError(
                 "provider_timeout", "Embedding request timed out", "semantic"
@@ -1335,6 +1381,7 @@ class OpenAIEmbeddingProvider:
                         {
                             "code": error.code,
                             "remote_outcome_unknown": False,
+                            "effect_state": "not_dispatched",
                         },
                     )
                 raise
@@ -1408,6 +1455,12 @@ class OpenAIEmbeddingProvider:
                     "code": error.code,
                     "message": error.safe_message,
                     "remote_outcome_unknown": unknown,
+                    "effect_state": getattr(error, "effect_state", None)
+                    if getattr(error, "effect_state", None)
+                    in {"not_dispatched", "rejected", "outcome_unknown", "completed_unretained"}
+                    else "outcome_unknown"
+                    if unknown
+                    else "rejected",
                     "retryable": False,
                     **{
                         name: event[name]
@@ -1427,6 +1480,7 @@ class OpenAIEmbeddingProvider:
                     "code": "invalid_output",
                     "message": "Embedding response contains invalid indices or vectors",
                     "remote_outcome_unknown": False,
+                    "effect_state": "completed_unretained",
                     "retryable": False,
                 }
             if interruption is not None:
@@ -1445,6 +1499,7 @@ class OpenAIEmbeddingProvider:
                     "code": "invalid_output",
                     "message": "Embedding batch did not produce valid scores",
                     "remote_outcome_unknown": False,
+                    "effect_state": "completed_unretained",
                     "retryable": False,
                 }
                 event.update(status="invalid_output", failure=interruption)

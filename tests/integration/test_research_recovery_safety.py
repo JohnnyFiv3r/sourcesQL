@@ -76,7 +76,7 @@ def test_interruption_before_candidate_accounting_cannot_leave_a_reusable_comple
         )
     failed = latest_run(engine)
     assert failed["counts"].get("candidates", 0) == 0
-    assert failed["checkpoints"]["stages"][0]["status"] == "rejected"
+    assert failed["checkpoints"]["stages"][0]["status"] == "completed_unretained"
     with pytest.raises(SourcesQLError):
         Engine(tmp_path, worker=worker).resume_run(failed["run_id"], str(uuid4()))
     assert effects == ["first"]

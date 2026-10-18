@@ -198,7 +198,7 @@ def test_download_deadline_covers_slow_chunks_not_only_individual_reads(tmp_path
 @pytest.mark.parametrize("operator", ["WEB_SEARCH", "SEM_SCORE"])
 @pytest.mark.parametrize("hydration_fails", [False, True])
 @pytest.mark.parametrize("profile", ["fixture", "exa"])
-def test_only_admitted_scoring_hydrates_before_query_and_preserves_request(
+def test_only_validated_scoring_hydrates_before_dispatch_and_preserves_request(
     tmp_path, monkeypatch, operator, hydration_fails, profile
 ):
     request = {"profile": profile, "sql": "fixture", "budgets": {"dispatch_deadline_seconds": 100}}
@@ -229,15 +229,19 @@ def test_only_admitted_scoring_hydrates_before_query_and_preserves_request(
 
     class Engine:
         def __init__(self, **kwargs):
-            pass
+            self.before_dispatch = kwargs["before_dispatch"]
 
         def explain(self, **kwargs):
-            events.append("explain")
-            return {"plan": {"stages": [{"stage": "external", "operator": operator}]}}
+            raise AssertionError("Query must validate in its own execution session")
 
         def query(self, **kwargs):
             assert json.dumps(kwargs, sort_keys=True) == saved
             events.append("query")
+            events.append("binding_validated")
+            self.before_dispatch(
+                {"plan": {"stages": [{"stage": "external", "operator": operator}]}}
+            )
+            events.append("dispatch")
             return {
                 "result_id": "r1",
                 "receipt": {"status": "completed", "run_id": "run1", "plan_complete": True},
@@ -260,14 +264,22 @@ def test_only_admitted_scoring_hydrates_before_query_and_preserves_request(
     if profile == "fixture" or operator == "WEB_SEARCH":
         assert "hydrate" not in events and "query" in events
     elif hydration_fails:
-        assert events == ["validate_request", "explain", "validate_explain", "hydrate", "fail"]
+        assert events == [
+            "validate_request",
+            "query",
+            "binding_validated",
+            "validate_explain",
+            "hydrate",
+            "fail",
+        ]
         assert report["error_code"] == "provider_unavailable"
     else:
         assert events == [
             "validate_request",
-            "explain",
+            "query",
+            "binding_validated",
             "validate_explain",
             "hydrate",
-            "query",
+            "dispatch",
             "finish",
         ]

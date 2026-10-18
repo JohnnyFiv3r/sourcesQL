@@ -181,16 +181,16 @@ def test_cancellation_after_a_valid_response_retains_the_score_for_explicit_new_
 
 
 @pytest.mark.parametrize(
-    "kind,code",
+    "kind,code,certainty",
     [
-        ("rejected", "provider_http_error"),
-        ("timeout", "execution_outcome_unknown"),
-        ("zero", "invalid_output"),
-        ("nonfinite", "invalid_output"),
+        ("rejected", "provider_http_error", "rejected"),
+        ("timeout", "execution_outcome_unknown", "outcome_unknown"),
+        ("zero", "invalid_output", "completed_unretained"),
+        ("nonfinite", "invalid_output", "completed_unretained"),
     ],
 )
 def test_rejected_and_uncertain_scoring_batches_cannot_be_replayed_after_restart(
-    harness, kind, code
+    harness, kind, code, certainty
 ):
     harness.failure = kind
     request = harness.request(["alpha", "beta", "gamma"])
@@ -199,7 +199,8 @@ def test_rejected_and_uncertain_scoring_batches_cannot_be_replayed_after_restart
     failed = latest_run(harness.engine)
     stages = [stage["status"] for stage in failed["checkpoints"]["stages"]]
     assert stages.count("completed") == 1
-    assert stages.count("outcome_unknown" if kind == "timeout" else "rejected") == 1
+    assert stages.count(certainty) == 1
+    assert failed["settlement_status"] == ("pending" if kind == "timeout" else "settled")
     with pytest.raises(SourcesQLError) as repeated:
         harness.reopen().resume_run(failed["run_id"], str(uuid4()))
     assert repeated.value.code == code
@@ -224,7 +225,10 @@ def test_a_successful_http_response_without_valid_scores_cannot_authorize_replay
         harness.engine.query(**harness.request(["alpha"]))
     assert failure.value.code == "invalid_output"
     failed = latest_run(harness.engine)
-    assert [stage["status"] for stage in failed["checkpoints"]["stages"]] == ["rejected"]
+    assert [stage["status"] for stage in failed["checkpoints"]["stages"]] == [
+        "completed_unretained"
+    ]
+    assert failed["provider_events"][0]["status"] == "invalid_output"
     with pytest.raises(SourcesQLError) as repeated:
         harness.reopen().resume_run(failed["run_id"], str(uuid4()))
     assert repeated.value.code == "invalid_output"
@@ -241,20 +245,23 @@ def test_scoring_checkpoint_failure_is_not_mislabeled_as_provider_output(harness
     assert failure.value.code == "storage_unavailable"
     failed = latest_run(harness.engine)
     assert failed["provider_events"][0]["status"] == "completed"
-    assert [stage["status"] for stage in failed["checkpoints"]["stages"]] == ["intent"]
-    # Without the secondary cache the uncommitted journal cannot authorize replay.
+    assert failed["provider_events"][0]["usage"]["input_tokens"] == 2
+    assert [stage["status"] for stage in failed["checkpoints"]["stages"]] == [
+        "completed_unretained"
+    ]
+    # The response is known, but losing its saved scores cannot authorize replay.
     with harness.engine.store.db() as db:
         db.execute("DELETE FROM semantic_cache")
     with pytest.raises(SourcesQLError) as repeated:
         harness.reopen().resume_run(failed["run_id"], str(uuid4()))
-    assert repeated.value.code == "execution_outcome_unknown"
+    assert repeated.value.code == "storage_unavailable"
     assert harness.requests == [["alpha", "criterion"]]
 
 
 def test_journal_failure_precedes_spending_reservations_and_http(harness, monkeypatch):
     request = harness.request(["alpha"])
 
-    def unavailable(*args):
+    def unavailable(*args, **kwargs):
         raise SourcesQLError("storage_unavailable", "Synthetic journal failure", "storage")
 
     monkeypatch.setattr(harness.engine.store, "stage_begin", unavailable)
@@ -273,7 +280,7 @@ def test_journal_failure_precedes_spending_reservations_and_http(harness, monkey
     assert harness.requests == [["alpha", "criterion"]]
 
 
-def test_local_reservation_failure_rejects_the_intent_without_claiming_dispatch(harness):
+def test_local_reservation_failure_records_an_undispatched_intent(harness):
     with pytest.raises(SourcesQLError) as failure:
         harness.engine.query(**harness.request(["alpha"], budgets={"max_model_requests": 0}))
     assert failure.value.code == "budget_exhausted"
@@ -281,7 +288,7 @@ def test_local_reservation_failure_rejects_the_intent_without_claiming_dispatch(
     assert failed["settlement_status"] == "settled"
     assert not failed.get("dispatch_intents")
     assert failed["provider_events"] == []
-    assert [stage["status"] for stage in failed["checkpoints"]["stages"]] == ["rejected"]
+    assert [stage["status"] for stage in failed["checkpoints"]["stages"]] == ["not_dispatched"]
     assert harness.requests == []
 
 
@@ -302,8 +309,12 @@ def test_post_reservation_storage_failure_records_no_http_dispatch(harness, monk
     assert failed["settlement_status"] == "settled"
     assert failed["provider_events"][0]["status"] == "not_dispatched"
     assert failed["provider_events"][0]["usage"]["requests"] == 0
-    assert [stage["status"] for stage in failed["checkpoints"]["stages"]] == ["rejected"]
+    assert [stage["status"] for stage in failed["checkpoints"]["stages"]] == ["not_dispatched"]
     assert harness.requests == []
+    monkeypatch.setattr(Budget, "reserve", original)
+    result = harness.reopen().resume_run(failed["run_id"], str(uuid4()))
+    assert result["rows"] == [{"score": 1.0}]
+    assert harness.requests == [["alpha", "criterion"]]
 
 
 def test_2500_candidates_use_bounded_http_batch_journals(harness, monkeypatch):

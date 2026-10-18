@@ -17,6 +17,7 @@ from .common import (
     normalized_text,
     normalized_url,
     provider_usage,
+    provider_effect_state,
     project_search_provenance,
     resolve_public,
     search_coverage_record,
@@ -333,8 +334,8 @@ class ExaProvider:
             event.update(
                 status="completed",
                 request_id=result.get("requestId"),
-                usage=provider_usage("exa", result),
             )
+            event["usage"] = provider_usage("exa", result)
             if path == "/search":
                 # Exa deprecates this field and may send an empty string. Retain
                 # provider telemetry verbatim, without using it for dispatch.
@@ -343,15 +344,18 @@ class ExaProvider:
             return result
         except SourcesQLError as error:
             capture_provider_failure(event, error)
-            event["status"] = (
-                "not_dispatched"
-                if event["status"] == "reserved"
-                else (
-                    "remote_outcome_unknown"
-                    if getattr(error, "remote_outcome_unknown", False)
-                    else "failed"
+            if event["status"] != "completed":
+                event["status"] = (
+                    "not_dispatched"
+                    if event["status"] == "reserved"
+                    else (
+                        "completed_validation_failed"
+                        if getattr(error, "effect_state", None) == "completed_unretained"
+                        else "remote_outcome_unknown"
+                        if getattr(error, "remote_outcome_unknown", False)
+                        else "failed"
+                    )
                 )
-            )
             raise
 
     def _rows(self, body: dict) -> list[dict]:
@@ -425,25 +429,19 @@ class ExaProvider:
         def failed(index, key, error):
             if key is None:
                 return
+            event = next(
+                (
+                    event
+                    for event in self.events
+                    if event.get("search_id") == coverage["search_id"]
+                    and event.get("query_index") == index
+                ),
+                {},
+            )
             if not isinstance(error, SourcesQLError):
-                safe_error = SourcesQLError(
-                    "execution_failed", "Search stage failed", "acquisition"
-                )
-                event = next(
-                    (
-                        event
-                        for event in self.events
-                        if event.get("search_id") == coverage["search_id"]
-                        and event.get("query_index") == index
-                    ),
-                    {},
-                )
-                setattr(
-                    safe_error,
-                    "remote_outcome_unknown",
-                    event.get("status") in {"dispatched", "remote_outcome_unknown"},
-                )
-                error = safe_error
+                error = SourcesQLError("execution_failed", "Search stage failed", "acquisition")
+            error.effect_state = provider_effect_state(event.get("status"))
+            error.remote_outcome_unknown = error.effect_state == "outcome_unknown"
             try:
                 journal["fail"](key, error)
             except Exception as journal_error:
@@ -557,9 +555,11 @@ class ExaProvider:
                             ),
                             {},
                         )
-                        if event.get("status") == "completed":
-                            event["status"] = "failed"
-                        query_coverage["status"] = event.get("status", "failed")
+                        query_coverage["status"] = (
+                            "failed"
+                            if event.get("status") == "completed"
+                            else event.get("status", "failed")
+                        )
                         failed(index, key, error)
                     finally:
                         pending_slots -= bound
@@ -649,9 +649,9 @@ class ExaProvider:
                 query_coverage.update(status="completed", retained_hits=len(result_rows))
                 return result_rows
             except Exception:
-                if event["status"] == "completed":
-                    event["status"] = "failed"
-                query_coverage["status"] = event["status"]
+                query_coverage["status"] = (
+                    "failed" if event["status"] == "completed" else event["status"]
+                )
                 raise
 
         # Only the owner thread reserves attempts and creates events. At most
