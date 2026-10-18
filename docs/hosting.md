@@ -41,6 +41,26 @@ preserve research history independently of MotherDuck's database snapshot
 retention. A refresh proposal changes the effective parent view only after an
 explicit review decision.
 
+## Diagnose a loading widget
+
+A successful `open_research` response confirms saved data was returned, not that
+the host displayed the app. After a UI update, refresh the existing connection's
+tool metadata and test in a new conversation. Signing in again does not establish
+that the cached UI descriptor was refreshed.
+
+For an HTTP gateway, temporarily set `SOURCESQL_MCP_DIAGNOSTICS=1` on the affected
+deployment. The `sourcesql.mcp_request` log records the protocol method, renderer
+tool classification, public bundle URI/hash, HTTP completion and protocol error
+code. This distinguishes discovery, saved-data reads and widget resource reads,
+including JSON-RPC errors returned with HTTP 200. It excludes credentials,
+headers, request IDs, research arguments, rows and error text. Diagnostics are off
+by default; remove the setting after investigating.
+
+A completed resource response establishes server delivery only. A missing
+resource request can also reflect a host cache; it does not prove the host
+skipped rendering. Confirm display in the affected host and device before
+calling the problem fixed.
+
 ## Qualified scope and current limits
 
 The gateway-to-Postgres-to-Flight lifecycle has been exercised, including exact

@@ -40,10 +40,15 @@ async function token(patch: Record<string, unknown> = {}) {
     .setExpirationTime("5m")
     .sign(privateKey);
 }
-async function send(server: Server, path: string, authorization?: string) {
+async function send(
+  server: Server,
+  path: string,
+  authorization?: string,
+  rpc?: unknown,
+) {
   const body =
     path === "/mcp"
-      ? JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })
+      ? JSON.stringify(rpc ?? { jsonrpc: "2.0", id: 1, method: "tools/list" })
       : undefined;
   return new Promise<{ status: number; challenge?: string; json: any }>(
     (resolve, reject) => {
@@ -214,4 +219,101 @@ test("OAuth requires a stable matching public resource and complete protected co
       }),
     /OAuth requires/,
   );
+});
+
+test("opt-in HTTP diagnostics separate auth, widget delivery and JSON-RPC failures without reading storage", async () => {
+  const logs: Record<string, string | number | boolean>[] = [];
+  const env = { ...environment, SOURCESQL_MCP_DIAGNOSTICS: "0" };
+  let storageReads = 0;
+  const application = createHttpApp({
+    environment: env,
+    root,
+    serverless: true,
+    oauthJwks: jwks,
+    diagnosticLog: (entry) => logs.push(entry),
+    services: () =>
+      createResearchApplication({
+        environment: env,
+        root,
+        serverless: true,
+        backend: {
+          stateBackend: {
+            async read() {
+              storageReads++;
+              throw new Error("No storage for resource delivery");
+            },
+            async write() {
+              throw new Error("No writes for resource delivery");
+            },
+          },
+          engine: {
+            async call() {
+              throw new Error("No engine execution");
+            },
+          },
+        },
+      }),
+  });
+  const server = createServer(application);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const authorization = "Bearer " + ownerToken;
+  try {
+    await send(server, "/mcp", authorization);
+    assert.equal(logs.length, 0, "Diagnostics are disabled by default");
+    env.SOURCESQL_MCP_DIAGNOSTICS = "1";
+    assert.equal((await send(server, "/mcp")).status, 401);
+    assert.equal(logs.at(-1)?.http_status, 401);
+    assert.equal(logs.at(-1)?.resource_returned, undefined);
+    const discovery = await send(server, "/mcp", authorization);
+    const uri = discovery.json.result.tools.find(
+      (tool: any) => tool.name === "open_research",
+    )._meta.ui.resourceUri;
+    assert.equal(logs.at(-1)?.advertised_resource, uri);
+    const widget = await send(server, "/mcp", authorization, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "resources/read",
+      params: { uri },
+    });
+    assert.equal(widget.status, 200);
+    assert.equal(logs.at(-1)?.resource, uri);
+    assert.equal(logs.at(-1)?.resource_returned, true);
+    assert.equal(logs.at(-1)?.completed, true);
+    assert.equal(
+      logs.at(-1)?.resource_bytes,
+      Buffer.byteLength(widget.json.result.contents[0].text),
+    );
+    assert.match(String(logs.at(-1)?.resource_sha256), /^[a-f0-9]{64}$/);
+    const missing = await send(server, "/mcp", authorization, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "resources/read",
+      params: { uri: "ui://sourcesql/research-0000000000000000.html" },
+    });
+    assert.equal(missing.status, 200);
+    assert.equal(typeof missing.json.error.code, "number");
+    assert.equal(logs.at(-1)?.rpc_error, missing.json.error.code);
+    assert.equal(logs.at(-1)?.resource_returned, undefined);
+    const privateText = "synthetic-private-request-do-not-log";
+    const invalid = await send(server, "/mcp", authorization, {
+      jsonrpc: "2.0",
+      id: privateText,
+      method: "tools/call",
+      params: {
+        name: "open_research",
+        arguments: { snapshot_id: privateText, job_id: privateText },
+      },
+    });
+    assert.equal(invalid.status, 200);
+    assert.ok(invalid.json.error || invalid.json.result?.isError);
+    assert.equal(logs.at(-1)?.tool, "open_research");
+    assert.ok(logs.at(-1)?.rpc_error || logs.at(-1)?.tool_error);
+    assert.equal(JSON.stringify(logs).includes(privateText), false);
+    assert.equal(JSON.stringify(logs).includes(ownerToken), false);
+    assert.equal(storageReads, 0);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

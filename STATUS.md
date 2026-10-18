@@ -30,6 +30,14 @@ fullscreen and local preview behavior are preserved. Previous public UI
 resources remain available under their original content hashes. The actual
 ChatGPT client context and end-to-end mobile rendering remain unverified.
 
+Optional HTTP diagnostics now distinguish tool discovery, renderer calls and
+public widget resource reads, including JSON-RPC failures carried by HTTP 200.
+They log protocol categories and public bundle hashes without credentials,
+research arguments, rows or error text. The feature is disabled by default.
+Actual HTTP tests cover resource delivery, a missing archived bundle, owner
+refusal and private-payload exclusion. Successful server delivery still does
+not establish that ChatGPT rendered the widget.
+
 PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
 The next local implementation covers canonical hosted preflight, bounded durable
 stage journals, explicit restart continuation/source recovery, query-hit

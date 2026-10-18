@@ -5,6 +5,7 @@ import type { JWTVerifyGetKey } from "jose";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bearerMatches } from "./access.js";
+import { createMcpDiagnostic, type McpDiagnostic } from "./mcp-diagnostics.js";
 import { researchAccess, type createResearchApplication } from "./app.js";
 import {
   createOAuthVerifier,
@@ -20,6 +21,7 @@ type HttpOptions = {
   serverless?: boolean;
   services: () => Promise<Services>;
   oauthJwks?: JWTVerifyGetKey;
+  diagnosticLog?: (entry: McpDiagnostic) => void;
 };
 function publicOrigin(value: string): string {
   const url = new URL(value);
@@ -85,6 +87,18 @@ export function createHttpApp(options: HttpOptions) {
     jsonLimit: serverless ? "4mb" : "16mb",
   });
   app.use((req, res, next) => {
+    if (environment.SOURCESQL_MCP_DIAGNOSTICS === "1" && req.path === "/mcp") {
+      const diagnostic = createMcpDiagnostic(
+        req.body,
+        options.diagnosticLog ??
+          ((entry) => console.info(JSON.stringify(entry))),
+      );
+      res.locals.mcpDiagnostic = diagnostic;
+      res.once("finish", () => diagnostic.finish(res.statusCode, true));
+      res.once("close", () =>
+        diagnostic.finish(res.statusCode, res.writableFinished),
+      );
+    }
     res.setHeader("Cache-Control", "no-store");
     if (
       serverless &&
@@ -153,6 +167,19 @@ export function createHttpApp(options: HttpOptions) {
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
+    const diagnostic = res.locals.mcpDiagnostic as
+      ReturnType<typeof createMcpDiagnostic> | undefined;
+    if (diagnostic) {
+      const send = transport.send.bind(transport);
+      transport.send = (message, sendOptions) => {
+        try {
+          diagnostic.response(message);
+        } catch {
+          // Diagnostics cannot prevent transport delivery.
+        }
+        return send(message, sendOptions);
+      };
+    }
     res.on("close", () => {
       void transport.close();
       void server?.close();
