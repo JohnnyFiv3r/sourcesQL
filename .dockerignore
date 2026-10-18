@@ -10,6 +10,10 @@
 !NOTICE
 !src/
 !src/**
+!scripts/
+!scripts/qualify-motherduck.mts
+!scripts/qualify-motherduck-app.mts
+!scripts/qualify-exa-hosted.mts
 !tests/
 !tests/**
 !examples/

@@ -1,4 +1,4 @@
-/** Synthetic app-state/MCP qualification. Never submits or cancels a Flight. */
+/** Remote synthetic app-state/MCP qualification. Never submits or cancels a Flight. */
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -18,18 +18,28 @@ import {
   type ResearchView,
 } from "../apps/research/src/schema.js";
 import { correctionKind } from "../apps/research/src/corrections.js";
+import {
+  parseQualificationOptions,
+  loadQualificationConfiguration,
+  qualificationPlan,
+  assertQualificationReceipt,
+} from "../apps/research/scripts/qualification-options.ts";
+
+const options = parseQualificationOptions("app", process.argv.slice(2));
+const configuration = loadQualificationConfiguration(options);
+if (!options.execute) {
+  console.log(JSON.stringify(qualificationPlan("app", options, configuration)));
+  process.exit(0);
+}
 
 const require = createRequire(
   new URL("../apps/research/package.json", import.meta.url),
 );
 const { Client: PgClient } = require("pg");
 const { Client, InMemoryTransport } = require("@modelcontextprotocol/client");
-const setup = JSON.parse(
-  readFileSync("local/motherduck/hosted-setup.json", "utf8"),
-);
-const qualificationDirectory = resolve("artifacts/hosted-storage-20261014");
-mkdirSync(qualificationDirectory, { recursive: true });
-const path = resolve(qualificationDirectory, "app-receipt.json");
+const { setup } = configuration;
+const path = options.output;
+mkdirSync(resolve(path, ".."), { recursive: true });
 const ordered = (value: unknown): unknown =>
   Array.isArray(value)
     ? value.map(ordered)
@@ -44,16 +54,18 @@ const digest = (value: unknown) =>
   createHash("sha256")
     .update(JSON.stringify(ordered(value)))
     .digest("hex");
-const principal = "hosted-qualification";
+const principal = options.principal;
 const seed = snapshotSchema.parse(
   JSON.parse(
     readFileSync("apps/research/fixtures/water-procurement.json", "utf8"),
   ),
 );
-const fixtureOnly = process.argv.includes("--fixture");
-const nativeReceipt = JSON.parse(
-  readFileSync(resolve(qualificationDirectory, "receipt.json"), "utf8"),
-);
+const fixtureOnly = options.fixture;
+const nativeReceipt = options.nativeReceipt
+  ? JSON.parse(readFileSync(options.nativeReceipt, "utf8"))
+  : {};
+if (options.nativeReceipt)
+  assertQualificationReceipt(nativeReceipt, configuration.identity);
 const completed = Object.entries(nativeReceipt.jobs ?? {})
   .map(([name, entry]: [string, any]) => ({
     name,
@@ -73,7 +85,8 @@ const completed = Object.entries(nativeReceipt.jobs ?? {})
   )[0] as any;
 const subject = fixtureOnly
   ? {
-      snapshot_id: "hosted-app-fixture-qualification",
+      snapshot_id:
+        "hosted-app-fixture-" + digest({ receipt: path }).slice(0, 24),
       mode: "synthetic_app_fixture",
     }
   : completed
@@ -90,9 +103,15 @@ try {
 } catch (error: any) {
   if (error.code !== "ENOENT") throw error;
 }
+if (receipt) assertQualificationReceipt(receipt, configuration.identity);
 receipt ??= {
-  schema: "sourcesql.hosted-app-qualification.v1",
+  schema: "sourcesql.hosted-app-qualification.v2",
+  identity: configuration.identity,
+  effects: qualificationPlan("app", options, configuration).effects_if_executed,
   created_at: new Date().toISOString(),
+  ui_resource_sha256: createHash("sha256")
+    .update(readFileSync("apps/research/dist/research.html"))
+    .digest("hex"),
   checks: {},
   calls: {},
   provider_calls: 0,
@@ -119,9 +138,11 @@ try {
   receipt.attempted_at = new Date().toISOString();
   save();
   // Keep the issuer's existing credential in process memory; never put it in argv or logs.
-  const token = JSON.parse(
-    readFileSync(`${homedir()}/.motherduck/credentials.json`, "utf8"),
-  ).motherduck_token;
+  const token =
+    process.env.MOTHERDUCK_TOKEN ??
+    JSON.parse(
+      readFileSync(`${homedir()}/.motherduck/credentials.json`, "utf8"),
+    ).motherduck_token;
   const clientFactory = (): SqlClient => {
     const client = new PgClient({
       host: setup.host,
@@ -157,11 +178,8 @@ try {
   };
   const engine = () =>
     new MotherDuckEngine({
-      database: setup.database,
-      host: setup.host,
+      ...configuration.engineOptions,
       token,
-      flightId: setup.flight_id,
-      principal,
       allowSubmission: false,
       clientFactory,
     });
@@ -170,7 +188,7 @@ try {
     await backendEngine.initialize();
     const backend = new MotherDuckStateBackend(backendEngine);
     const store = new ResearchStore(
-      resolve("local/motherduck/unused-app-state"),
+      resolve(path, "../unused-app-state"),
       seed,
       async (snapshot) => {
         check(snapshot.dataRef, "missing_engine_reference");
@@ -450,7 +468,7 @@ try {
       checks: receipt.checks,
       provider_calls: 0,
       flight_submissions: 0,
-      receipt: "artifacts/hosted-storage-20261014/app-receipt.json",
+      receipt: path,
     }),
   );
 } catch (error: any) {

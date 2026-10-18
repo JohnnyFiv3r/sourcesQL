@@ -6,6 +6,35 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased effective-table and recovery correction
+
+Query, explain and explicit materialization now share a coherent app-state
+selection and typed payload contract. Accepted refresh sources and inline private
+contributors survive as authorized dependencies; values, row identities and exact
+amendment revisions remain distinct from original observations. Hosted effective
+inputs bind the outer UUID to their complete import-job set before dispatch, with
+atomic reservation, identity conflicts and exact-job recovery. Local keyed replay
+compares Python-normalized import identities before creating replacement work.
+Legacy and ambiguous UUIDs require exact-handle inspection. See the
+[contract and upgrade procedure](docs/materialization.md).
+
+Local fixture coverage exercises the MCP boundary, native SQL controller and
+local/DuckDB-backed engine storage. Frozen wheel/source distributions pass their
+outside-checkout CLI, reopen, portability and setup checks, and installed lineage
+and replay regressions. These checks do not establish remote MotherDuck, real
+Flight, live-provider or ChatGPT/Claude acceptance of this correction. Deployment
+requires source-matched artifacts and the documented legacy-preparation cutover;
+historical missing ancestry is not automatically repaired.
+
+A local workspace harness measures current/history limits and verifies CAS,
+no-op behavior and authorization. Identical portable bundle retries no longer add
+duplicate history. Current limits remain unchanged; broader immutable-payload
+sharing and narrower mutation resolution remain separately designed follow-ups.
+Qualification scripts now default to an offline plan, bind reviewed owner/policy
+and artifact identities, and require explicit remote execution/submission. See
+[qualification instructions](scripts/qualification.md). Detailed measurements and
+operator evidence remain outside public artifacts.
+
 ## Unreleased research completion work
 
 DeepSeek is now an optional search provider across local/Docker profiles and

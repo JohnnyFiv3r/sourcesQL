@@ -31,6 +31,7 @@ def add(path):
     paths.add(path)
 for name in ("README.md", "LICENSE", "NOTICE", "hatch_build.py", "pyproject.toml", "uv.lock",
              "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh",
+             "scripts/qualify-motherduck.mts", "scripts/qualify-motherduck-app.mts", "scripts/qualify-exa-hosted.mts",
              "apps/research/package.json", "apps/research/package-lock.json",
              "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html",
              "apps/research/vercel.json", "apps/research/.vercelignore", "hosted/setup.mjs",

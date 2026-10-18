@@ -60,6 +60,7 @@ FROM qualification AS app-qualification
 USER 0:0
 COPY --from=app-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=app-builder /workspace/apps/research /workspace/apps/research
+COPY scripts/qualify-motherduck.mts scripts/qualify-motherduck-app.mts scripts/qualify-exa-hosted.mts /workspace/scripts/
 ENV SOURCESQL_PYTHON=/opt/venv/bin/python
 WORKDIR /workspace/apps/research
 RUN node --version
