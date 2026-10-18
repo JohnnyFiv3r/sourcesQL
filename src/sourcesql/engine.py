@@ -607,6 +607,79 @@ class Engine:
         )
         return self.read_result(result_id)
 
+    def lookup_request(self, request_id, expected_request=None, materializations=None):
+        try:
+            key = str(uuid.UUID(request_id))
+        except (ValueError, TypeError, AttributeError):
+            raise SourcesQLError("invalid_request", "request_id must be UUID") from None
+        receipt = self.store.lookup_request(key)
+        if receipt is None:
+            return {"found": False}
+        effective = []
+        for parent in receipt.get("parents", []):
+            meta = self.store.authorize(parent["result_id"])
+            if not self.allow_private and meta.get("data_classification") in (
+                "private_local",
+                "private_derived",
+            ):
+                raise SourcesQLError("unauthorized", "This launcher cannot access private data")
+            if parent.get("view") == "effective":
+                effective.append(
+                    meta.get("provenance", {}).get("materialization_contract")
+                    == "sourcesql.app-effective.v1"
+                )
+        result = {
+            "found": True,
+            "run_id": receipt["run_id"],
+            "status": receipt["status"],
+            "current_recipe": bool(effective) and all(effective),
+        }
+        if expected_request is not None:
+            if (
+                not result["current_recipe"]
+                or not isinstance(expected_request, dict)
+                or not isinstance(materializations, dict)
+            ):
+                raise SourcesQLError(
+                    "idempotency_conflict", "Existing request requires exact run inspection"
+                )
+            expected = {**expected_request, "inputs": dict(expected_request.get("inputs", {}))}
+            for alias, payload in materializations.items():
+                if (
+                    alias not in expected["inputs"]
+                    or expected["inputs"][alias].get("view") != "effective"
+                ):
+                    raise SourcesQLError("invalid_request", "Invalid prepared input")
+                _, _, provenance, _, identity = self._normalize_import(**payload)
+                expected["inputs"][alias] = {
+                    "result_id": "wq_import_" + identity[:32],
+                    "view": "effective",
+                    "amendment_revision": provenance.get("amendment_revision"),
+                }
+            if digest(expected) != digest(receipt.get("resume_request")):
+                raise SourcesQLError(
+                    "idempotency_conflict",
+                    "Existing request has different captured inputs; inspect its exact run",
+                )
+            profile = self.profiles.get(expected.get("profile", "fixture"), {})
+            revision = digest(
+                {
+                    k: v
+                    for k, v in profile.items()
+                    if not any(
+                        x in k.lower()
+                        for x in ["key", "token", "client", "model_adapter", "embedding_adapter"]
+                    )
+                }
+            )
+            if receipt.get("profile_revision") != revision:
+                raise SourcesQLError(
+                    "idempotency_conflict",
+                    "Existing request profile changed; inspect its exact run",
+                )
+            result.update(compatible=True, result_id=receipt.get("result_id"))
+        return result
+
     def query(self, **request):
         from sourcesql.providers import ProviderRegistry
         from sourcesql.execution.planner import execute_plan
@@ -1750,7 +1823,7 @@ class Engine:
             "evidence": meta.get("evidence", []),
         }
 
-    def import_table(
+    def _normalize_import(
         self,
         columns,
         rows,
@@ -1781,6 +1854,20 @@ class Engine:
         if not self.allow_private and data_classification in ("private_local", "private_derived"):
             raise SourcesQLError("unauthorized", "This launcher cannot derive private data")
         identity = digest([table.to_dict(), row_ids, data_classification, provenance, parents])
+        return table, data_classification, provenance, parents, identity
+
+    def import_table(
+        self,
+        columns,
+        rows,
+        row_ids=None,
+        data_classification="private_local",
+        provenance=None,
+        parents=None,
+    ):
+        table, data_classification, provenance, parents, identity = self._normalize_import(
+            columns, rows, row_ids, data_classification, provenance, parents
+        )
         stamp = now()
         run_id = "run_import_" + identity[:32]
         receipt = {

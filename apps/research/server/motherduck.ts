@@ -1,7 +1,12 @@
 /** Native Postgres gateway: durable owner storage, on-demand Flight jobs, no Python bridge. */
 import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolConfig } from "pg";
-import type { ResearchEngine, EngineResult } from "./engine.js";
+import { MATERIALIZATION_CONTRACT } from "./materialization.js";
+import type {
+  EffectiveMaterialization,
+  ResearchEngine,
+  EngineResult,
+} from "./engine.js";
 import type { ResearchState, ResearchStateBackend } from "./store.js";
 import {
   exaSearchTypes,
@@ -1006,69 +1011,325 @@ export class MotherDuckEngine implements ResearchEngine {
         : `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
     return { request, requestId, hash };
   }
-  async enqueue(params: Row, operation = "query"): Promise<Row> {
-    const input = this.request(params, operation);
-    const jobId = await this.transaction(true, async (client) => {
-      const prior = (
+  private async preparation(
+    client: SqlConnection,
+    requestId: string,
+  ): Promise<Row | undefined> {
+    return (
+      await client.query(
+        `SELECT operation,original_hash,recipe,manifest_json FROM ${this.table("input_preparations")} WHERE request_id=$1::UUID`,
+        [requestId],
+      )
+    ).rows[0];
+  }
+  private preparationConflict(): never {
+    throw new BackendError(
+      "idempotency_conflict",
+      "Input preparation changed or has no compatible binding; inspect the saved exact handles before creating new work",
+    );
+  }
+  async lookupPreparedQuery(
+    operation: "query" | "explain",
+    args: Row,
+  ): Promise<Row | undefined> {
+    const original = this.request(args, operation);
+    const prior = await this.transaction(false, async (client) => {
+      const preparation = await this.preparation(client, original.requestId);
+      const job = (
         await client.query(
-          `SELECT CAST(id AS VARCHAR) AS id,request_hash FROM ${this.table("jobs")} WHERE request_id=$1::UUID`,
-          [input.requestId],
+          `SELECT CAST(id AS VARCHAR) AS id FROM ${this.table("jobs")} WHERE request_id=$1::UUID`,
+          [original.requestId],
         )
       ).rows[0];
-      if (prior) {
-        if (prior.request_hash !== input.hash)
-          throw new BackendError(
-            "idempotency_conflict",
-            "Request key already has different inputs",
-          );
-        return prior.id;
+      if (!preparation) {
+        if (job) this.preparationConflict();
+        return undefined;
       }
-      const queued = (
+      if (
+        preparation.operation !== operation ||
+        preparation.original_hash !== original.hash ||
+        preparation.recipe !== MATERIALIZATION_CONTRACT
+      )
+        this.preparationConflict();
+      return job?.id as string | undefined;
+    });
+    return prior ? this.dispatchReserved(prior, operation) : undefined;
+  }
+  /** Reserve the complete captured input set before any Flight can start. */
+  async prepareQuery(
+    operation: "query" | "explain",
+    args: Row,
+    imports: Record<string, EffectiveMaterialization>,
+  ): Promise<Row> {
+    const original = this.request(args, operation);
+    const aliases = Object.keys(imports).sort();
+    if (!aliases.length)
+      throw new BackendError(
+        "invalid_request",
+        "Effective input preparation is empty",
+      );
+    const selected = aliases.map((alias) => {
+      const item = imports[alias];
+      const pin = original.request.inputs[alias];
+      if (
+        !pin ||
+        pin.view !== "effective" ||
+        pin.amendment_revision !== item.amendment_revision ||
+        (item.payload.provenance as Row | undefined)
+          ?.materialization_contract !== MATERIALIZATION_CONTRACT ||
+        (item.payload.provenance as Row | undefined)?.snapshot_id !==
+          item.snapshot_id ||
+        (item.payload.provenance as Row | undefined)?.amendment_revision !==
+          item.amendment_revision
+      )
+        throw new BackendError(
+          "invalid_request",
+          "Invalid effective input preparation",
+        );
+      return {
+        alias,
+        snapshot_id: item.snapshot_id,
+        amendment_revision: item.amendment_revision,
+        input: this.request(item.payload, "import_table"),
+      };
+    });
+    if (
+      Object.entries(original.request.inputs).some(
+        ([alias, pin]) => (pin as Row).view === "effective" && !imports[alias],
+      )
+    )
+      throw new BackendError(
+        "invalid_request",
+        "Incomplete effective input preparation",
+      );
+    for (const item of selected)
+      await this.authorizeRequestInputs(item.input.request, "import_table");
+    const manifest = await this.transaction(true, async (client) => {
+      const prior = await this.preparation(client, original.requestId);
+      const outer = (
         await client.query(
-          `SELECT count(*)::INTEGER AS count FROM ${this.table("jobs")} WHERE status='queued'`,
+          `SELECT CAST(id AS VARCHAR) AS id FROM ${this.table("jobs")} WHERE request_id=$1::UUID`,
+          [original.requestId],
         )
       ).rows[0];
-      if (queued.count >= 100)
-        throw new BackendError(
-          "budget_exhausted",
-          "Job queue allowance exhausted",
+      if (!prior && outer) this.preparationConflict();
+      const captured = selected.map(
+        ({ alias, snapshot_id, amendment_revision, input }) => ({
+          alias,
+          snapshot_id,
+          amendment_revision,
+          request_hash: input.hash,
+        }),
+      );
+      if (prior) {
+        if (
+          prior.operation !== operation ||
+          prior.original_hash !== original.hash ||
+          prior.recipe !== MATERIALIZATION_CONTRACT
+        )
+          this.preparationConflict();
+        const saved = JSON.parse(prior.manifest_json) as Row[];
+        if (
+          stable(saved.map(({ job_id, ...item }) => item)) !== stable(captured)
+        )
+          this.preparationConflict();
+        for (const item of saved) {
+          const job = await this.getJob(client, item.job_id);
+          if (
+            job.operation !== "import_table" ||
+            digest(
+              stable({
+                operation: "import_table",
+                request: JSON.parse(job.request_json),
+              }),
+            ) !== item.request_hash
+          )
+            this.preparationConflict();
+        }
+        return saved;
+      }
+      const saved: Row[] = [];
+      for (let index = 0; index < selected.length; index++) {
+        const job_id = await this.reserveJob(
+          client,
+          selected[index].input,
+          "import_table",
         );
-      const retained = (
+        saved.push({ ...captured[index], job_id });
+      }
+      const json = stable(saved);
+      const bytes = (
         await client.query(
           `SELECT coalesce(sum(octet_length(encode(request_json))),0)::DOUBLE AS bytes FROM ${this.table("jobs")}`,
         )
-      ).rows[0];
+      ).rows[0].bytes;
+      const preparationBytes = (
+        await client.query(
+          `SELECT coalesce(sum(octet_length(encode(manifest_json))+256),0)::DOUBLE AS bytes FROM ${this.table("input_preparations")}`,
+        )
+      ).rows[0].bytes;
       if (
-        retained.bytes + Buffer.byteLength(stable(input.request)) >
+        Number(bytes) +
+          Number(preparationBytes) +
+          Buffer.byteLength(json) +
+          256 >
         100 * 1024 * 1024
       )
         throw new BackendError(
           "budget_exhausted",
-          "Retained job payload allowance exhausted",
+          "Retained preparation allowance exhausted",
         );
-      const id = randomUUID(),
-        time = stamp();
       await client.query(
-        `INSERT INTO ${this.table("jobs")}(id,request_id,operation,request_hash,request_json,status,created_at,updated_at,flight_id,max_runtime_sec,provider_policy_sha256)
-        VALUES($1::UUID,$2::UUID,$3,$4,$5,'queued',$6,$6,$7::UUID,$8::INTEGER,$9)`,
+        `INSERT INTO ${this.table("input_preparations")}(request_id,operation,original_hash,recipe,manifest_json,created_at) VALUES($1::UUID,$2,$3,$4,$5,$6)`,
         [
-          id,
-          input.requestId,
+          original.requestId,
           operation,
-          input.hash,
-          stable(input.request),
-          time,
-          this.options.flightId,
-          this.maxRuntime,
-          (operation === "query" || operation === "explain") &&
-          (isExaProfile(input.request.profile) ||
-            isHostedSearchProfile(input.request.profile))
-            ? livePolicyFingerprint(this.options)
-            : null,
+          original.hash,
+          MATERIALIZATION_CONTRACT,
+          json,
+          stamp(),
         ],
       );
-      return id;
+      return saved;
     });
+    const inputs = { ...original.request.inputs };
+    for (const item of manifest) {
+      const imported = await this.dispatchReserved(item.job_id, "import_table");
+      if (imported.job_id || imported.pending) return imported;
+      inputs[item.alias] = {
+        result_id: imported.result_id,
+        view: "effective",
+        amendment_revision: item.amendment_revision,
+      };
+    }
+    const final = this.request({ ...original.request, inputs }, operation);
+    const jobId = await this.transaction(true, async (client) => {
+      // Recheck exact completed mappings inside the same owner-serialized commit.
+      for (const item of manifest) {
+        const job = await this.getJob(client, item.job_id);
+        if (
+          job.status !== "completed" ||
+          job.result_id !== inputs[item.alias].result_id
+        )
+          this.preparationConflict();
+        await this.resultRecord(client, job.result_id);
+      }
+      return this.reserveJob(client, final, operation, {
+        originalHash: original.hash,
+        manifestJson: stable(manifest),
+      });
+    });
+    return this.dispatchReserved(jobId, operation);
+  }
+  private async authorizeRequestInputs(
+    request: Row,
+    operation: string,
+  ): Promise<void> {
+    const ids =
+      operation === "import_table"
+        ? (request.parents ?? []).map((pin: Row) => pin.result_id)
+        : ["query", "explain"].includes(operation)
+          ? Object.values(request.inputs ?? {}).map(
+              (pin) => (pin as Row).result_id,
+            )
+          : [];
+    for (const result_id of new Set(ids))
+      await this.readResult({ result_id, limit: 0 });
+  }
+  private async reserveJob(
+    client: SqlConnection,
+    input: ReturnType<MotherDuckEngine["request"]>,
+    operation: string,
+    proof?: { originalHash: string; manifestJson: string },
+  ): Promise<string> {
+    const prepared = await this.preparation(client, input.requestId);
+    if (
+      prepared &&
+      (!proof ||
+        prepared.operation !== operation ||
+        prepared.original_hash !== proof.originalHash ||
+        prepared.manifest_json !== proof.manifestJson ||
+        prepared.recipe !== MATERIALIZATION_CONTRACT)
+    )
+      this.preparationConflict();
+    const prior = (
+      await client.query(
+        `SELECT CAST(id AS VARCHAR) AS id,request_hash FROM ${this.table("jobs")} WHERE request_id=$1::UUID`,
+        [input.requestId],
+      )
+    ).rows[0];
+    if (prior) {
+      if (prior.request_hash !== input.hash)
+        throw new BackendError(
+          "idempotency_conflict",
+          "Request key already has different inputs",
+        );
+      return prior.id;
+    }
+    const queued = (
+      await client.query(
+        `SELECT count(*)::INTEGER AS count FROM ${this.table("jobs")} WHERE status='queued'`,
+      )
+    ).rows[0];
+    if (queued.count >= 100)
+      throw new BackendError(
+        "budget_exhausted",
+        "Job queue allowance exhausted",
+      );
+    const preparationBytes = (
+      await client.query(
+        `SELECT coalesce(sum(octet_length(encode(manifest_json))+256),0)::DOUBLE AS bytes FROM ${this.table("input_preparations")}`,
+      )
+    ).rows[0].bytes;
+    const retained = (
+      await client.query(
+        `SELECT coalesce(sum(octet_length(encode(request_json))),0)::DOUBLE AS bytes FROM ${this.table("jobs")}`,
+      )
+    ).rows[0];
+    if (
+      Number(retained.bytes) +
+        Number(preparationBytes) +
+        Buffer.byteLength(stable(input.request)) >
+      100 * 1024 * 1024
+    )
+      throw new BackendError(
+        "budget_exhausted",
+        "Retained job payload allowance exhausted",
+      );
+    const id = randomUUID(),
+      time = stamp();
+    await client.query(
+      `INSERT INTO ${this.table("jobs")}(id,request_id,operation,request_hash,request_json,status,created_at,updated_at,flight_id,max_runtime_sec,provider_policy_sha256)
+        VALUES($1::UUID,$2::UUID,$3,$4,$5,'queued',$6,$6,$7::UUID,$8::INTEGER,$9)`,
+      [
+        id,
+        input.requestId,
+        operation,
+        input.hash,
+        stable(input.request),
+        time,
+        this.options.flightId,
+        this.maxRuntime,
+        (operation === "query" || operation === "explain") &&
+        (isExaProfile(input.request.profile) ||
+          isHostedSearchProfile(input.request.profile))
+          ? livePolicyFingerprint(this.options)
+          : null,
+      ],
+    );
+    return id;
+  }
+  async enqueue(params: Row, operation = "query"): Promise<Row> {
+    const input = this.request(params, operation);
+    const jobId = await this.transaction(true, (client) =>
+      this.reserveJob(client, input, operation),
+    );
+    return this.dispatchReserved(jobId, operation);
+  }
+  private async dispatchReserved(
+    jobId: string,
+    operation: string,
+  ): Promise<Row> {
     let job = await this.transaction(false, (client) =>
       this.getJob(client, jobId),
     );
@@ -1140,6 +1401,10 @@ export class MotherDuckEngine implements ResearchEngine {
         await this.authorizeCompletedJob(candidate);
       return candidate;
     }
+    await this.authorizeRequestInputs(
+      JSON.parse(candidate.request_json),
+      candidate.operation,
+    );
     if (candidate.flight_id !== this.options.flightId)
       throw new BackendError(
         "unsupported_capability",

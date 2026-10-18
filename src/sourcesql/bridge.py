@@ -29,6 +29,7 @@ def main():
     )
     methods = {
         "capabilities": engine.capabilities,
+        "lookup_request": engine.lookup_request,
         "query": engine.query,
         "explain": engine.explain,
         "read_result": engine.read_result,

@@ -36,6 +36,19 @@ class Store(StageJournalMixin):
         finally:
             db.close()
 
+    def lookup_request(self, request_id: str) -> dict | None:
+        """Read an owner-local request identity without admitting or dispatching work."""
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT receipt FROM runs WHERE lower(request_id)=? LIMIT 2", (request_id.lower(),)
+            ).fetchall()
+        if len(rows) > 1:
+            raise SourcesQLError(
+                "idempotency_conflict",
+                "Request UUID has ambiguous legacy spellings; inspect its exact runs",
+            )
+        return json.loads(rows[0][0]) if rows else None
+
     def begin_run(self, request: dict, receipt: dict) -> tuple[dict, bool]:
         identity = digest(request)
         with self.db() as db:
