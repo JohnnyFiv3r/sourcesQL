@@ -306,7 +306,7 @@ def test_core_preflight_has_no_model_embedding_or_fetch_grant(name):
 
 
 @pytest.mark.parametrize("name", ["fixture", *policy.SEARCH_TYPES])
-def test_runner_binds_trusted_policy_and_explains_every_live_profile(tmp_path, monkeypatch, name):
+def test_runner_binds_trusted_policy_without_a_separate_query_explain(tmp_path, monkeypatch, name):
     env = environment()
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -336,12 +336,16 @@ def test_runner_binds_trusted_policy_and_explains_every_live_profile(tmp_path, m
             assert captured["bound"] is True and kwargs["allow_private"] is False
             assert "fixture" not in kwargs["profiles"]
             captured["profiles"] = kwargs["profiles"]
+            self.before_dispatch = kwargs["before_dispatch"]
 
         def explain(self, **kwargs):
-            captured["explained_profile"] = kwargs["profile"]
-            return {"plan": {"stages": [{"stage": "external", "operator": "WEB_SEARCH"}]}}
+            raise AssertionError("Ordinary query must not launch an independent explain")
 
         def query(self, **kwargs):
+            captured["queried_profile"] = kwargs["profile"]
+            self.before_dispatch(
+                {"plan": {"stages": [{"stage": "external", "operator": "WEB_SEARCH"}]}}
+            )
             return {
                 "result_id": "result_fixture",
                 "receipt": {"status": "completed", "plan_complete": True, "run_id": "run_fixture"},
@@ -355,7 +359,7 @@ def test_runner_binds_trusted_policy_and_explains_every_live_profile(tmp_path, m
     assert captured["claim"]["allowed_profiles"] == ("fixture", *policy.SEARCH_TYPES)
     assert captured["claim"]["provider_policy_sha256"] == settings["provider_policy_sha256"]
     assert captured["profiles"] == settings["profiles"]
-    assert captured.get("explained_profile") == (None if name == "fixture" else name)
+    assert captured.get("queried_profile") == name
     assert captured["verified"] is True and report["status"] == "completed"
 
 
@@ -381,7 +385,7 @@ def test_runner_refuses_a_live_job_bound_to_another_policy_before_engine(
         def bind_job(self, *args):
             pass
 
-        def fail_job(self, identity, token, code, message):
+        def fail_job(self, identity, token, code, message, stage="admission"):
             captured["failure"] = code
 
     report = {}

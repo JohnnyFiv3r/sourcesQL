@@ -34,9 +34,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowLeft,
-  LoaderCircle,
   ListTree,
   ListChecks,
+  FileText,
 } from "lucide-react";
 import { Button, Input, Textarea, GrowingTextarea, Select } from "./ui.js";
 import {
@@ -44,6 +44,8 @@ import {
   effectiveValue,
   snapshotSchema,
   sourcesForViewSelection,
+  cellDiagnosticSummary,
+  researchGapSummary,
   type ResearchView,
   type Row,
   type ResearchRequestSummary,
@@ -58,15 +60,27 @@ import {
 } from "./research-links.js";
 import "./styles.css";
 import { FeedbackToast } from "./feedback-toast.js";
+import { ResearchStatusOverlay } from "./research-status-overlay.js";
+import { UsageNoticeOverlay } from "./usage-notice-overlay.js";
+import type { UsageNotice } from "./usage.js";
 import { ResearchTreePanel } from "./research-tree-panel.js";
 import { ResearchJobStatusPanel } from "./job-status-panel.js";
 import {
-  researchJobViewSchema,
+  decodeResearchJobView,
   researchJobView as parseJobReceipt,
   type ResearchJobView,
 } from "./job-view.js";
 import "./job-status-panel.css";
 import { HostedViewReconciliation } from "./view-reconciliation.js";
+import { inlineHeightLimitFor } from "./host-sizing.js";
+import {
+  SAVED_TABLE_LOAD_ERROR,
+  SAVED_TABLE_TARGET_MISSING,
+  SavedTableRecovery,
+} from "./saved-table-recovery.js";
+import { decodeResearchView } from "./view-wire.js";
+import { QueryFeedbackPanel } from "./query-feedback-panel.js";
+import "./query-feedback-panel.css";
 import { readNavigation } from "./navigation-read.js";
 import {
   UpdateReviewPanel,
@@ -90,6 +104,15 @@ const app = new App(
   {},
   { autoResize: false },
 );
+function dismissUsageNotice(notice: UsageNotice) {
+  if (!/^[a-f0-9]{64}$/.test(notice.id)) return;
+  void app
+    .callServerTool({
+      name: "research_dismiss_usage_notice",
+      arguments: { notice_id: notice.id },
+    })
+    .catch(() => {});
+}
 function extractView(result: CallToolResult): ResearchView {
   if (result.isError)
     throw new Error(
@@ -98,13 +121,19 @@ function extractView(result: CallToolResult): ResearchView {
         .map((c) => c.text)
         .join("\n"),
     );
-  const payload = result.structuredContent as ResearchView | undefined;
-  if (!payload?.snapshot || !Array.isArray(payload.amendments))
-    throw new Error(
-      "The host returned an unexpected result. Reopen the research tool.",
+  return decodeResearchView(result.structuredContent);
+}
+async function readSavedResearch(snapshotId: string): Promise<ResearchView> {
+  try {
+    return extractView(
+      await app.callServerTool({
+        name: "research_status",
+        arguments: { snapshot_id: snapshotId },
+      }),
     );
-  snapshotSchema.parse(payload.snapshot);
-  return payload;
+  } catch {
+    throw new Error(SAVED_TABLE_LOAD_ERROR);
+  }
 }
 function needsReview(row: Row): boolean {
   return /unverified|failed|unavailable|conflict/i.test(
@@ -122,6 +151,8 @@ function isSourceUrl(value: unknown): value is string {
 }
 
 function Workspace() {
+  const bootstrapRecovery = useRef(new SavedTableRecovery());
+  const [recoverySnapshotId, setRecoverySnapshotId] = useState<string>();
   const [view, setView] = useState<ResearchView>();
   const [jobView, setJobView] = useState<ResearchJobView>();
   const [ready, setReady] = useState(false);
@@ -168,6 +199,8 @@ function Workspace() {
   const [proposalsOpen, setProposalsOpen] = useState(false);
   const [manualCorrection, setManualCorrection] = useState(false);
   const checkpointDialog = useRef<HTMLDialogElement>(null);
+  const queryFeedbackDialog = useRef<HTMLDialogElement>(null);
+  const [queryFeedbackOpen, setQueryFeedbackOpen] = useState(false);
   const [updateQuestion, setUpdateQuestion] = useState("");
   const [updateExisting, setUpdateExisting] = useState(true);
   const [updateDiscovery, setUpdateDiscovery] = useState(false);
@@ -255,6 +288,7 @@ function Workspace() {
   }
 
   function accept(next: ResearchView, preserveWindow = true) {
+    bootstrapRecovery.current.markAccepted();
     setJobView(undefined);
     const previous = viewRef.current;
     if (
@@ -340,6 +374,8 @@ function Workspace() {
       setManualCorrection(false);
       proposalReviewDialog.current?.close();
       setProposalsOpen(false);
+      queryFeedbackDialog.current?.close();
+      setQueryFeedbackOpen(false);
       setError("");
       setNotice("");
       scrollToRestore.current = {
@@ -360,19 +396,7 @@ function Workspace() {
     const updateLayoutContext = (context: McpUiHostContext | undefined) => {
       // Pagination uses the host's space budget, not the height we request for
       // this page. Otherwise a short last page would shrink the page size too.
-      const dimensions = context?.containerDimensions;
-      setInlineHeightLimit(
-        context &&
-          (!context.researchPreview || context.researchInlineSizing) &&
-          context.displayMode !== "fullscreen"
-          ? Math.min(
-              560,
-              dimensions && "maxHeight" in dimensions
-                ? (dimensions.maxHeight ?? 560)
-                : 560,
-            )
-          : null,
-      );
+      setInlineHeightLimit(inlineHeightLimitFor(context));
     };
     const updateAgentMessaging = () =>
       setCanAskAgent(Boolean(agentMessenger(app, chatGPTMessaging())));
@@ -396,7 +420,30 @@ function Workspace() {
       onError: reportError,
     });
     reconciliation.current = reconciler;
+    let connected = false;
+    const retryBootstrap = () => {
+      if (!connected || !app.getHostCapabilities()?.serverTools) return;
+      void bootstrapRecovery.current.retry(readSavedResearch).then(
+        (next) => {
+          if (next && !bootstrapRecovery.current.hasAccepted) {
+            accept(next, false);
+            setError("");
+          }
+        },
+        () => {
+          if (!bootstrapRecovery.current.hasAccepted)
+            setError(SAVED_TABLE_LOAD_ERROR);
+        },
+      );
+    };
+    app.ontoolinput = ({ arguments: input }) => {
+      bootstrapRecovery.current.captureInput(input);
+      setRecoverySnapshotId(bootstrapRecovery.current.snapshotId);
+      retryBootstrap();
+    };
     app.ontoolresult = (result) => {
+      bootstrapRecovery.current.captureResult(result);
+      setRecoverySnapshotId(bootstrapRecovery.current.snapshotId);
       try {
         if (
           result.structuredContent &&
@@ -406,15 +453,26 @@ function Workspace() {
         ) {
           if (result.isError)
             throw new Error("Unable to read the saved research job.");
-          const job = researchJobViewSchema.parse(result.structuredContent);
+          const job = decodeResearchJobView(
+            result.structuredContent,
+            result._meta,
+          );
+          bootstrapRecovery.current.markAccepted();
           reconciler.invalidate();
           setJobView(job);
           setError("");
           return;
         }
-        if (reconciler.hostResult(extractView(result))) setError("");
+        const next = extractView(result);
+        if (!bootstrapRecovery.current.hasAccepted)
+          bootstrapRecovery.current.assertTarget(next);
+        if (reconciler.hostResult(next)) setError("");
       } catch (e) {
-        reportError(e);
+        if (!viewRef.current && !bootstrapRecovery.current.hasAccepted) {
+          bootstrapRecovery.current.markFailed();
+          setError(SAVED_TABLE_LOAD_ERROR);
+          retryBootstrap();
+        } else reportError(e);
       }
     };
     app.onhostcontextchanged = (context) => {
@@ -430,6 +488,7 @@ function Workspace() {
     void app
       .connect()
       .then(() => {
+        connected = true;
         setReady(true);
         const context = app.getHostContext();
         updateLayoutContext(context);
@@ -439,11 +498,13 @@ function Workspace() {
           !!app.getHostCapabilities()?.serverTools &&
             context?.researchPreview !== true,
         );
+        retryBootstrap();
       })
       .catch((e) =>
         setError(`Unable to connect to the MCP Apps host: ${String(e)}`),
       );
     return () => {
+      connected = false;
       reconciler.dispose();
       window.removeEventListener("openai:set_globals", updateAgentMessaging);
       window.removeEventListener("focus", updateAgentMessaging);
@@ -1204,8 +1265,6 @@ function Workspace() {
         (footer?.offsetHeight ?? 0) -
         parseFloat(padding.paddingTop) -
         parseFloat(padding.paddingBottom) -
-        (viewport.querySelector<HTMLElement>(".research-status")
-          ?.offsetHeight ?? 0) -
         (viewport.querySelector<HTMLElement>(".refresh-context")
           ?.offsetHeight ?? 0);
       const rowHeight = firstRow.offsetHeight;
@@ -1297,6 +1356,8 @@ function Workspace() {
   const researchActionLabel = `View ${researchScopeLabel(selectionResearch, field).toLowerCase()}`;
   const currentValue =
     view && row && field ? effectiveValue(view, row, field) : null;
+  const selectedCellDiagnostic =
+    row && field ? cellDiagnosticSummary(row, field) : undefined;
   const sources = sourceLinksForValue(
     row && view ? sourcesForViewSelection(view, row, field || undefined) : [],
     currentValue,
@@ -1358,6 +1419,7 @@ function Workspace() {
         !updateDialog.current?.open &&
         !proposalReviewDialog.current?.open &&
         !checkpointDialog.current?.open &&
+        !queryFeedbackDialog.current?.open &&
         !treeOpen
       ) {
         event.preventDefault();
@@ -1447,19 +1509,28 @@ function Workspace() {
   }
   if (jobView)
     return (
-      <ResearchJobStatusPanel
-        view={jobView}
-        busy={busy || !ready}
-        error={error}
-        onOpenBilling={(url) => void visitSource(url)}
-        onCheck={() => void perform(() => readResearchJob())}
-        onResume={() => void perform(() => readResearchJob(true))}
-        onOpenResult={
-          jobView.job.status === "completed" && jobView.job.result_id
-            ? () => void perform(openJobResult)
-            : undefined
-        }
-      />
+      <div className="research-job-workspace">
+        <ResearchJobStatusPanel
+          view={jobView}
+          busy={busy || !ready}
+          error={error}
+          onOpenBilling={(url) => void visitSource(url)}
+          onCheck={() => void perform(() => readResearchJob())}
+          onResume={() => void perform(() => readResearchJob(true))}
+          onOpenResult={
+            jobView.job.status === "completed" && jobView.job.result_id
+              ? () => void perform(openJobResult)
+              : undefined
+          }
+        />
+        <div className="workspace-notifications">
+          <UsageNoticeOverlay
+            notices={jobView.usageNotices}
+            onOpenBilling={(url) => void visitSource(url)}
+            onDismiss={dismissUsageNotice}
+          />
+        </div>
+      </div>
     );
   if (!view)
     return (
@@ -1468,10 +1539,22 @@ function Workspace() {
         <h1>Opening your research</h1>
         <p>Connecting to the MCP Apps host…</p>
         {error && <p role="alert">{error}</p>}
-        {ready && (
-          <Button onClick={() => void perform(() => open())}>
+        {ready && recoverySnapshotId && (
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void perform(async () => {
+                const next =
+                  await bootstrapRecovery.current.readSaved(readSavedResearch);
+                accept(next, false);
+              })
+            }
+          >
             Load saved research
           </Button>
+        )}
+        {ready && !recoverySnapshotId && error && (
+          <p>{SAVED_TABLE_TARGET_MISSING}</p>
         )}
       </main>
     );
@@ -1773,6 +1856,21 @@ function Workspace() {
               <div className="menu-items">
                 <Button
                   variant="ghost"
+                  aria-haspopup="dialog"
+                  aria-expanded={queryFeedbackOpen}
+                  aria-controls="query-feedback-dialog"
+                  onClick={() => {
+                    if (menu.current) menu.current.open = false;
+                    setHeaderPanel(null);
+                    setQueryFeedbackOpen(true);
+                    queryFeedbackDialog.current?.showModal();
+                  }}
+                >
+                  <FileText />
+                  How this table was built
+                </Button>
+                <Button
+                  variant="ghost"
                   disabled={
                     !canAskAgent ||
                     busy ||
@@ -1934,11 +2032,61 @@ function Workspace() {
         {/* Mount the view toggle here only when a visualization is available. */}
       </header>
       <div className="workspace-content">
-        <FeedbackToast
-          message={feedbackMessage}
-          kind={feedbackKind}
-          onDismiss={dismissFeedback}
-        />
+        <div className="workspace-notifications">
+          <UsageNoticeOverlay
+            notices={view.usageNotices}
+            onOpenBilling={(url) => void visitSource(url)}
+            onDismiss={dismissUsageNotice}
+          />
+          <FeedbackToast
+            message={feedbackMessage}
+            kind={feedbackKind}
+            onDismiss={dismissFeedback}
+          />
+          <ResearchStatusOverlay
+            key={view.snapshot.id}
+            status={
+              pending.length > 0 ||
+              latestRequest?.status === "failed" ||
+              showCancelledRequest ||
+              pollError
+                ? {
+                    message:
+                      pollError ||
+                      (pending.length
+                        ? "Waiting for results…"
+                        : showCancelledRequest
+                          ? "Research cancelled. No results were added."
+                          : latestRequest?.error ||
+                            "Research could not finish."),
+                    kind:
+                      pollError || (!pending.length && !showCancelledRequest)
+                        ? "error"
+                        : pending.length
+                          ? "pending"
+                          : "cancelled",
+                    pendingRequestIds: pending.map((request) => request.id),
+                    canCheck: Boolean(
+                      pending.length ||
+                      pollError ||
+                      latestRequest?.status === "failed",
+                    ),
+                    canDismiss: Boolean(
+                      !pending.length && showCancelledRequest && !pollError,
+                    ),
+                  }
+                : undefined
+            }
+            busy={busy}
+            onCheck={() => void perform(checkResearch)}
+            onCancel={(requestId) =>
+              void perform(() => cancelResearch(requestId))
+            }
+            onDismiss={() => {
+              if (latestRequest) setDismissedRequestStatus(latestRequest.id);
+            }}
+          />
+        </div>
         <section
           className="records-surface"
           aria-label="Research results"
@@ -1950,56 +2098,6 @@ function Workspace() {
             tabIndex={0}
             aria-label="Scrollable results table"
           >
-            {(pending.length > 0 ||
-              latestRequest?.status === "failed" ||
-              showCancelledRequest ||
-              pollError) && (
-              <div className="research-status" role="status">
-                {pending.length > 0 && !pollError && (
-                  <LoaderCircle className="research-spinner" size={14} />
-                )}
-                <span>
-                  {pollError ||
-                    (pending.length
-                      ? "Waiting for agent results…"
-                      : showCancelledRequest
-                        ? "Research cancelled. No results were added."
-                        : latestRequest?.error)}
-                </span>
-                {(pending.length > 0 ||
-                  pollError ||
-                  latestRequest?.status === "failed") && (
-                  <Button
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => void perform(checkResearch)}
-                  >
-                    Check
-                  </Button>
-                )}
-                {pending.map((r) => (
-                  <Button
-                    key={r.id}
-                    variant="ghost"
-                    aria-label="Cancel research request"
-                    title="Cancel this request and stop accepting its results"
-                    disabled={busy}
-                    onClick={() => void perform(() => cancelResearch(r.id))}
-                  >
-                    Cancel research
-                  </Button>
-                ))}
-                {!pending.length && showCancelledRequest && !pollError && (
-                  <Button
-                    variant="ghost"
-                    aria-label="Dismiss cancelled research status"
-                    onClick={() => setDismissedRequestStatus(latestRequest.id)}
-                  >
-                    <X />
-                  </Button>
-                )}
-              </div>
-            )}
             {view.refresh && (
               <div className="refresh-context">
                 <span>
@@ -2122,6 +2220,10 @@ function Workspace() {
                             (proposal) => !view.update?.decisions[proposal.id],
                           );
                         const rawValue = effectiveValue(view, r, c.key);
+                        const diagnostic = cellDiagnosticSummary(r, c.key);
+                        const diagnosticLabel = diagnostic
+                          ? `${amended ? "Original research: " : ""}${diagnostic}`
+                          : undefined;
                         const missing =
                           rawValue == null ||
                           (typeof rawValue === "string" &&
@@ -2156,11 +2258,11 @@ function Workspace() {
                             <button
                               className={`cell-button ${markerCount ? "has-indicators" : ""} ${markerCount === 2 ? "has-two-indicators" : ""}`}
                               data-cell={`${i}-${ci}`}
-                              aria-label={`${c.label}: ${value}. Result ${pageStart + i + 1}${amended ? (amended.sourceSnapshotId ? ". Updated" : ". Edited") : ""}${cellResearch.length ? `. ${researchLabel} available` : ""}${change ? `. ${change.decision ? "Reviewed" : change.status}` : ""}${pendingProposal ? ". Update proposal available" : ""}`}
+                              aria-label={`${c.label}: ${value}. Result ${pageStart + i + 1}${diagnosticLabel ? `. ${diagnosticLabel}` : ""}${amended ? (amended.sourceSnapshotId ? ". Updated" : ". Edited") : ""}${cellResearch.length ? `. ${researchLabel} available` : ""}${change ? `. ${change.decision ? "Reviewed" : change.status}` : ""}${pendingProposal ? ". Update proposal available" : ""}`}
                               aria-controls="cell-actions"
                               aria-pressed={row?.id === r.id && field === c.key}
                               disabled={busy}
-                              title={`${value}${amended ? (amended.sourceSnapshotId ? " · Updated from research" : " · Edited") : ""}${cellResearch.length ? ` · ${researchLabel} available` : ""}`}
+                              title={`${value}${diagnosticLabel ? ` · ${diagnosticLabel}` : ""}${amended ? (amended.sourceSnapshotId ? " · Updated from research" : " · Edited") : ""}${cellResearch.length ? ` · ${researchLabel} available` : ""}`}
                               onClick={(e) =>
                                 selectCell(r.id, c.key, e.currentTarget)
                               }
@@ -2263,6 +2365,13 @@ function Workspace() {
                   : rows.length === view.snapshot.rows.length
                     ? `${rows.length} ${rows.length === 1 ? "result" : "results"}`
                     : `${rows.length} of ${view.snapshot.rows.length} results`}
+                {researchGapSummary(view.snapshot.researchQuality) && (
+                  <span
+                    title={researchGapSummary(view.snapshot.researchQuality)}
+                  >
+                    {" · Partial research"}
+                  </span>
+                )}
               </span>
               {view.preview &&
                 view.preview.total > view.snapshot.rows.length && (
@@ -2457,6 +2566,9 @@ function Workspace() {
                         {captured}
                       </time>
                     </span>
+                    {selectedCellDiagnostic ? (
+                      <p>Original research: {selectedCellDiagnostic}</p>
+                    ) : null}
                   </div>
                 )}
                 {tab === "correct" &&
@@ -2762,6 +2874,32 @@ function Workspace() {
           </div>
         )}
       </div>
+      <dialog
+        ref={queryFeedbackDialog}
+        id="query-feedback-dialog"
+        className="continuation-dialog query-feedback-dialog"
+        aria-labelledby="query-feedback-title"
+        onClose={() => {
+          setQueryFeedbackOpen(false);
+          menu.current
+            ?.querySelector("summary")
+            ?.focus({ preventScroll: true });
+        }}
+      >
+        <div className="dialog-heading">
+          <h2 id="query-feedback-title">How this table was built</h2>
+          <Button
+            variant="ghost"
+            aria-label="Close query description"
+            onClick={() => queryFeedbackDialog.current?.close()}
+          >
+            <X />
+          </Button>
+        </div>
+        {queryFeedbackOpen && (
+          <QueryFeedbackPanel feedback={view.snapshot.queryFeedback} />
+        )}
+      </dialog>
       <dialog
         ref={proposalReviewDialog}
         id="proposal-review-dialog"

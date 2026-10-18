@@ -25,7 +25,16 @@ import {
   savePrivate,
   reconcileFlight,
   ownerBearer,
+  providerBindings,
+  assertCapabilities,
+  usageWarnings,
 } from "./personal-cloud.mjs";
+import { parseArguments as parseSetup, flightConfiguration } from "./setup.mjs";
+import {
+  exaOperators,
+  exaResearchLimits,
+  exaSearchTypes,
+} from "../apps/research/server/hosted-exa.ts";
 const root = resolve(import.meta.dirname, "..");
 const hash = (v) => createHash("sha256").update(v).digest("hex");
 const config = () => ({
@@ -78,6 +87,334 @@ const env = {
   VERCEL_TOKEN: "vercel-test-secret",
   MOTHERDUCK_TOKEN: "motherduck-test-secret",
 };
+const researchProvider = () => ({
+  name: "exa",
+  secret_name: "personal_exa",
+  approved_cost_microusd: 50000,
+  daily_cost_microusd: 100000,
+  model: {
+    name: "configured-model",
+    secret_name: "personal_openai",
+    reasoning_effort: "low",
+  },
+  embedding: { name: "text-embedding-3-small", secret_name: "personal_openai" },
+});
+
+test("research opt-in advertises exact operators, processors and provider-managed usage", () => {
+  const path = workspace(),
+    plan = createPlan(
+      { ...config(), provider: researchProvider() },
+      root,
+      path,
+    );
+  assert.deepEqual(plan.research.live_operators, [
+    "WEB_SEARCH",
+    "WEB_FETCH",
+    "SEM_MATCH",
+    "SEM_EXTRACT",
+    "SEM_EXTRACT_ALL",
+    "SEM_NORM",
+    "SEM_SCORE",
+  ]);
+  assert.deepEqual(plan.research.third_party_processors, ["exa", "openai"]);
+  assert.equal(plan.research.model, "configured-model");
+  assert.equal(plan.research.embedding, "text-embedding-3-small");
+  assert.equal(plan.limits.execution_enabled, false);
+  assert.equal(plan.limits.model_calls_during_setup, 0);
+  assert.equal(plan.limits.usage_mode, "provider_managed");
+  assert.equal(plan.limits.provider_cost_microusd_per_job, 50000);
+  assert.match(plan.research.usage_basis, /estimates/);
+  assert.deepEqual(
+    providerBindings(plan.config).map((entry) => entry.name),
+    ["personal_exa", "personal_openai"],
+  );
+  const options = parseSetup(setupArguments(plan.config, path), {});
+  assert.equal(options.exa.descriptor.version, "exa-research.v3");
+  assert.equal(options.exa.descriptor.model.reasoning_effort, "low");
+  assert.equal(
+    flightConfiguration(options, "a".repeat(64), "reviewed")
+      .SOURCESQL_OPENAI_EMBEDDING_SECRET_NAME,
+    "personal_openai",
+  );
+  assert.deepEqual(
+    createPlan(config(), root, path).research.live_operators,
+    [],
+  );
+  const embeddingOnly = researchProvider();
+  delete embeddingOnly.model;
+  const only = createPlan({ ...config(), provider: embeddingOnly }, root, path);
+  assert.deepEqual(only.research.live_operators, [
+    "WEB_SEARCH",
+    "WEB_FETCH",
+    "SEM_SCORE",
+  ]);
+  assert.equal(only.research.model, null);
+});
+
+test("semantic setup rejects unsupported providers, keys, partial models and conflicting shared-secret reuse", () => {
+  for (const change of [
+    { name: "brave", request_cost_microusd: 5000 },
+    { model: { name: "configured-model" } },
+    {
+      model: {
+        name: "configured-model",
+        secret_name: "personal_openai",
+        api_key: "never-in-config",
+      },
+    },
+    { model: { name: "configured-model", secret_name: "personal_exa" } },
+    { embedding: { name: "unknown", secret_name: "personal_openai" } },
+    {
+      embedding: {
+        name: "text-embedding-3-small",
+        secret_name: "personal_openai",
+        reuse_secret: true,
+      },
+    },
+  ])
+    assert.throws(
+      () =>
+        validateConfig({
+          ...config(),
+          provider: { ...researchProvider(), ...change },
+        }),
+      /invalid_(?:provider_)?configuration/,
+    );
+});
+
+test("verification rejects capabilities that disagree with the reviewed research adapters or limits", () => {
+  const configured = validateConfig({
+      ...config(),
+      provider: researchProvider(),
+    }),
+    policy = parseSetup(setupArguments(configured, "/synthetic"), {}).exa
+      .policy;
+  const expected = {
+    profiles: [
+      { name: "fixture", mode: "fixture", provider: "fixture" },
+      ...Object.entries(exaSearchTypes(policy)).map(([name, search_type]) => ({
+        name,
+        search_type,
+        mode: "live",
+        provider: "exa",
+        operators: exaOperators(policy),
+        model_configured: true,
+        model_name: configured.provider.model.name,
+        embedding_configured: true,
+        embedding_model: configured.provider.embedding.name,
+        embedding_adapter_version: "openai-embeddings.v2",
+        embedding_token_encoding: "cl100k_base",
+        score_basis: "cosine_similarity",
+        search_limits: {
+          ...exaResearchLimits(policy),
+          max_cost_microusd: configured.provider.approved_cost_microusd,
+        },
+      })),
+    ],
+    flight_submission_enabled: false,
+    max_flight_runtime_seconds: 120,
+    usage_mode: "provider_managed",
+    monthly_execution_reserve_seconds: null,
+    monthly_provider_reserve_microusd: null,
+    daily_execution_reserve_seconds: null,
+  };
+  assertCapabilities(configured, expected);
+  for (const mutate of [
+    (caps) => {
+      caps.profiles[1].embedding_configured = false;
+    },
+    (caps) => {
+      caps.profiles[1].model_name = "other-model";
+    },
+    (caps) => {
+      caps.profiles[1].operators = ["WEB_SEARCH"];
+    },
+    (caps) => {
+      caps.profiles[1].search_limits.max_model_requests = 1000;
+    },
+    (caps) => {
+      caps.profiles.push({ name: "unplanned" });
+    },
+    (caps) => {
+      caps.monthly_provider_reserve_microusd = 99999999;
+    },
+    (caps) => {
+      caps.usage_mode = "application_reservations";
+    },
+    (caps) => {
+      caps.daily_execution_reserve_seconds = 600;
+    },
+    (caps) => {
+      caps.flight_submission_enabled = true;
+    },
+  ]) {
+    const changed = structuredClone(expected);
+    mutate(changed);
+    assert.throws(
+      () => assertCapabilities(configured, changed),
+      /hosted_capabilities_mismatch/,
+    );
+  }
+});
+
+test("missing OpenAI credentials refuse before any cloud account access", async () => {
+  const path = workspace(),
+    plan = createPlan(
+      { ...config(), provider: researchProvider() },
+      root,
+      path,
+    );
+  for (const key of [undefined, "has spaces", "x".repeat(4097)]) {
+    let accessed = false;
+    await assert.rejects(
+      applyPlan(
+        plan,
+        root,
+        path,
+        { ...env, EXA_API_KEY: "private-exa", OPENAI_API_KEY: key },
+        {},
+        () => {},
+        {
+          api: async () => {
+            accessed = true;
+          },
+        },
+      ),
+      /missing_or_invalid_model_credential/,
+    );
+    assert.equal(accessed, false);
+  }
+});
+
+test("shared OpenAI secret recovers a lost creation response without keys entering Vercel or state", async () => {
+  const path = workspace(),
+    plan = createPlan(
+      { ...config(), provider: researchProvider() },
+      root,
+      path,
+    ),
+    state = {},
+    captures = [],
+    secrets = new Set(),
+    sqlCalls = [];
+  flightReceipt(path, plan);
+  let loseOpenAI = true;
+  const connect = async () => ({
+    query: async (sql) => {
+      sqlCalls.push(sql);
+      if (sql.startsWith("SELECT name,type,storage")) {
+        const name = sql.match(/WHERE name='([^']+)'/)[1];
+        return {
+          rows: secrets.has(name)
+            ? [{ name, type: "flights", storage: "motherduck" }]
+            : [],
+        };
+      }
+      const name = sql.match(/^CREATE SECRET "([^"]+)"/)[1];
+      secrets.add(name);
+      if (name === "personal_openai" && loseOpenAI) {
+        loseOpenAI = false;
+        throw Error("synthetic lost response");
+      }
+      return { rows: [] };
+    },
+    end: async () => {},
+  });
+  const injected = {
+    api: fakeAPI(plan, captures),
+    connect,
+    run: () => {},
+    setupModule,
+  };
+  await assert.rejects(
+    applyPlan(
+      plan,
+      root,
+      path,
+      {
+        ...env,
+        EXA_API_KEY: "private-exa-key",
+        OPENAI_API_KEY: "private-model-key",
+      },
+      state,
+      () => {},
+      injected,
+    ),
+    /synthetic lost response/,
+  );
+  assert.equal(state.provider_secret_ready, true);
+  assert.equal(state.openai_personal_openai_secret_attempted, true);
+  assert.equal(state.openai_personal_openai_secret_ready, undefined);
+  await applyPlan(plan, root, path, env, state, () => {}, injected);
+  assert.equal(state.openai_personal_openai_secret_ready, true);
+  assert.equal(
+    sqlCalls.filter((sql) => sql.startsWith('CREATE SECRET "personal_openai"'))
+      .length,
+    1,
+  );
+  assert.ok(
+    !JSON.stringify({ state, captures, plan }).includes("private-model-key"),
+  );
+  assert.ok(!JSON.stringify(captures).includes("private-exa-key"));
+});
+
+test("research Flight recovery requires every exact secret binding", async () => {
+  const path = workspace(),
+    plan = createPlan(
+      { ...config(), provider: researchProvider() },
+      root,
+      path,
+    ),
+    receipt = { ...flightReceipt(path, plan), flight_name: "reviewed-flight" },
+    expected = { DATABASE: plan.config.database };
+  let observed = ["personal_openai", "personal_exa"];
+  const client = {
+    query: async (sql) => ({
+      rows: sql.includes("md_get_flight_version")
+        ? [
+            {
+              instance_type: "F4",
+              max_runtime_sec: 120,
+              config_json: JSON.stringify(expected),
+              source_hash: receipt.flight_source_sha256,
+              requirements_hash: receipt.requirements_sha256,
+              secrets_json: JSON.stringify(observed),
+            },
+          ]
+        : [
+            {
+              name: "reviewed-flight",
+              current_version: 1,
+              schedule_cron: null,
+            },
+          ],
+    }),
+  };
+  await reconcileFlight(
+    client,
+    receipt,
+    receipt.flight_id,
+    plan.config,
+    expected,
+  );
+  for (const names of [
+    ["personal_exa"],
+    ["personal_exa", "unapproved"],
+    ["personal_exa", "personal_openai", "personal_openai"],
+  ]) {
+    observed = names;
+    await assert.rejects(
+      reconcileFlight(
+        client,
+        receipt,
+        receipt.flight_id,
+        plan.config,
+        expected,
+      ),
+      /flight_recovery_mismatch/,
+    );
+  }
+});
 function fakeAPI(
   plan,
   captures,
@@ -207,11 +544,12 @@ test("strict configuration rejects secrets, invalid owners, different destinatio
     true,
   );
 });
-test("personal-cloud defaults use configured monthly reservations without an implicit daily guard", () => {
+test("personal-cloud defaults have no accumulated reservation gates", () => {
   const normalized = validateConfig(config());
-  assert.equal(normalized.monthly_flight_seconds, 18000);
-  assert.equal(normalized.monthly_provider_cost_microusd, 10000000);
+  assert.equal(normalized.monthly_flight_seconds, undefined);
+  assert.equal(normalized.monthly_provider_cost_microusd, undefined);
   assert.equal(normalized.daily_flight_seconds, undefined);
+  assert.deepEqual(usageWarnings(normalized), []);
   const explicit = validateConfig({
     ...config(),
     monthly_flight_seconds: 0,
@@ -221,6 +559,14 @@ test("personal-cloud defaults use configured monthly reservations without an imp
   assert.equal(explicit.monthly_flight_seconds, 0);
   assert.equal(explicit.monthly_provider_cost_microusd, 0);
   assert.equal(explicit.daily_flight_seconds, 0);
+  assert.equal(usageWarnings(explicit).length, 3);
+  assert.ok(
+    usageWarnings(explicit).every((warning) =>
+      /deprecated metadata.*no longer limits usage.*do not measure account balances/.test(
+        warning,
+      ),
+    ),
+  );
   const maximum = validateConfig({
     ...config(),
     monthly_flight_seconds: 2678400,
@@ -253,10 +599,18 @@ test("monthly and optional daily reservation fields reject malformed or unbounde
         `${field}: ${value}`,
       );
 });
-test("monthly-only plans remove lower-level legacy daily defaults while explicit daily guards survive", () => {
+test("provider-managed settings omit accumulated limits even from explicit legacy configurations", () => {
   const settings = {
     SOURCESQL_BACKEND: "motherduck",
+    SOURCESQL_USAGE_MODE: "operator_reserved",
     SOURCESQL_FLIGHT_DAILY_SECONDS: "600",
+    SOURCESQL_FLIGHT_MONTHLY_SECONDS: "18000",
+    SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD: "10000000",
+    SOURCESQL_EXA_DAILY_COST_MICROUSD: "1000000",
+    SOURCESQL_BRAVE_DAILY_COST_MICROUSD: "1000000",
+    SOURCESQL_SERPER_DAILY_COST_MICROUSD: "1000000",
+    SOURCESQL_FLIGHT_MAX_RUNTIME_SEC: "120",
+    SOURCESQL_EXA_APPROVED_COST_MICROUSD: "50000",
   };
   const secrets = {
     MOTHERDUCK_TOKEN: "fixture-database-key",
@@ -267,44 +621,50 @@ test("monthly-only plans remove lower-level legacy daily defaults while explicit
     settings,
     secrets,
   );
-  assert.equal(monthly.SOURCESQL_FLIGHT_MONTHLY_SECONDS, "18000");
-  assert.equal(monthly.SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD, "10000000");
   assert.equal(monthly.SOURCESQL_BACKEND, "motherduck");
-  assert.ok(!Object.hasOwn(monthly, "SOURCESQL_FLIGHT_DAILY_SECONDS"));
-  assert.deepEqual(settings, {
-    SOURCESQL_BACKEND: "motherduck",
-    SOURCESQL_FLIGHT_DAILY_SECONDS: "600",
-  });
+  assert.equal(monthly.SOURCESQL_USAGE_MODE, "provider_managed");
+  assert.equal(monthly.SOURCESQL_FLIGHT_MAX_RUNTIME_SEC, "120");
+  assert.equal(monthly.SOURCESQL_EXA_APPROVED_COST_MICROUSD, "50000");
+  const capKeys = Object.keys(settings).filter((key) =>
+    /DAILY|MONTHLY/.test(key),
+  );
+  for (const key of capKeys) assert.ok(!Object.hasOwn(monthly, key), key);
+  assert.equal(settings.SOURCESQL_FLIGHT_DAILY_SECONDS, "600");
   for (const daily of [0, 600, 86400]) {
     const explicit = environmentSettings(
-      validateConfig({ ...config(), daily_flight_seconds: daily }),
+      validateConfig({
+        ...config(),
+        daily_flight_seconds: daily,
+        monthly_flight_seconds: 0,
+        monthly_provider_cost_microusd: 0,
+      }),
       settings,
       secrets,
     );
-    assert.equal(explicit.SOURCESQL_FLIGHT_DAILY_SECONDS, String(daily));
-    assert.equal(explicit.SOURCESQL_FLIGHT_MONTHLY_SECONDS, "18000");
+    for (const key of capKeys) assert.ok(!Object.hasOwn(explicit, key), key);
   }
 });
-test("reviewed plans bind monthly reservations and changes require new approval", () => {
+test("reviewed plans disclose reference estimates and bind deprecated inputs without enforcing them", () => {
   const path = workspace();
   const first = createPlan(config(), root, path);
-  assertPlan(
-    first,
-    createPlan(
-      {
-        ...config(),
-        monthly_flight_seconds: 18000,
-        monthly_provider_cost_microusd: 10000000,
-      },
-      root,
-      path,
-    ),
-    first.plan_sha256,
+  assertPlan(first, createPlan(config(), root, path), first.plan_sha256);
+  assert.equal(first.limits.usage_mode, "provider_managed");
+  assert.equal(first.limits.max_flight_runtime_seconds, 120);
+  assert.deepEqual(first.limits.reference_notices.exa, {
+    cost_microusd: 10000000,
+    period: "UTC calendar month",
+  });
+  assert.deepEqual(first.limits.reference_notices.motherduck_f4, {
+    runtime_seconds: 1800,
+    period: "UTC day",
+  });
+  assert.match(
+    first.limits.reference_notices.basis,
+    /account plan, payment method and remaining credits are unknown/,
   );
-  assert.equal(first.limits.reservation_period, "UTC calendar month");
-  assert.equal(first.limits.allowance, "configured");
-  assert.equal(first.limits.flight_seconds_per_month, 18000);
-  assert.equal(first.limits.provider_cost_microusd_per_month, 10000000);
+  assert.deepEqual(first.warnings, []);
+  assert.ok(!Object.hasOwn(first.limits, "flight_seconds_per_month"));
+  assert.ok(!Object.hasOwn(first.limits, "provider_cost_microusd_per_month"));
   assert.ok(!Object.hasOwn(first.limits, "flight_seconds_per_day"));
   for (const fields of [
     { monthly_flight_seconds: 17999 },
@@ -325,10 +685,14 @@ test("reviewed plans bind monthly reservations and changes require new approval"
     root,
     path,
   );
-  assert.equal(daily.limits.flight_seconds_per_day, 600);
-  assert.equal(daily.limits.flight_seconds_per_month, 18000);
+  assert.deepEqual(daily.limits, first.limits);
+  assert.equal(daily.warnings.length, 1);
+  assert.match(
+    daily.warnings[0],
+    /daily_flight_seconds is deprecated metadata/,
+  );
 });
-test("monthly gateway caps stay separate from each provider's reviewed execution policy", () => {
+test("provider daily allowance metadata is optional and never emitted as an accumulated cap", () => {
   for (const name of ["exa", "brave", "serper"]) {
     const provider = {
       name,
@@ -358,8 +722,21 @@ test("monthly gateway caps stay separate from each provider's reviewed execution
         RESEARCH_BEARER_TOKEN: "a".repeat(40),
       },
     );
-    assert.equal(settings[prefix + "_DAILY_COST_MICROUSD"], "100000");
-    assert.equal(settings.SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD, "10000000");
+    assert.ok(!Object.hasOwn(settings, prefix + "_DAILY_COST_MICROUSD"));
+    assert.ok(
+      !Object.hasOwn(settings, "SOURCESQL_PROVIDER_MONTHLY_COST_MICROUSD"),
+    );
+    assert.equal(usageWarnings(base).length, 1);
+    const { daily_cost_microusd: _daily, ...perJobProvider } = provider;
+    const withoutDaily = validateConfig({
+      ...config(),
+      provider: perJobProvider,
+    });
+    assert.deepEqual(usageWarnings(withoutDaily), []);
+    const options = parseSetup(setupArguments(withoutDaily, "/synthetic"), {});
+    const runtime = flightConfiguration(options, "a".repeat(64), "reviewed");
+    assert.equal(runtime[prefix + "_APPROVED_COST_MICROUSD"], "50000");
+    assert.ok(!Object.keys(runtime).some((key) => /DAILY|MONTHLY/.test(key)));
   }
 });
 test("a reviewed plan binds every public file, exact setup source, account, owner, provider and limits", () => {

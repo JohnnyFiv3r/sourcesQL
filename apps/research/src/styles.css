@@ -914,6 +914,138 @@ html[data-table-transition="out"] {
   min-height: 0;
   overflow: hidden;
 }
+.workspace-notifications {
+  position: absolute;
+  inset: 12px 12px auto;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-height: max(0px, calc(100% - var(--selection-dock-space) - 24px));
+  overflow-y: auto;
+  scrollbar-width: thin;
+  pointer-events: none;
+}
+.research-job-workspace {
+  position: relative;
+  min-width: 0;
+}
+.research-job-workspace .workspace-notifications {
+  max-height: calc(100% - 24px);
+}
+.usage-notice-layer {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  flex: none;
+  pointer-events: none;
+}
+.usage-notice-layer[data-state="hidden"] {
+  height: 0;
+}
+.usage-notice-layer[data-state="visible"] {
+  margin-bottom: 8px;
+}
+.usage-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+  width: max-content;
+  max-width: min(560px, 100%);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow:
+    0 6px 24px #00000016,
+    0 1px 4px #00000008;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(10px);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--overlay-duration) var(--overlay-easing),
+    transform var(--overlay-duration) var(--overlay-easing),
+    visibility 0s linear var(--overlay-duration);
+}
+.usage-notice[data-state="visible"] {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+.usage-notice-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+  color: var(--primary);
+}
+.usage-notice-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 180px;
+  overflow-wrap: anywhere;
+}
+.usage-notice-copy strong {
+  font-weight: 600;
+}
+.usage-notice-copy span {
+  color: var(--muted);
+}
+.usage-notice-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  gap: 8px;
+  min-width: 0;
+}
+.usage-notice-actions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--link);
+  text-decoration: none;
+}
+.usage-notice-actions a:hover {
+  text-decoration: underline;
+}
+.usage-notice-actions a svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.usage-notice .button {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 7px;
+  border-radius: 999px;
+}
+.workspace-notifications .feedback-layer {
+  position: relative;
+  inset: auto;
+  align-items: flex-start;
+  width: 100%;
+  flex: none;
+}
+.workspace-notifications
+  .feedback-layer:has(.feedback-toast[data-state="hidden"]) {
+  height: 0;
+}
+.workspace-notifications
+  .feedback-layer:has(.feedback-toast[data-state="visible"]) {
+  margin-bottom: 8px;
+}
 .selection-dock {
   position: absolute;
   bottom: 12px;
@@ -1177,6 +1309,9 @@ label .input {
   .feedback-layer {
     inset: 8px 8px auto;
   }
+  .workspace-notifications {
+    inset: 8px 8px auto;
+  }
   .selection-dock {
     bottom: 8px;
     max-width: calc(100% - 16px);
@@ -1395,12 +1530,11 @@ label .input {
   border-color: #a33524;
 }
 
-/* Research navigation shares the title row; status flows with the table. */
+/* Research navigation shares the title row; status floats above the table. */
 .back-button {
   flex: none;
   margin-left: -6px;
 }
-.research-status,
 .refresh-context {
   position: sticky;
   left: 0;
@@ -1414,14 +1548,101 @@ label .input {
   border-bottom: 1px solid var(--border);
   background: var(--background);
 }
-.research-status > span,
 .refresh-context > span:first-child {
   flex: 1;
   min-width: 0;
 }
+.research-status-layer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  flex: none;
+  pointer-events: none;
+}
+.research-status-layer[data-state="hidden"] {
+  height: 0;
+}
+.research-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  width: max-content;
+  max-width: min(560px, 100%);
+  padding: 5px 6px 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow:
+    0 6px 24px #00000016,
+    0 1px 4px #00000008;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(10px);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--overlay-duration) var(--overlay-easing),
+    transform var(--overlay-duration) var(--overlay-easing),
+    visibility 0s linear var(--overlay-duration);
+}
+.research-status[data-state="visible"] {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+.research-status-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 130px;
+  color: var(--muted);
+}
+.research-status-message > svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--primary);
+}
+.research-status-message > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  max-height: clamp(3rem, calc(100dvh - 240px), 8rem);
+  overflow-y: auto;
+}
+.research-status[data-kind="error"] .research-status-message > svg {
+  color: #a33524;
+}
+:root[data-theme="dark"]
+  .research-status[data-kind="error"]
+  .research-status-message
+  > svg {
+  color: #ffab9d;
+}
+.research-status-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  flex-wrap: wrap;
+}
 .research-status .button {
-  min-height: 28px;
-  padding: 4px 7px;
+  min-height: 36px;
+  padding: 7px 10px;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+.research-status .dismiss-research-status {
+  width: 36px;
+  padding: 9px;
 }
 .refresh-context > span:first-child {
   overflow: hidden;

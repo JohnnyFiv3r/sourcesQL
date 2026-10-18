@@ -550,3 +550,36 @@ def test_exa_claim_requires_trusted_allowlist_and_exact_stored_policy(
         assert error.value.code == "unsupported_capability"
         assert job(store, job_id)["claim_token"] is None
     assert counts(store) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("statuses", "attempts", "settlement", "expected"),
+    [
+        (["not_dispatched"], 1, "settled", "not_dispatched"),
+        (["completed"], 1, "settled", "settled"),
+        (["not_dispatched", "completed"], 2, "settled", "settled"),
+        (["not_dispatched"], 2, "settled", "outcome_unknown"),
+        (["remote_outcome_unknown"], 1, "pending", "outcome_unknown"),
+        (["unknown_status"], 1, "settled", "outcome_unknown"),
+        ([None], 1, "settled", "outcome_unknown"),
+        (["completed_validation_failed"], 1, "settled", "settled"),
+    ],
+)
+def test_failed_job_reports_actual_dispatch_certainty(
+    make_store, statuses, attempts, settlement, expected
+):
+    store = make_store()
+    job_id, context = seed_job(store)
+    token, _ = claim(store, job_id, context)
+    run_id, _, _ = pending_run(store, job_id)
+    receipt = store.run(run_id)
+    receipt.update(
+        status="failed",
+        settlement_status=settlement,
+        dispatch_intents=[{"counter": "model_requests", "amount": attempts}],
+        provider_events=[{"kind": "embedding", "status": status} for status in statuses],
+    )
+    store.update_run(receipt)
+    store.fail_job(job_id, token, "storage_unavailable", "PRIVATE-REASON", "storage")
+    output = json.loads(job(store, job_id)["output_json"])
+    assert output == {"stage": "storage", "provider_dispatch": expected}

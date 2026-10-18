@@ -132,28 +132,18 @@ research to repair a display failure.
 
 ## 4. Improve research completion and cell evidence
 
-The [accuracy and completion plan](accuracy-plan.md) tracks the unimplemented
-work with stable priority IDs, current evidence and exit checks. First finish
-canonical hosted preflight, actionable errors and durable successful branches
-and stages. Q01a now preserves safe failure codes and failed-run inspection
-through local Python-writer/gateway/MCP checks; canonical preflight and live
-qualification remain pending. Then improve query coverage, source-local entity
-reconciliation, complementary evidence, relevant source windows, claim scope
-and cell lineage.
-Useful unanswered cells need explicit reasons and bounded follow-up rather
-than causing a whole request to fail or silently becoming negative claims.
+The [accuracy and completion plan](accuracy-plan.md) tracks stable priority IDs,
+implementation evidence and live acceptance gates. New local work adds canonical
+hosted preflight, durable successful stages, typed search coverage, retained source
+windows, item/field evidence lineage, explained unknowns and declared research
+obligations. Host-authored SQL continues to govern shortlisting, identity joins,
+eligibility and presentation; no domain-specific mandatory filter is inserted.
 
-Local, unreleased changes add batched OpenAI embedding scoring and revised
-host-authored SQL guidance. `SEM_SCORE` is optional criterion-specific ranking;
-`SEM_MATCH` performs semantic predicates before detailed extraction where the
-authored plan supports it. Neither metadata gates nor score-first execution
-are universal prerequisites. Exact model-aware token counting and token-packed
-requests passed local checks; the public wheel also passed offline tokenizer
-checks. The compact Flight path prepares hash-pinned tokenizer data for admitted
-scoring jobs; its compact build and controlled startup checks passed locally.
-Actual hosted download, hosted activation, feasible
-detailed-extraction continuation and representative live cost/quality
-measurement remain pending.
+Batched OpenAI embeddings support optional criterion-specific `SEM_SCORE`.
+`SEM_MATCH` supplies semantic predicates; bounded source-local extraction follows
+where the authored plan calls for it. Collection-scoped `SEM_NORM` groups equivalent
+values without asserting shared identity. Offline regressions establish mechanics;
+fresh ChatGPT and Claude research must establish actual completion and quality.
 
 Keep the current search-only adopter default explicit while adding guided setup
 for model-capable profiles. Qualify fresh natural-language requests in ChatGPT

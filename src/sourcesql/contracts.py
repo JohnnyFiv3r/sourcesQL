@@ -9,6 +9,16 @@ import threading
 
 
 class SourcesQLError(Exception):
+    # Optional bounded diagnostics supplied by trusted adapters. Annotations do
+    # not imply these facts are present on an arbitrary error.
+    effect_state: str | None
+    remote_outcome_unknown: bool
+    http_status: int
+    provider_error_tag: str
+    request_id: str
+    retry_after_seconds: int
+    provider_capacity: dict[str, Any]
+
     def __init__(self, code: str, message: str, stage: str = "admission"):
         super().__init__(message)
         self.code, self.safe_message, self.stage = code, message, stage

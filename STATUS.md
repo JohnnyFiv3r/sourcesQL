@@ -6,6 +6,181 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased research completion work
+
+PR #3 review repairs distinguish proven pre-dispatch stops, known provider
+refusals, unknown outcomes and completed responses whose payload could not be
+retained. Explicit continuation can rearm only proven undispatched stages;
+an atomic journal-head claim prevents stale or concurrent branches from reusing
+lower counters. Successful publication seals the journal and reclaims duplicate
+checkpoint payloads within the publication transaction. A one-time migration
+also reclaims older published journals while retaining failed work. Transactional
+byte accounting reserves terminal metadata and replaces repeated payload scans;
+the unrelated 256-stage cap is removed. Keyset-paginated storage methods own
+checkpoint traversal, including recovery racing with publication cleanup.
+Hosted validation now runs once before trusted setup and provider preflight;
+usage notices observe platform metadata once and summarize month/day from one
+read snapshot. These repairs have fixture/mocked-provider regression coverage;
+they have not been deployed or published as a new release.
+
+Review-repair validation passes 1,166 Python/Flight tests (44 opt-in cases
+skipped), 445 app/MCP tests and 59 setup/onboarding checks, plus lint, Python
+typing and the Node 24 production build. The built wheel passes 145 targeted
+installed regressions. The compact Flight keeps its existing 200,000-byte
+source guard: omitting deployment-only setup helpers produces 194,370 bytes,
+while the public wheel retains those helpers. No new paid provider or hosted
+Flight execution is included in this qualification.
+
+Provider-managed metering is implemented for new reviewed personal-cloud plans
+and can be explicitly enabled on an existing deployment. Accumulated application
+reservations neither block dispatch nor grow in that mode. Historical counters,
+queued handles, finite per-job budgets and single active/uncertain Flight
+protection remain intact. Deployments without the new mode retain their prior
+operator safeguards until deliberately migrated.
+
+Run receipts meter Exa response estimates, provider requests and model tokens,
+including failed/cancelled work. Observed terminal Flight runtime is stored once;
+cost reports reconcile recent platform observations without starting work and
+retain unknown database, storage and older runtime components. The authenticated
+owner's `sourcesql_usage_report` exposes period/job totals without research text
+or credentials. App notices identify estimated sourcesQL reference allowance
+crossings and remain nonblocking. Dismissals persist per owner/provider/period.
+Provider-owned billing links do not change plans or introduce another consent
+step. Safe provider credit/rate/spending refusals retain saved work and recovery
+identity; unknown MotherDuck submission outcomes remain uncertain. See
+[usage metering](docs/usage-metering.md). Validation passes 905 Python tests
+(44 opt-in cases skipped), 444 app/MCP tests, 186 Flight tests and 41 onboarding
+tests, plus the Node 24 production build. Synthetic headless checks at 1100,
+420 and 320 px cover stable sizing, nonblocking actions, safe billing links,
+reduced motion and dismissal recovery. Provider-free Preview verification checks
+tool discovery, usage reports, archived widgets and saved research while retaining
+queued work and historical counters. Fresh ChatGPT/Claude acceptance remains
+separate; the published 0.2.3 artifacts are unchanged. New job presentation fields
+use versioned metadata so archived cards retain their strict legacy payload.
+
+Advisory SQL feedback is implemented and deployed on the existing Preview.
+Each new query records an
+AST-derived description independently of optional intended answer metadata,
+alongside exact SQL/parameter/input-pin hashes, missing intended columns and
+full-result row/NULL counts. Descriptions retain scoped CTEs, joins, aggregates,
+semantic instructions and limits; incomplete descriptions remain explicit.
+Missing fields and unavailable explanations do not reject valid research,
+remove rows or trigger automatic retries. The agent receives the feedback
+through query/result/evidence tools, and Table options opens a read-only
+explanation without another model call or Flight. Compatibility metadata stays
+outside legacy snapshot wire fields. Local, hosted and user acceptance evidence
+are recorded separately; see [query feedback](docs/query-feedback.md).
+Large valid rows take priority over optional explanation metadata in the app
+window; full feedback remains retained in engine storage and result inspection.
+Offline qualification passes 846 Python tests (44 opt-in cases skipped), 186
+Flight tests and 408 app/MCP tests, plus Python typing and the Node 24 build.
+Desktop and mobile headless checks cover dialog navigation, focus, escaping and
+read-only behavior. A user-run fresh ChatGPT mobile research pass subsequently
+displayed the requested qualified answer table successfully. This is acceptance
+of that research/presentation path, not a general factual-quality benchmark.
+Its expansion was blocked by the configured monthly search/model reservation
+allowance; it did not establish an expansion execution defect. The user also
+reported that ChatGPT's Always allow button leaves the approval card unchanged,
+while Allow once starts the tool. A read-only settings inspection found the
+plugin-specific permission already set to Allow all actions. Persistent host
+approval remains unresolved; tool annotation or connection changes are not a
+verified fix.
+
+The agent workflow now explicitly requires reviewing actual saved rows and
+supporting evidence, interpreting findings against the requested row unit and
+fields, and saving that interpretation through final SQL before opening the
+table. The renderer displays saved rows; it cannot turn a source catalog into an
+answer from the conversation. Query and render descriptions repeat this handoff
+so it is available through tool discovery as well as server instructions.
+Missing cells remain valid in honest partial answers, and explicit reopening
+does not trigger new research or transformations. This instruction change is
+deployed and has the above bounded fresh-host research acceptance; it introduces
+no new validation gates or provider calls.
+
+Agent instructions now keep request/mutation IDs internal and avoid separate
+code-tool calls solely to generate UUIDs. Existing IDs and idempotent recovery
+contracts remain unchanged. Host-generated activity captions and persistent
+approval controls remain outside the widget's styling and authorization policy.
+
+Pending expansion/refresh status now uses a compact animated overlay alongside
+other notifications instead of a row inside the table. It no longer changes
+the frame, table viewport or page sizing. Check, cancellation, error recovery
+and cancelled-status dismissal remain available. Isolated synthetic browser
+checks pass at desktop and 420/320 px mobile widths, including reduced motion,
+stable table/pagination geometry and selected-cell toolbar clearance. This UI
+change passes the Node 24 production build and all 412 app/MCP tests; the new
+immutable widget also passes archive/upload and package-resource checks. It
+still needs fresh ChatGPT acceptance.
+
+The render tool now returns a concise answer-surface handoff alongside saved
+data. Its tool-local description requires the requested row unit and answer
+fields, treats source hit lists as acquisition unless a catalog was requested,
+and keeps follow-up chat brief without duplicating the table. The query tool
+also points to declared research requirements. A successful tool response does
+not establish that the host displayed the app. All 383 app tests and the
+TypeScript production build pass; a recorded 24-source view renders under strict
+CSP in independent headless Chrome. The reported ChatGPT loading failure still
+needs host-side evidence; these checks do not establish ChatGPT acceptance.
+The render tool also mirrors its standard resource URI in ChatGPT's documented
+optional template alias. Resource-read regressions keep both paths on the same
+immutable bundle; data tools remain without a template. This compatibility
+change still needs verification in ChatGPT and is not a confirmed root cause.
+Inline sizing now treats nonpositive initial height budgets as unmeasured,
+using the existing 560 px fallback. A collapsed-frame reproduction previously
+reported zero indefinitely; the fixed bundle requests a positive height and
+renders. Four sizing regressions and five independent headless cases pass,
+including collapsed frames and partial host context. Positive host limits,
+fullscreen and local preview behavior are preserved. Previous public UI
+resources remain available under their original content hashes. The actual
+ChatGPT client context and end-to-end mobile rendering remain unverified.
+
+Optional HTTP diagnostics now distinguish tool discovery, renderer calls and
+public widget resource reads, including JSON-RPC failures carried by HTTP 200.
+They log protocol categories and public bundle hashes without credentials,
+research arguments, rows or error text. The feature is disabled by default.
+Actual HTTP tests cover resource delivery, a missing archived bundle, owner
+refusal and private-payload exclusion. Successful server delivery still does
+not establish that ChatGPT rendered the widget.
+
+A subsequent mobile trace identified a concrete resource failure: ChatGPT read
+the earlier `758dbf283e918839` bundle, which was absent from the deployment's
+explicit archive list. Each read returned a JSON-RPC error inside HTTP 200;
+authentication succeeded. The original public bytes have been recovered and
+added to the checksum-pinned archive and upload list. This repairs that missing
+resource without replacing its contents or changing saved research. Actual host
+rendering after the repair remains an acceptance check.
+
+The restored mobile widget then exposed a second compatibility problem: its
+strict snapshot parser predates quality metadata and per-cell diagnostics. The
+gateway now puts those additions in versioned presentation metadata outside the
+stable snapshot layout. Current widgets validate and restore them; older widgets
+can still show the original cells. Canonical storage, imports and exports retain
+strict validation and complete metadata. Bootstrap recovery preserves the exact
+table ID, makes at most one automatic saved-state read and rejects another
+table. Ambiguous calls without a saved identity no longer choose a default
+sample. Recorded-data checks reproduce the old failure and exercise same-table
+recovery without provider work. All 399 app tests and the production build pass; both the archived and current widgets render the recorded saved table, and six isolated startup/recovery cases pass. Actual mobile acceptance remains separate.
+
+PR #2 merged as `3cdfa00` after 796 Python and 357 app/gateway/MCP tests passed.
+The next local implementation covers canonical hosted preflight, bounded durable
+stage journals, explicit restart continuation/source recovery, query-hit
+provenance, retained evidence windows, item-level lineage and explained NULLs.
+Declared output requirements now separate execution success from unresolved
+research obligations and label those gaps in the existing result count. Scoring
+persists completed HTTP batches before strict cell validation or later deadlines;
+failed and uncertain effects cannot authorize replay. Batched storage checks and
+writes reduce per-row cloud overhead while rechecking authorization and cancellation
+before each paid batch and final publication. Guided personal-cloud setup accepts explicit model and
+embedding bindings while preserving search-only defaults.
+
+Targeted injected-failure and source-local evidence checks pass. The diagnostic
+UI keeps selection height stable and uses existing cell/correction affordances.
+Full suites pass: 965 Python/Flight tests (44 opt-in cases skipped), 377
+app/gateway/MCP tests and 59 onboarding checks. Python lint/type checks and the
+Node 24 production build pass. Installed artifacts, Docker, hosted alignment and
+fresh ChatGPT/Claude research remain separate acceptance gates. This work has not
+changed the published 0.2.3 artifacts. See [the working plan](docs/accuracy-plan.md).
+
 ## Unreleased notification UI
 
 Local source replaces in-flow feedback banners with a floating overlay using

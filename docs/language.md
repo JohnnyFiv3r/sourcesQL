@@ -106,5 +106,58 @@ A failed field is distinct from an ordinarily absent fact.
 
 All positional `WEB_SEARCH` arguments are query strings. Use
 `WEB_SEARCH('query', per_query_limit := 6)` to request six results; a numeric
-second positional argument is rejected. `sourcesql_explain` is available with
-the local Python engine; native hosted connections do not expose that tool.
+second positional argument is rejected. `sourcesql_explain` uses the same Python
+admission and restricted SQL worker as execution. Local validation is synchronous;
+hosted validation is an asynchronous, provider-free Flight. Supply a new
+`request_id`, poll its job, and retain the validation output. Validation consumes
+configured Flight capacity and does not reserve search or model usage. A later
+query needs its own request ID and revalidates its dependencies and limits.
+
+## Search coverage and evidence windows
+
+Search rows expose `search_hits`, a typed list of provider, search ID, query,
+query index, rank and optional request ID. `search_hit_count`, `search_query_count`
+and `best_search_rank` make coverage usable in ordinary SQL. Several hits can
+refer to one document or version; they are not independent confirmations.
+Run receipts retain requested and effective per-query intake separately.
+
+`SOURCE_WINDOW(content, start, length)` selects a zero-based character range from
+retained text without a provider call. For example:
+
+```sql
+SELECT url, SOURCE_WINDOW(content, $start, $length) AS passage
+FROM input.sources
+```
+
+Bind this saved result to a later extraction query. Supported projections retain
+the source version, original character offsets and content hash. Quotes are
+validated against those original coordinates. Constructing a look-alike literal
+or concatenating unrelated text does not create a source binding. Windowing
+neither fetches a newer page nor establishes that omitted text is irrelevant.
+Publication, observation and retrieval times remain separate source fields.
+
+`SEM_EXTRACT_ALL` reports its returned-item count and whether it reached the
+configured item ceiling. Reaching the ceiling means more items may exist; fewer
+items do not prove an exhaustive catalog. Use explicit source windows or further
+bounded extraction to investigate omitted material.
+
+## Missing facts and declared requirements
+
+Unanswered cells remain NULL. Where available, `cell_diagnostics` distinguishes
+unstated, uninspected, ambiguous, conflicting, failed and capacity-limited work.
+Diagnostics are not citations. The app exposes the original research reason
+through the cell and its existing correction flow.
+
+A query may declare `research_requirements` with `key_columns`, `fields` and
+`minimum_rows`. These name output column keys and a bounded minimum row count;
+they do not impose a hidden topical filter. The result's `research_quality`
+records unresolved cell obligations and row shortfall separately from execution
+success. `requirements_satisfied` means those declared shape/presence obligations
+were met; it does not verify truth, unique entity identity or complete web coverage.
+The existing result count labels unresolved declared requirements as partial
+research. This assessment describes the saved query output; a later manual
+correction does not rewrite that earlier observation. Query the effective view
+with declared requirements to assess a corrected result.
+Without declared requirements, research completeness remains `not_evaluated`.
+Reuse saved sources and inspect relevant windows before targeted gap searches.
+Any follow-up still consumes the existing authorized allowances.

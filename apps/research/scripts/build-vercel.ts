@@ -72,6 +72,38 @@ const historicalBundles = [
     filename: "research-b5ab74c900f06fdb.html",
     sha256: "b5ab74c900f06fdbe7aa0015c25fee66dbc09b4a9df16a152d0aaef1d0b2831c",
   },
+  {
+    filename: "research-20919a6895fa9fa4.html",
+    sha256: "20919a6895fa9fa4b77d92e3cc270d4e3e5be4303f822d1f14ade95158dc60a2",
+  },
+  {
+    filename: "research-758dbf283e918839.html",
+    sha256: "758dbf283e918839bdc96cb3a97b374e44a7b7ba0262fcdad35a796973ad79f0",
+  },
+  {
+    filename: "research-05a1fb4763622b13.html",
+    sha256: "05a1fb4763622b13883ff7e4bde4eb677ab7628ecdc211a9fea0114a7c3659a9",
+  },
+  {
+    filename: "research-898b5e1c6a61a0b8.html",
+    sha256: "898b5e1c6a61a0b85bf5fc319c0d8cda5ab6afadcbc9f89f6501a46bb8c1fd6a",
+  },
+  {
+    filename: "research-2f4ed43f372d2823.html",
+    sha256: "2f4ed43f372d2823b15c6cccc994587167349ca22d0d8ed82b24c1f52a7e3081",
+  },
+  {
+    filename: "research-f2cf065f35e39de4.html",
+    sha256: "f2cf065f35e39de4a492634732fb7c32381d64451b2531302724721fd6ca4948",
+  },
+  {
+    filename: "research-cf775e01f999f8db.html",
+    sha256: "cf775e01f999f8db08d9084d93f664a5bef6f39045bbd6ec58e2c9f5f5c7baa7",
+  },
+  {
+    filename: "research-06264491f36e0c07.html",
+    sha256: "06264491f36e0c0799c9216386622fbb84edc8d78b10414b901f63c1d7a88231",
+  },
 ] as const;
 
 export async function packageVercelAssets(

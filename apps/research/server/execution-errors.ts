@@ -82,3 +82,13 @@ export function safeRunErrors(errors: unknown) {
     ];
   });
 }
+
+export function safeFailureContext(context: unknown) {
+  if (!context || typeof context !== "object") return {};
+  const value = context as Record<string, unknown>;
+  return {
+    ...(typeof value.stage === "string" && stages.has(value.stage) ? { stage: value.stage } : {}),
+    ...(typeof value.provider_dispatch === "string" && ["not_dispatched", "settled", "rejected", "outcome_unknown"].includes(value.provider_dispatch)
+      ? { provider_dispatch: value.provider_dispatch } : {}),
+  };
+}

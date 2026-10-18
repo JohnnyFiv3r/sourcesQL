@@ -31,11 +31,19 @@ def execute_failing_job(values):
     from sourcesql.storage.motherduck import MotherDuckStore
 
     namespace, job_id, failure_kind = values
-    if failure_kind not in {"timeout", "connection_error", "http_429", "invalid_output"}:
+    if failure_kind not in {
+        "timeout",
+        "connection_error",
+        "http_429",
+        "invalid_output",
+        "preflight",
+    }:
         raise ValueError("Unreviewed synthetic provider failure")
     requests = []
 
     def reply(request):
+        if failure_kind == "preflight":
+            raise AssertionError("Validation must not dispatch providers")
         requests.append(request)
         if failure_kind == "timeout":
             raise httpx.ReadTimeout("PRIVATE-PROVIDER-TIMEOUT", request=request)
@@ -157,6 +165,8 @@ try:
                 rows = []
             elif request["operation"] == "execute_failing_job":
                 rows = execute_failing_job(request["values"])
+            elif request["operation"] == "execute_preflight_job":
+                rows = execute_failing_job([*request["values"], "preflight"])
             else:
                 cursor = connections[key].execute(request["sql"], request.get("values", []))
                 names = [column[0] for column in cursor.description] if cursor.description else []

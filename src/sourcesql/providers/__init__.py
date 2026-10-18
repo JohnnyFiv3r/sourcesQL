@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..contracts import Budget, SemanticOutcome, SourcesQLError
-from .common import SafeFetcher, normalized_url, resolve_public
+from .common import SafeFetcher, normalized_url, resolve_public, project_search_provenance
 from .fixture import FixtureProvider
 from .search import BraveProvider, ExaProvider, SerperProvider, search_options, validate_queries
 from .semantic import OpenAIEmbeddingProvider, PydanticSemanticProvider, TYPES
@@ -168,7 +168,7 @@ class ProviderRegistry:
 
     def preflight(self, operators, budget: Budget) -> None:
         """Refuse unavailable profile capabilities before any provider can acquire data."""
-        operators = set(operators)
+        operators = set(operators) - {"SOURCE_WINDOW"}
         if not operators:
             return
         if budget.limits["max_concurrency"] < 1:
@@ -221,11 +221,44 @@ class ProviderRegistry:
         )
         remaining = budget.limits["max_candidates"] - budget.counts.get("candidates", 0)
         per_query_limit = min(requested_limit, remaining // len(queries))
-        if per_query_limit < 1:
+        if per_query_limit < 1 and not hasattr(self, "stage_call"):
             raise SourcesQLError("budget_exhausted", "Candidate allowance exhausted", "acquisition")
         bounded_options = {**options, "per_query_limit": per_query_limit}
-        rows = self.search_provider.search(queries, bounded_options, budget)
-        budget.reserve("candidates", len(rows), "max_candidates")
+        if isinstance(self.search_provider, ExaProvider) and hasattr(self, "stage_journal"):
+            self.search_provider.stage_journal = self.stage_journal
+            self.search_provider.stage_options = {**options, "per_query_limit": requested_limit}
+            rows = self.search_provider.search(
+                queries, {**options, "per_query_limit": requested_limit}, budget
+            )
+        elif hasattr(self, "stage_call"):
+            rows = []
+            for index, query in enumerate(queries):
+
+                def acquire_query():
+                    available = budget.limits["max_candidates"] - budget.counts.get("candidates", 0)
+                    bound = min(requested_limit, available // (len(queries) - index))
+                    if bound < 1:
+                        raise SourcesQLError(
+                            "budget_exhausted", "Candidate allowance exhausted", "dispatch"
+                        )
+                    found = self.search_provider.search(
+                        [query], {**options, "per_query_limit": bound}, budget
+                    )
+                    # Count intake before checkpoint completion. Reuse must never
+                    # bypass a candidate reservation lost after acquisition.
+                    budget.reserve("candidates", len(found), "max_candidates")
+                    return found
+
+                found, reused = self.stage_call(
+                    "WEB_SEARCH",
+                    [query],
+                    {**options, "per_query_limit": requested_limit},
+                    acquire_query,
+                )
+                rows.extend(found)
+        else:
+            rows = self.search_provider.search(queries, bounded_options, budget)
+            budget.reserve("candidates", len(rows), "max_candidates")
         # Keep query membership while preserving independently acquired source versions.
         deduplicated: dict[tuple, dict] = {}
         for row in rows:
@@ -266,7 +299,7 @@ class ProviderRegistry:
                         row = fetch_row
                     assured.append(row)
                 rows = assured
-        return rows
+        return [project_search_provenance(row) for row in rows]
 
     def fetch(self, urls: list[str], options: dict, budget: Budget) -> list[dict]:
         self._authorize(budget)
@@ -289,7 +322,18 @@ class ProviderRegistry:
                     )
                 resolver = self.profile.get("resolver")
                 resolve_public(url, resolver) if resolver else resolve_public(url)
-        rows = self.fetch_provider.fetch(urls, options, budget)
+        if hasattr(self, "stage_call"):
+            rows = []
+            for url in urls:
+                found, _ = self.stage_call(
+                    "WEB_FETCH",
+                    [url],
+                    options,
+                    lambda url=url: self.fetch_provider.fetch([url], options, budget),
+                )
+                rows.extend(found)
+        else:
+            rows = self.fetch_provider.fetch(urls, options, budget)
         if options.get("source_mode") == "require_document" and any(
             row.get("status") == "acquired" and not row.get("coverage", {}).get("complete")
             for row in rows

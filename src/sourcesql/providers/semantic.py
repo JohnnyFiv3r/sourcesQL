@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
 import math
+import re
 from time import monotonic
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from pydantic.json_schema import SkipJsonSchema
 
 from ..contracts import Budget, SemanticOutcome, SourcesQLError, canonical
-from .common import ProviderTransportError, json_object, read_response, text_hash
+from .common import (
+    ProviderTransportError,
+    capture_provider_failure,
+    json_object,
+    read_response,
+    text_hash,
+)
 from .tokenization import get_embedding_tokenizer
 
 TYPES = {"VARCHAR", "BOOLEAN", "BIGINT", "DOUBLE", "DECIMAL(18,2)", "DATE", "TIMESTAMPTZ"}
@@ -52,6 +61,24 @@ class NormalizedEntry(BaseModel):
 class NormalizedOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     entries: list[NormalizedEntry]
+
+
+class FieldOutcome(BaseModel):
+    """A NULL's processing reason, separate from proof of a factual assertion."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    field: str = Field(default="value", min_length=1, max_length=64)
+    item: int | None = Field(default=None, ge=0)
+    status: Literal["not_stated", "unknown", "ambiguous", "conflicting", "not_inspected"]
+
+
+class ModelFieldOutcome(BaseModel):
+    """Parse optional diagnostics without letting a bad reason discard valid facts."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    field: str = "value"
+    item: int | None = None
+    status: str
 
 
 def scalar_type(logical_type: str) -> Any:
@@ -105,6 +132,7 @@ def validate_value(value: Any, logical_type: str) -> Any:
 
 def checked_spans(text: str, spans: list[dict], options: dict) -> list[dict]:
     window_end = min(len(text), options.get("window_chars", 16000))
+    origin = options.get("source_window_start", 0)
     output = []
     for raw in spans:
         try:
@@ -118,10 +146,12 @@ def checked_spans(text: str, spans: list[dict], options: dict) -> list[dict]:
         output.append(
             {
                 **span.model_dump(),
-                "content_sha256": text_hash(text),
+                "start": origin + span.start,
+                "end": origin + span.end,
+                "content_sha256": options.get("source_content_sha256", text_hash(text)),
                 "source_version_id": options.get("source_version_id"),
                 "document_id": options.get("document_id"),
-                "inspected_window": {"start": 0, "end": window_end},
+                "inspected_window": {"start": origin, "end": origin + window_end},
             }
         )
     return output
@@ -166,6 +196,22 @@ def validate_outcome(
     options: dict,
     usage: dict,
 ) -> SemanticOutcome:
+    origin = options.get("source_window_start", 0)
+    source_characters = options.get("source_characters", len(text))
+    window_end = min(len(text), options.get("window_chars", 16000))
+    if (
+        type(origin) is not int
+        or type(source_characters) is not int
+        or origin < 0
+        or source_characters < origin + len(text)
+    ):
+        raise SourcesQLError("evidence_invalid", "Invalid source window context", "semantic")
+    usage.update(
+        inspected_windows=[{"start": origin, "end": origin + window_end}],
+        source_characters=source_characters,
+        input_omitted_characters=max(0, source_characters - window_end),
+        content_sha256=options.get("source_content_sha256", text_hash(text)),
+    )
     support = checked_spans(text, spans, options)
     if value is None:
         if status not in {"not_stated", "unknown", "unprocessed", "failed"}:
@@ -228,13 +274,38 @@ def validate_outcome(
         value = converted if operator == "SEM_EXTRACT_ALL" else converted[0]
         if operator == "SEM_EXTRACT_ALL" and not value:
             status = "no_match"
-    usage.update(
-        inspected_windows=[{"start": 0, "end": min(len(text), options.get("window_chars", 16000))}],
-        source_characters=len(text),
-        input_omitted_characters=max(0, len(text) - options.get("window_chars", 16000)),
-        content_sha256=text_hash(text),
-    )
+        if operator == "SEM_EXTRACT_ALL":
+            usage["extraction_capacity"] = {
+                "max_items": maximum,
+                "returned_items": len(value),
+                "may_have_more": len(value) >= maximum,
+            }
     return SemanticOutcome(value, status, support, usage)
+
+
+def checked_field_outcomes(operator: str, output: dict, fields: dict) -> list[dict]:
+    records, seen = [], set()
+    for raw in output.get("field_outcomes", []):
+        try:
+            record = FieldOutcome.model_validate(raw).model_dump()
+        except ValueError:
+            continue
+        field, item = record["field"], record["item"]
+        if field not in (fields or {"value": "VARCHAR"}):
+            continue
+        value = output["value"]
+        if operator == "SEM_EXTRACT_ALL":
+            if type(item) is not int or not isinstance(value, list) or item >= len(value):
+                continue
+            value = value[item]
+        elif item is not None:
+            continue
+        value = value.get(field) if fields and isinstance(value, dict) else value
+        if value is not None or (item, field) in seen:
+            continue
+        seen.add((item, field))
+        records.append(record)
+    return records
 
 
 def validate_named_outcome(
@@ -358,7 +429,110 @@ def extraction_item_limit(options: dict) -> int:
     return maximum
 
 
-def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
+_OPENAI_CREDIT_CODES = {"credit_balance_exhausted"}
+_OPENAI_SPEND_CODES = {"organization_spend_limit_exceeded", "project_spend_limit_exceeded"}
+_OPENAI_RATE_CODES = {"rate_limit_exceeded", "slow_down"}
+_OPENAI_ERROR_CODES = (
+    _OPENAI_CREDIT_CODES
+    | _OPENAI_SPEND_CODES
+    | _OPENAI_RATE_CODES
+    | {"organization_usage_limit_exceeded", "insufficient_quota"}
+)
+
+
+def _official_openai_endpoint(value: str, path: str) -> bool:
+    """Compatible endpoints must never inherit OpenAI billing attribution."""
+    try:
+        url = urlsplit(value)
+        return (
+            url.scheme == "https"
+            and url.hostname == "api.openai.com"
+            and url.port in {None, 443}
+            and url.path.rstrip("/") == path
+            and url.username is None
+            and url.password is None
+            and not url.query
+            and not url.fragment
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _openai_refusal(status: int, body: Any, headers: Any = None) -> dict:
+    """Read only bounded, allowlisted fields; provider messages remain private."""
+    if isinstance(body, str):
+        try:
+            body = json_object(body.encode("utf-8")) if len(body) <= 16_384 else None
+        except (SourcesQLError, UnicodeError, RecursionError):
+            body = None
+    details = body.get("error", body) if isinstance(body, dict) else None
+    code = details.get("code") if isinstance(details, dict) else None
+    kind = details.get("type") if isinstance(details, dict) else None
+    code = code if isinstance(code, str) and code in _OPENAI_ERROR_CODES else None
+    kind = (
+        kind
+        if isinstance(kind, str) and kind in {"insufficient_quota", "rate_limit_error"}
+        else None
+    )
+    result: dict[str, Any] = {
+        **({"provider_error_code": code} if code else {}),
+        **({"provider_error_type": kind} if kind else {}),
+    }
+    retry_after = headers.get("retry-after", "") if headers is not None else ""
+    if isinstance(retry_after, str) and re.fullmatch(r"[0-9]{1,8}", retry_after):
+        seconds = int(retry_after)
+        if seconds <= 604_800:
+            result["retry_after_seconds"] = seconds
+    if status in {402, 429}:
+        limit_kind = (
+            "credits"
+            if code in _OPENAI_CREDIT_CODES
+            else "spend"
+            if code in _OPENAI_SPEND_CODES
+            else "unknown"
+            if code == "organization_usage_limit_exceeded"
+            else "unknown"
+            if kind == "insufficient_quota"
+            else "rate"
+            if code in _OPENAI_RATE_CODES or kind == "rate_limit_error"
+            else "unknown"
+        )
+        result["provider_capacity"] = {
+            "resource": "search_model_budget",
+            "reason": "provider_limit",
+            "period": "unknown",
+            "allowance": "unknown",
+            "services": ["openai"],
+            "http_status": status,
+            "limit_kind": limit_kind,
+            **(
+                {"retry_after_seconds": result["retry_after_seconds"]}
+                if "retry_after_seconds" in result
+                else {}
+            ),
+        }
+    return result
+
+
+def _error_response_body(response: httpx.Response) -> Any:
+    raw = bytearray()
+    try:
+        for chunk in response.iter_bytes():
+            if len(raw) + len(chunk) > 16_384:
+                return None
+            raw.extend(chunk)
+        return json_object(bytes(raw))
+    except (SourcesQLError, httpx.HTTPError, RecursionError):
+        return None
+
+
+def semantic_failure(
+    error: Exception,
+    *,
+    remote_outcome_unknown: bool,
+    official_openai: bool = False,
+    effect_state: str | None = None,
+) -> dict:
     """Allowlisted diagnostics only; exception text and provider bodies are private."""
     from openai import (
         APIConnectionError,
@@ -375,6 +549,7 @@ def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
         current = current.__cause__ or current.__context__
     category, code, message = "unknown", "provider_error", "Semantic model request failed"
     http_status = None
+    provider_details = {}
     if any(isinstance(e, (TimeoutError, httpx.TimeoutException, APITimeoutError)) for e in chain):
         category, code, message = "timeout", "provider_timeout", "Semantic model request timed out"
     elif any(isinstance(e, (httpx.TransportError, APIConnectionError)) for e in chain):
@@ -396,6 +571,9 @@ def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
             "provider_http_error",
             "Semantic model provider rejected the request",
         )
+        remote_outcome_unknown = False
+        if effect_state != "completed_unretained":
+            effect_state = "rejected"
         status = (
             response.response.status_code
             if isinstance(response, httpx.HTTPStatusError)
@@ -403,6 +581,18 @@ def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
         )
         if type(status) is int and 100 <= status <= 599:
             http_status = status
+            if official_openai:
+                body = (
+                    _error_response_body(response.response)
+                    if isinstance(response, httpx.HTTPStatusError)
+                    else getattr(response, "body", None)
+                )
+                headers = (
+                    response.response.headers
+                    if isinstance(response, (httpx.HTTPStatusError, APIStatusError))
+                    else getattr(response, "headers", None)
+                )
+                provider_details = _openai_refusal(status, body, headers)
     elif any(
         isinstance(e, (ValidationError, APIResponseValidationError, UnexpectedModelBehavior))
         for e in chain
@@ -418,7 +608,14 @@ def semantic_failure(error: Exception, *, remote_outcome_unknown: bool) -> dict:
         "error_type": category,
         "remote_outcome_unknown": remote_outcome_unknown,
         "retryable": False,
+        **(
+            {"effect_state": effect_state}
+            if effect_state
+            in {"not_dispatched", "rejected", "outcome_unknown", "completed_unretained"}
+            else {}
+        ),
         **({"http_status": http_status} if http_status is not None else {}),
+        **provider_details,
     }
 
 
@@ -443,6 +640,7 @@ def output_schema(operator: str, fields: dict[str, str], options: dict) -> type[
         value=(value_type | None, ...),
         status=(Literal["supported_text", "processed", "not_stated", "unknown", "no_match"], ...),
         support=(list[ModelQuote], ...),
+        field_outcomes=(list[ModelFieldOutcome], Field(default_factory=list)),
     )
 
 
@@ -453,6 +651,7 @@ class PydanticSemanticProvider:
         if type(retries) is not int or not 0 <= retries <= 2:
             raise SourcesQLError("invalid_request", "Semantic retries must be between zero and two")
         self.model, self.retries, self.profile_name = model, retries, profile_name
+        self._official_openai = False
         self.events: list[dict] = []
 
     @classmethod
@@ -513,7 +712,9 @@ class PydanticSemanticProvider:
             # only. Preserve that existing contract rather than probing or
             # silently falling back across endpoints after a failed request.
             model = OpenAIChatModel(model_name, provider=provider)
-        return cls(model, retries=retries, profile_name=model_name)
+        configured = cls(model, retries=retries, profile_name=model_name)
+        configured._official_openai = _official_openai_endpoint(str(client.base_url), "/v1")
+        return configured
 
     def semantic(
         self,
@@ -539,6 +740,11 @@ class PydanticSemanticProvider:
             raise SourcesQLError(
                 "invalid_request", "Named fields cannot combine with scalar type", "semantic"
             )
+        deadline = options.get("deadline_monotonic")
+        if deadline is not None and (
+            type(deadline) not in {int, float} or not math.isfinite(deadline)
+        ):
+            raise SourcesQLError("invalid_request", "Invalid semantic deadline", "semantic")
         if text is None:
             return SemanticOutcome(
                 None, "unprocessed", usage={"requests": 0, "reason": "missing_text"}
@@ -562,9 +768,15 @@ class PydanticSemanticProvider:
         schema = output_schema(operator, fields, options)
         events = self.events
         first_event = len(events)
+        official_openai = self._official_openai
 
         class ReservedModel(WrapperModel):
             async def request(self, messages, model_settings, model_request_parameters):
+                remaining_time = None if deadline is None else deadline - monotonic()
+                if remaining_time is not None and remaining_time <= 0:
+                    raise SourcesQLError(
+                        "budget_exhausted", "Semantic dispatch deadline exceeded", "dispatch"
+                    )
                 remaining_output = budget.limits["max_output_tokens"] - budget.counts.get(
                     "output_tokens", 0
                 )
@@ -579,6 +791,23 @@ class PydanticSemanticProvider:
                 model_settings["max_tokens"] = min(
                     model_settings.get("max_tokens", 4096), remaining_output
                 )
+                if remaining_time is not None:
+                    configured = model_settings.get("timeout")
+                    if isinstance(configured, httpx.Timeout):
+                        model_settings["timeout"] = httpx.Timeout(
+                            **{
+                                key: min(value, remaining_time)
+                                if (value := getattr(configured, key)) is not None
+                                else remaining_time
+                                for key in ("connect", "read", "write", "pool")
+                            }
+                        )
+                    else:
+                        model_settings["timeout"] = (
+                            min(configured, remaining_time)
+                            if type(configured) in {int, float}
+                            else remaining_time
+                        )
                 budget.reserve("model_requests", limit="max_model_requests")
                 event = {
                     "kind": "semantic",
@@ -588,9 +817,15 @@ class PydanticSemanticProvider:
                 }
                 events.append(event)
                 try:
-                    response = await super().request(
-                        messages, model_settings, model_request_parameters
-                    )
+                    if remaining_time is None:
+                        response = await super().request(
+                            messages, model_settings, model_request_parameters
+                        )
+                    else:
+                        async with asyncio.timeout(remaining_time):
+                            response = await super().request(
+                                messages, model_settings, model_request_parameters
+                            )
                     event["status"] = "completed"
                     event["usage"] = {
                         "input_tokens": response.usage.input_tokens,
@@ -611,15 +846,38 @@ class PydanticSemanticProvider:
                 except SourcesQLError as error:
                     if event["status"] == "completed":
                         event["status"] = "completed_validation_failed"
+                        error.effect_state = "completed_unretained"
+                        error.remote_outcome_unknown = False
                     if error.code == "invalid_output":
                         event.update(error_code="invalid_output", error_type="schema")
                     raise
                 except Exception as error:
-                    event["status"] = "remote_outcome_unknown"
-                    failure = semantic_failure(error, remote_outcome_unknown=True)
+                    completed = event["status"] == "completed"
+                    failure = semantic_failure(
+                        error,
+                        remote_outcome_unknown=not completed,
+                        official_openai=official_openai,
+                        effect_state="completed_unretained" if completed else "outcome_unknown",
+                    )
+                    event["status"] = (
+                        "completed_validation_failed"
+                        if completed
+                        else "failed"
+                        if failure["effect_state"] == "rejected"
+                        else "remote_outcome_unknown"
+                    )
                     event.update(error_code=failure["code"], error_type=failure["error_type"])
-                    if "http_status" in failure:
-                        event["http_status"] = failure["http_status"]
+                    for key in (
+                        "effect_state",
+                        "remote_outcome_unknown",
+                        "http_status",
+                        "provider_capacity",
+                        "provider_error_code",
+                        "provider_error_type",
+                        "retry_after_seconds",
+                    ):
+                        if key in failure:
+                            event[key] = failure[key]
                     raise
 
         agent = Agent(
@@ -640,6 +898,9 @@ class PydanticSemanticProvider:
                 "a numeric value from its qualifier only when the field definitions explicitly "
                 "request separate numeric and qualifier fields. Use null if the declared output "
                 "cannot preserve those distinctions. "
+                "For each NULL field, optionally report field_outcomes with its exact field "
+                "and zero-based item for ALL, using not_stated, unknown, ambiguous, conflicting "
+                "or not_inspected. These are processing diagnostics, never factual evidence. "
                 "Every non-null extracted field and every positive match requires a verbatim "
                 "support quote copied exactly from the supplied text. Copy enough surrounding "
                 "text to make each quote unique. Do not calculate or return character offsets. ALL support "
@@ -683,6 +944,7 @@ class PydanticSemanticProvider:
                 "metering": "reported_tokens_after_dispatch",
             }
             output = result.output.model_dump()
+            usage["field_outcomes"] = checked_field_outcomes(operator, output, fields)
             if operator == "SEM_NORM":
                 entries = output["entries"]
                 originals = [e["original"] for e in entries]
@@ -737,11 +999,23 @@ class PydanticSemanticProvider:
                 },
             )
         except Exception as error:
+            call_events = events[first_event:]
+            effect_state = (
+                "outcome_unknown"
+                if any(e["status"] == "remote_outcome_unknown" for e in call_events)
+                else "completed_unretained"
+                if any(
+                    e["status"] in {"completed", "completed_validation_failed"} for e in call_events
+                )
+                else "rejected"
+                if any(e["status"] == "failed" for e in call_events)
+                else "not_dispatched"
+            )
             failure = semantic_failure(
                 error,
-                remote_outcome_unknown=any(
-                    e["status"] == "remote_outcome_unknown" for e in events[first_event:]
-                ),
+                official_openai=official_openai,
+                remote_outcome_unknown=effect_state == "outcome_unknown",
+                effect_state=effect_state,
             )
             if failure["code"] == "invalid_output":
                 for event in events[first_event:]:
@@ -848,14 +1122,30 @@ class OpenAIEmbeddingProvider:
                 timeout=timeout,
             ) as response:
                 if response.is_redirect:
-                    raise SourcesQLError(
+                    error = SourcesQLError(
                         "provider_unavailable", "Unexpected embedding API redirect", "semantic"
                     )
+                    error.effect_state = "rejected"
+                    raise error
                 if not response.is_success:
-                    raise SourcesQLError(
+                    error = SourcesQLError(
                         "provider_http_error", "Embedding provider rejected the request", "semantic"
                     )
-                return json_object(read_response(response, self.MAX_RESPONSE_BYTES))
+                    error.http_status = response.status_code
+                    error.effect_state = "rejected"
+                    error.remote_outcome_unknown = False
+                    if _official_openai_endpoint(self.endpoint, "/v1/embeddings"):
+                        diagnostics = _openai_refusal(
+                            response.status_code, _error_response_body(response), response.headers
+                        )
+                        for name, value in diagnostics.items():
+                            setattr(error, name, value)
+                    raise error
+                try:
+                    return json_object(read_response(response, self.MAX_RESPONSE_BYTES))
+                except SourcesQLError as error:
+                    error.effect_state = "completed_unretained"
+                    raise
         except httpx.TimeoutException:
             raise ProviderTransportError(
                 "provider_timeout", "Embedding request timed out", "semantic"
@@ -882,6 +1172,19 @@ class OpenAIEmbeddingProvider:
         if check_active is not None and not callable(check_active):
             raise SourcesQLError(
                 "invalid_request", "Invalid scoring cancellation check", "semantic"
+            )
+        callbacks = {
+            name: options.get(name)
+            for name in (
+                "on_score_batch_start",
+                "on_completed_score",
+                "on_score_batch_failed",
+                "on_score_batch_completed",
+            )
+        }
+        if any(value is not None and not callable(value) for value in callbacks.values()):
+            raise SourcesQLError(
+                "invalid_request", "Invalid scoring checkpoint callback", "semantic"
             )
         deadline = options.get("deadline_monotonic")
         if deadline is not None and (
@@ -985,6 +1288,44 @@ class OpenAIEmbeddingProvider:
         ]
         interruption: dict | None = None
         affected: set[str] = set()
+        published: set[int] = set()
+
+        def publish_completed_scores():
+            criterion_vector = self._vectors.get(criterion_key)
+            if criterion_vector is None:
+                return
+            for text, indices in inputs.items():
+                source_vector = self._vectors.get(self._cache_key(text))
+                if source_vector is None:
+                    continue
+                if len(source_vector) != len(criterion_vector):
+                    unresolved(indices, "invalid_output", "Cached embedding dimensions differ")
+                    for index in indices:
+                        outcomes[index].status = "invalid_output"
+                    continue
+                value = max(
+                    -1.0,
+                    min(
+                        1.0,
+                        math.fsum(
+                            a * b for a, b in zip(source_vector, criterion_vector, strict=True)
+                        ),
+                    ),
+                )
+                for index in indices:
+                    outcomes[index].value = value
+                    outcomes[index].status = "processed"
+                    if index not in published:
+                        callback = callbacks["on_completed_score"]
+                        if callback is not None:
+                            callback(index, outcomes[index])
+                        published.add(index)
+
+        # Cached vector pairs also produce durable scores without another request.
+        publish_completed_scores()
+        callback = callbacks["on_score_batch_completed"]
+        if callback is not None:
+            callback()
         while pending or criterion_key not in self._vectors:
             if check_active is not None:
                 check_active()
@@ -1006,8 +1347,44 @@ class OpenAIEmbeddingProvider:
             # unique submitted text. Reported usage remains separate.
             # Actual provider usage is reported separately; unknown outcomes keep
             # their reservation rather than being retried or silently refunded.
-            budget.reserve("input_tokens", reserved_tokens, "max_input_tokens")
-            budget.reserve("model_requests", limit="max_model_requests")
+            batch_indices = sorted({index for text in batch for index in inputs.get(text, [])})
+            if not batch_indices:
+                # A criterion-only request affects every as-yet unresolved score.
+                batch_indices = sorted(
+                    index
+                    for indices in inputs.values()
+                    for index in indices
+                    if index not in published
+                )
+            callback = callbacks["on_score_batch_start"]
+            if callback is not None:
+                callback(batch_indices)
+            prior_requests = budget.counts.get("model_requests", 0)
+            try:
+                budget.reserve("input_tokens", reserved_tokens, "max_input_tokens")
+                budget.reserve("model_requests", limit="max_model_requests")
+            except SourcesQLError as error:
+                if budget.counts.get("model_requests", 0) > prior_requests:
+                    self.events.append(
+                        {
+                            "kind": "embedding",
+                            "model": self.model,
+                            "status": "not_dispatched",
+                            "inputs": len(batch),
+                            "usage": {"requests": 0, "input_tokens": 0},
+                        }
+                    )
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(
+                        batch_indices,
+                        {
+                            "code": error.code,
+                            "remote_outcome_unknown": False,
+                            "effect_state": "not_dispatched",
+                        },
+                    )
+                raise
             batch_id = f"embedding_{len(self.events)}"
             event: dict[str, Any] = {
                 "kind": "embedding",
@@ -1062,6 +1439,10 @@ class OpenAIEmbeddingProvider:
             except SourcesQLError as error:
                 if error.code in {"budget_exhausted", "cancelled"}:
                     raise
+                capture_provider_failure(event, error)
+                for name in ("provider_error_code", "provider_error_type"):
+                    if hasattr(error, name):
+                        event[name] = getattr(error, name)
                 unknown = getattr(error, "remote_outcome_unknown", False)
                 event["status"] = (
                     "remote_outcome_unknown"
@@ -1074,7 +1455,24 @@ class OpenAIEmbeddingProvider:
                     "code": error.code,
                     "message": error.safe_message,
                     "remote_outcome_unknown": unknown,
+                    "effect_state": getattr(error, "effect_state", None)
+                    if getattr(error, "effect_state", None)
+                    in {"not_dispatched", "rejected", "outcome_unknown", "completed_unretained"}
+                    else "outcome_unknown"
+                    if unknown
+                    else "rejected",
                     "retryable": False,
+                    **{
+                        name: event[name]
+                        for name in (
+                            "http_status",
+                            "provider_capacity",
+                            "provider_error_code",
+                            "provider_error_type",
+                            "retry_after_seconds",
+                        )
+                        if name in event
+                    },
                 }
             except (ValueError, KeyError, TypeError, OverflowError):
                 event["status"] = "invalid_output"
@@ -1082,35 +1480,40 @@ class OpenAIEmbeddingProvider:
                     "code": "invalid_output",
                     "message": "Embedding response contains invalid indices or vectors",
                     "remote_outcome_unknown": False,
+                    "effect_state": "completed_unretained",
                     "retryable": False,
                 }
             if interruption is not None:
                 event["failure"] = interruption
                 affected = set(batch)
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(batch_indices, interruption)
                 break
+            # Persist valid completed scores before checking a later deadline,
+            # cancellation or request. Coordinator failures must propagate rather
+            # than being mistaken for malformed provider output.
+            publish_completed_scores()
+            if any(outcomes[index].status != "processed" for index in batch_indices):
+                interruption = {
+                    "code": "invalid_output",
+                    "message": "Embedding batch did not produce valid scores",
+                    "remote_outcome_unknown": False,
+                    "effect_state": "completed_unretained",
+                    "retryable": False,
+                }
+                event.update(status="invalid_output", failure=interruption)
+                affected = set(batch)
+                callback = callbacks["on_score_batch_failed"]
+                if callback is not None:
+                    callback(batch_indices, interruption)
+                break
+            callback = callbacks["on_score_batch_completed"]
+            if callback is not None:
+                callback()
 
-        criterion_vector = self._vectors.get(criterion_key)
         for text, indices in inputs.items():
-            source_vector = self._vectors.get(self._cache_key(text))
-            if source_vector is not None and criterion_vector is not None:
-                if len(source_vector) != len(criterion_vector):
-                    unresolved(indices, "invalid_output", "Cached embedding dimensions differ")
-                    for index in indices:
-                        outcomes[index].status = "invalid_output"
-                    continue
-                value = max(
-                    -1.0,
-                    min(
-                        1.0,
-                        math.fsum(
-                            a * b for a, b in zip(source_vector, criterion_vector, strict=True)
-                        ),
-                    ),
-                )
-                for index in indices:
-                    outcomes[index].value = value
-                    outcomes[index].status = "processed"
-            elif interruption is not None:
+            if interruption is not None and any(index not in published for index in indices):
                 for index in indices:
                     outcomes[index].usage.update(
                         reason=interruption["code"], failure=dict(interruption)

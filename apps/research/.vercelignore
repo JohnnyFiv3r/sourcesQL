@@ -44,6 +44,14 @@
 !ui-history/research-b1349a13ba4d1fbe.html
 !ui-history/research-be8725d56a366d19.html
 !ui-history/research-b5ab74c900f06fdb.html
+!ui-history/research-20919a6895fa9fa4.html
+!ui-history/research-758dbf283e918839.html
+!ui-history/research-05a1fb4763622b13.html
+!ui-history/research-898b5e1c6a61a0b8.html
+!ui-history/research-2f4ed43f372d2823.html
+!ui-history/research-f2cf065f35e39de4.html
+!ui-history/research-cf775e01f999f8db.html
+!ui-history/research-06264491f36e0c07.html
 
 # Defense in depth if the public-input allowlist is extended later.
 **/.env*

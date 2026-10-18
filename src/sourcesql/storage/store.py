@@ -9,9 +9,10 @@ from pathlib import Path
 import sqlite3
 import uuid
 from sourcesql.contracts import Column, Table, SourcesQLError, canonical, digest
+from sourcesql.storage.stages import StageJournalMixin
 
 
-class Store:
+class Store(StageJournalMixin):
     def __init__(self, root: Path | str, quota: int = 100 * 1024 * 1024):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -21,6 +22,7 @@ class Store:
             db.executescript(
                 """CREATE TABLE IF NOT EXISTS results(id TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, receipt TEXT NOT NULL);"""
             )
+        self.initialize_stage_journal()
 
     @contextmanager
     def db(self):
@@ -47,6 +49,7 @@ class Store:
                         "idempotency_conflict", "Request key already has different inputs"
                     )
                 return json.loads(previous[1]), False
+            self._claim_journal(db, receipt)
             db.execute(
                 "INSERT INTO runs VALUES(?,?,?,?)",
                 (receipt["run_id"], request["request_id"], identity, canonical(receipt).decode()),
@@ -87,7 +90,11 @@ class Store:
         metadata_bytes = db.execute(
             "SELECT coalesce(sum(length(CAST(metadata AS BLOB))),0) FROM results"
         ).fetchone()[0]
-        return metadata_bytes + sum(p.stat().st_size for p in self.root.glob("*.json"))
+        return (
+            metadata_bytes
+            + sum(p.stat().st_size for p in self.root.glob("*.json"))
+            + self.stage_bytes(db)
+        )
 
     def commit(self, table: Table, metadata: dict) -> dict:
         value = table.to_dict()
@@ -120,7 +127,9 @@ class Store:
                     if current["status"] == "cancelled":
                         raise SourcesQLError("cancelled", "Run cancelled", "publish")
                     if current["status"] == "failed":
-                        raise SourcesQLError("invalid_output", "Failed run cannot publish", "publish")
+                        raise SourcesQLError(
+                            "invalid_output", "Failed run cannot publish", "publish"
+                        )
                     if metadata.get("receipt"):
                         metadata["receipt"] = {
                             **metadata["receipt"],
@@ -130,14 +139,19 @@ class Store:
             for parent in metadata.get("parents", []):
                 actual = self._authorize(db, parent["result_id"], set())
                 if parent.get("content_sha256") not in (None, actual["content_sha256"]):
-                    raise SourcesQLError("evidence_invalid", "Parent content pin mismatch", "publish")
+                    raise SourcesQLError(
+                        "evidence_invalid", "Parent content pin mismatch", "publish"
+                    )
             existing = db.execute(
                 "SELECT hash,metadata FROM results WHERE id=?", (result_id,)
             ).fetchone()
             if existing:
                 if existing[0] != content_hash:
-                    raise SourcesQLError("idempotency_conflict", "Result identity conflict", "publish")
+                    raise SourcesQLError(
+                        "idempotency_conflict", "Result identity conflict", "publish"
+                    )
                 return json.loads(existing[1])
+            self._finish_journal(db, metadata.get("receipt"))
             if self.retained_size(db) + len(payload) + len(canonical(metadata)) > self.quota:
                 raise SourcesQLError("budget_exhausted", "Storage quota exhausted", "publish")
             temp = self.root / ("." + uuid.uuid4().hex + ".tmp")
@@ -196,7 +210,9 @@ class Store:
         with self.db() as db:
             db.execute("UPDATE results SET revoked=1 WHERE id=?", (result_id,))
 
-    def commit_many(self, items: list[tuple[Table, dict]], root_result_id=None, result_mapping=None) -> None:
+    def commit_many(
+        self, items: list[tuple[Table, dict]], root_result_id=None, result_mapping=None
+    ) -> None:
         """Make a fully validated imported graph visible in one control transaction."""
         prepared = []
         for table, meta in items:

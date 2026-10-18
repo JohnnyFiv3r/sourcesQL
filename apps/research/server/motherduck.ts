@@ -27,7 +27,15 @@ import {
 } from "./hosted-search.js";
 
 import type { ResearchCapacity } from "../src/job-view.js";
-import { safeExecutionError } from "./execution-errors.js";
+import { capacitySchema } from "../src/job-view.js";
+import {
+  summarizeUsage,
+  allowanceNotices,
+  usageWindow,
+  type FlightUsage,
+  type UsageWindow,
+} from "./usage.js";
+import { safeExecutionError, safeFailureContext } from "./execution-errors.js";
 
 type Row = Record<string, any>;
 export interface SqlClient {
@@ -52,6 +60,7 @@ export type MotherDuckOptions = {
   flightId: string;
   principal: string;
   allowSubmission?: boolean;
+  usageMode?: "provider_managed" | "operator_reserved";
   maxRuntimeSeconds?: number;
   dailySeconds?: number;
   monthlySeconds?: number;
@@ -131,10 +140,14 @@ function bounded(value: unknown, minimum: number, maximum: number): number {
   return Number(value);
 }
 const runColumns = `CAST(run_id AS VARCHAR) AS run_id,CAST(flight_id AS VARCHAR) AS flight_id,
-  flight_version,CAST(run_number AS VARCHAR) AS run_number,status,exit_code,CAST(config AS JSON)::VARCHAR AS config_json`;
+  flight_version,CAST(run_number AS VARCHAR) AS run_number,status,exit_code,CAST(config AS JSON)::VARCHAR AS config_json,
+  CAST(started_at AS VARCHAR) AS started_at,CAST(ended_at AS VARCHAR) AS ended_at,epoch(ended_at-started_at) AS elapsed_seconds`;
 
 export class MotherDuckEngine implements ResearchEngine {
-  readonly supportsExplain = false;
+  readonly supportsExplain = true;
+  readonly supportsAsyncJobs = true;
+  readonly supportsUsageReporting = true;
+  readonly usageMode: "provider_managed" | "operator_reserved";
   readonly namespace: string;
   readonly schema: string;
   readonly maxRuntime: number;
@@ -144,6 +157,13 @@ export class MotherDuckEngine implements ResearchEngine {
   private readonly connectClient?: () => SqlClient;
   private readonly pool?: SqlPool;
   constructor(readonly options: MotherDuckOptions) {
+    if (
+      options.usageMode !== undefined &&
+      !["provider_managed", "operator_reserved"].includes(options.usageMode)
+    )
+      throw new BackendError("invalid_request", "Invalid usage mode");
+    // Existing deployments retain their explicit safeguards until their reviewed plan opts in.
+    this.usageMode = options.usageMode ?? "operator_reserved";
     if (
       !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(options.database) ||
       !new Set([
@@ -484,6 +504,7 @@ export class MotherDuckEngine implements ResearchEngine {
     const error = safeExecutionError(job.error_code);
     return {
       job_id: job.id,
+      operation: job.operation,
       request_id: job.request_id,
       status: job.status,
       pending:
@@ -494,17 +515,233 @@ export class MotherDuckEngine implements ResearchEngine {
       cancellation_requested: !!job.cancel_requested,
       created_at: job.created_at,
       updated_at: job.updated_at,
-      ...(job.status === "completed"
+      ...(job.status === "completed" && job.operation !== "explain"
         ? { result_id: job.result_id, run_id: job.engine_run_id }
+        : {}),
+      ...(job.status === "completed" && job.operation === "explain"
+        ? { preflight: JSON.parse(job.output_json) }
         : {}),
       ...(job.status === "failed"
         ? {
             error_code: error.code,
             ...(job.engine_run_id ? { run_id: job.engine_run_id } : {}),
             error,
+            ...safeFailureContext(
+              job.output_json ? JSON.parse(job.output_json) : {},
+            ),
           }
         : {}),
     };
+  }
+  private async authorizeCompletedJob(job: Row): Promise<void> {
+    if (job.operation !== "explain") {
+      await this.readResult({ result_id: job.result_id, limit: 0 });
+      return;
+    }
+    const explanation = JSON.parse(job.output_json);
+    await this.transaction(false, async (client) => {
+      for (const pin of explanation.input_pins ?? [])
+        await this.resultRecord(client, pin.result_id);
+    });
+  }
+  private async recordFlightUsage(client: SqlConnection, job: Row, run: Row) {
+    const seconds = Number(run.elapsed_seconds);
+    if (
+      !run.started_at ||
+      !run.ended_at ||
+      !Number.isFinite(seconds) ||
+      seconds < 0 ||
+      !Number.isFinite(Date.parse(run.started_at)) ||
+      !Number.isFinite(Date.parse(run.ended_at))
+    )
+      return;
+    await client.query(
+      `INSERT OR IGNORE INTO ${this.table("usage_flights")} VALUES($1,$2::UUID,$3,$4,$5::DOUBLE,'F4')`,
+      [
+        run.run_id,
+        job.id,
+        new Date(run.started_at).toISOString(),
+        new Date(run.ended_at).toISOString(),
+        seconds,
+      ],
+    );
+  }
+
+  private async usageData(
+    client: SqlConnection,
+    window: UsageWindow,
+    job?: Row,
+  ) {
+    // Project metering fields only. Prompts, result rows and provider messages stay private.
+    const rows = (
+      await client.query(
+        `SELECT id AS run_id,json_extract_string(receipt,'$.started_at') AS started_at,
+        CAST(json_extract(receipt,'$.provider_events') AS VARCHAR) AS events_json
+        FROM ${this.table("runs")} WHERE CAST(json_extract_string(receipt,'$.started_at') AS TIMESTAMPTZ) >= $1::TIMESTAMPTZ
+        AND CAST(json_extract_string(receipt,'$.started_at') AS TIMESTAMPTZ) < $2::TIMESTAMPTZ${job ? " AND id=$3" : ""}`,
+        [window.start, window.end, ...(job ? [job.engine_run_id ?? ""] : [])],
+      )
+    ).rows;
+    const flights = (
+      await client.query(
+        `SELECT run_id,CAST(job_id AS VARCHAR) AS job_id,started_at,ended_at,elapsed_seconds,instance_type
+        FROM ${this.table("usage_flights")} WHERE started_at >= $1 AND started_at < $2${job ? " AND job_id=$3::UUID" : ""}`,
+        [window.start, window.end, ...(job ? [job.id] : [])],
+      )
+    ).rows as FlightUsage[];
+    return {
+      receipts: rows.map((row) => ({
+        ...row,
+        events: JSON.parse(row.events_json ?? "[]"),
+      })),
+      flights,
+    };
+  }
+
+  async usageReport(params: Row = {}): Promise<Row> {
+    if (
+      Object.keys(params).some(
+        (key) => !["start", "end", "job_id"].includes(key),
+      )
+    )
+      throw new BackendError("invalid_request", "Invalid usage interval");
+    let window;
+    try {
+      window = usageWindow(params);
+    } catch {
+      throw new BackendError(
+        "invalid_request",
+        "Choose an ISO date/time interval of at most 366 days",
+      );
+    }
+    if (params.job_id !== undefined) identity(params.job_id);
+    // A worker can publish before its Flight exits. Observe finished platform runs
+    // without resubmission; missing/older observations stay explicitly unknown.
+    await this.observeUsage(window.start, window.end, params.job_id).catch(
+      () => undefined,
+    );
+    return this.transaction(false, async (client) => {
+      const job = params.job_id
+        ? await this.getJob(client, identity(params.job_id))
+        : undefined;
+      const { receipts, flights } = await this.usageData(client, window, job);
+      const unresolved = (
+        await client.query(
+          `SELECT count(*)::INTEGER AS count FROM ${this.table("jobs")} j
+        WHERE dispatch_intent_at IS NOT NULL AND created_at >= $1 AND created_at < $2
+        AND NOT EXISTS(SELECT 1 FROM ${this.table("usage_flights")} f WHERE f.job_id=j.id)${job ? " AND j.id=$3::UUID" : ""}`,
+          [window.start, window.end, ...(job ? [job.id] : [])],
+        )
+      ).rows[0];
+      return {
+        ...summarizeUsage(receipts, flights, window, this.options.host),
+        usage_mode: this.usageMode,
+        unobserved_flight_jobs: Number(unresolved.count),
+        ...(job ? { job_id: job.id } : {}),
+      };
+    });
+  }
+
+  private async observeUsage(start: string, end: string, jobId?: string) {
+    const jobs = await this.connection(
+      async (client) =>
+        (
+          await client.query(
+            `SELECT CAST(id AS VARCHAR) AS id,CAST(flight_run_id AS VARCHAR) AS flight_run_id,flight_version
+      FROM ${this.table("jobs")} j WHERE dispatch_intent_at IS NOT NULL
+      AND created_at >= $1 AND created_at < $2 AND flight_run_id IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM ${this.table("usage_flights")} f WHERE f.job_id=j.id)
+      ${jobId ? "AND id=$3::UUID" : ""} ORDER BY created_at DESC LIMIT 100`,
+            [start, end, ...(jobId ? [jobId] : [])],
+          )
+        ).rows,
+    );
+    if (!jobs.length) return;
+    const runs = await this.connection(
+      async (client) =>
+        (
+          await client.query(
+            `SELECT ${runColumns} FROM md_list_flight_runs(flight_id := '${this.options.flightId}'::UUID,"LIMIT" := 100)`,
+          )
+        ).rows,
+    );
+    const observations: { job: Row; run: Row }[] = [];
+    for (const run of runs) {
+      const job = jobs.find((job) => job.flight_run_id === run.run_id);
+      if (
+        !job ||
+        !["SUCCEEDED", "FAILED", "CANCELLED"].includes(
+          String(run.status).replace(/^RUN_STATUS_/, ""),
+        )
+      )
+        continue;
+      const config = JSON.parse(run.config_json);
+      if (
+        run.flight_id !== this.options.flightId ||
+        Number(run.flight_version) !== Number(job.flight_version) ||
+        config.JOB_ID !== job.id ||
+        config.NAMESPACE !== this.namespace ||
+        config.STORAGE_SCHEMA !== this.schema ||
+        config.DATABASE !== this.options.database
+      )
+        continue;
+      observations.push({ job, run });
+    }
+    if (observations.length)
+      await this.transaction(true, async (client) => {
+        for (const { job, run } of observations)
+          await this.recordFlightUsage(client, job, run);
+      });
+  }
+
+  async usageNotices() {
+    const now = new Date(),
+      start = now.toISOString().slice(0, 10) + "T00:00:00.000Z";
+    const month = usageWindow({}, now);
+    const today = usageWindow({
+      start,
+      end: new Date(Date.parse(start) + 86400000).toISOString(),
+    });
+    // The daily window is contained in this UTC month. Observe native metadata
+    // once, then summarize both notices from the same owner-scoped snapshot.
+    await this.observeUsage(month.start, month.end).catch(() => undefined);
+    return this.transaction(false, async (client) => {
+      const { receipts, flights } = await this.usageData(client, month);
+      const notices = allowanceNotices(
+        summarizeUsage(receipts, flights, month, this.options.host),
+        summarizeUsage(receipts, flights, today, this.options.host),
+      );
+      if (!notices.length) return [];
+      const dismissed = (
+        await client.query(
+          `SELECT id FROM ${this.table("usage_notice_dismissals")} WHERE id IN (${notices.map((_, i) => `$${i + 1}`).join(",")})`,
+          notices.map((n) => n.id),
+        )
+      ).rows;
+      return notices.filter(
+        (notice) => !dismissed.some((row) => row.id === notice.id),
+      );
+    });
+  }
+
+  private async providerCapacity(
+    job: Row,
+  ): Promise<ResearchCapacity | undefined> {
+    if (job.status !== "failed" || !job.engine_run_id) return;
+    return this.transaction(false, async (client) => {
+      const row = (
+        await client.query(
+          `SELECT CAST(json_extract(receipt,'$.provider_events') AS VARCHAR) AS events_json FROM ${this.table("runs")} WHERE id=$1`,
+          [job.engine_run_id],
+        )
+      ).rows[0];
+      const events = JSON.parse(row?.events_json ?? "[]");
+      for (const event of [...events].reverse()) {
+        const parsed = capacitySchema.safeParse(event.provider_capacity);
+        if (parsed.success && parsed.data.reason === "provider_limit")
+          return parsed.data;
+      }
+    });
   }
   /** Existing daily rows also govern calendar-month reservations, including pre-upgrade work. */
   private async capacityForJob(
@@ -512,6 +749,7 @@ export class MotherDuckEngine implements ResearchEngine {
     job: Row,
     now = new Date(),
   ): Promise<ResearchCapacity | undefined> {
+    if (this.usageMode === "provider_managed") return undefined;
     const day = now.toISOString().slice(0, 10);
     const monthStart = new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
@@ -563,7 +801,7 @@ export class MotherDuckEngine implements ResearchEngine {
         };
     }
     const policy = this.options.exa ?? this.options.search;
-    if (job.provider_policy_sha256 && policy) {
+    if (job.operation === "query" && job.provider_policy_sha256 && policy) {
       const cost = Number(
         JSON.parse(job.request_json).budgets?.max_cost_microusd,
       );
@@ -633,7 +871,7 @@ export class MotherDuckEngine implements ResearchEngine {
     operation: string,
   ): { request: Row; requestId: string; hash: string } {
     let request: Row;
-    if (operation === "query") {
+    if (operation === "query" || operation === "explain") {
       const allowed = new Set([
         "query",
         "request_id",
@@ -644,6 +882,9 @@ export class MotherDuckEngine implements ResearchEngine {
         "partial_policy",
         "source_mode",
         "row_id_column",
+        "continuation_of",
+        "research_requirements",
+        "answer_intent",
       ]);
       if (
         Object.keys(params).some((key) => !allowed.has(key)) ||
@@ -730,7 +971,7 @@ export class MotherDuckEngine implements ResearchEngine {
         request.source_mode = "allow_excerpt";
       }
     } else {
-      if (!["import_table", "import"].includes(operation))
+      if (!["import_table", "import", "recover_run"].includes(operation))
         throw new BackendError(
           "unsupported_capability",
           "Hosted operation unavailable",
@@ -745,7 +986,7 @@ export class MotherDuckEngine implements ResearchEngine {
       );
     const hash = digest(stable({ operation, request }));
     const requestId =
-      operation === "query"
+      operation === "query" || operation === "explain"
         ? request.request_id
         : `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
     return { request, requestId, hash };
@@ -804,7 +1045,7 @@ export class MotherDuckEngine implements ResearchEngine {
           time,
           this.options.flightId,
           this.maxRuntime,
-          operation === "query" &&
+          (operation === "query" || operation === "explain") &&
           (isExaProfile(input.request.profile) ||
             isHostedSearchProfile(input.request.profile))
             ? livePolicyFingerprint(this.options)
@@ -842,20 +1083,25 @@ export class MotherDuckEngine implements ResearchEngine {
         dispatchBlocked = { code: error.code, message: error.message };
       }
     }
-    if (operation !== "query" && job.status === "completed") {
+    if (
+      !["query", "explain"].includes(operation) &&
+      job.status === "completed"
+    ) {
       const result = await this.readResult({ result_id: job.result_id });
       return {
         ...result,
         ...(job.output_json ? JSON.parse(job.output_json) : {}),
       };
     }
-    if (operation !== "query" && ["failed", "cancelled"].includes(job.status))
+    if (
+      !["query", "explain"].includes(operation) &&
+      ["failed", "cancelled"].includes(job.status)
+    )
       throw new BackendError(
         job.status === "cancelled" ? "cancelled" : "execution_failed",
         "Stored materialization did not complete; inspect its job before creating new work",
       );
-    if (job.status === "completed")
-      await this.readResult({ result_id: job.result_id, limit: 0 });
+    if (job.status === "completed") await this.authorizeCompletedJob(job);
     const envelope = await this.queuedEnvelope(job);
     return {
       ...envelope,
@@ -874,7 +1120,11 @@ export class MotherDuckEngine implements ResearchEngine {
     const candidate = await this.transaction(false, (client) =>
       this.getJob(client, id),
     );
-    if (candidate.status !== "queued") return candidate;
+    if (candidate.status !== "queued") {
+      if (candidate.status === "completed")
+        await this.authorizeCompletedJob(candidate);
+      return candidate;
+    }
     if (candidate.flight_id !== this.options.flightId)
       throw new BackendError(
         "unsupported_capability",
@@ -998,17 +1248,18 @@ export class MotherDuckEngine implements ResearchEngine {
       if (active.count) return { job, dispatch: false };
       const now = new Date();
       const day = now.toISOString().slice(0, 10);
-      await client.query(
-        `INSERT OR IGNORE INTO ${this.table("flight_allowances")} VALUES($1,0)`,
-        [day],
-      );
+      if (this.usageMode === "operator_reserved")
+        await client.query(
+          `INSERT OR IGNORE INTO ${this.table("flight_allowances")} VALUES($1,0)`,
+          [day],
+        );
       const capacity = await this.capacityForJob(client, job, now);
       if (capacity)
         throw new BackendError(
           "budget_exhausted",
           this.capacityFailureMessage(capacity),
         );
-      if (job.provider_policy_sha256) {
+      if (job.operation === "query" && job.provider_policy_sha256) {
         const policy = this.options.exa ?? this.options.search;
         const cost = Number(
           JSON.parse(job.request_json).budgets.max_cost_microusd,
@@ -1024,24 +1275,27 @@ export class MotherDuckEngine implements ResearchEngine {
             "invalid_request",
             "Stored provider approval is unavailable",
           );
-        await client.query(
-          `INSERT OR IGNORE INTO ${this.table("provider_allowances")} VALUES($1,0)`,
-          [day],
-        );
+        if (this.usageMode === "operator_reserved") {
+          await client.query(
+            `INSERT OR IGNORE INTO ${this.table("provider_allowances")} VALUES($1,0)`,
+            [day],
+          );
 
-        await client.query(
-          `UPDATE ${this.table("provider_allowances")} SET reserved_microusd=reserved_microusd+$1::BIGINT WHERE day=$2`,
-          [cost, day],
-        );
-        await client.query(
-          `UPDATE ${this.table("jobs")} SET provider_cost_reserved_microusd=$1::BIGINT WHERE id=$2::UUID`,
-          [cost, id],
-        );
+          await client.query(
+            `UPDATE ${this.table("provider_allowances")} SET reserved_microusd=reserved_microusd+$1::BIGINT WHERE day=$2`,
+            [cost, day],
+          );
+          await client.query(
+            `UPDATE ${this.table("jobs")} SET provider_cost_reserved_microusd=$1::BIGINT WHERE id=$2::UUID`,
+            [cost, id],
+          );
+        }
       }
-      await client.query(
-        `UPDATE ${this.table("flight_allowances")} SET reserved_seconds=reserved_seconds+$1::BIGINT WHERE day=$2`,
-        [this.maxRuntime, day],
-      );
+      if (this.usageMode === "operator_reserved")
+        await client.query(
+          `UPDATE ${this.table("flight_allowances")} SET reserved_seconds=reserved_seconds+$1::BIGINT WHERE day=$2`,
+          [this.maxRuntime, day],
+        );
       await client.query(
         `UPDATE ${this.table("jobs")} SET status='dispatching',flight_version=$3::INTEGER,dispatch_intent_at=$1,updated_at=$1 WHERE id=$2::UUID`,
         [stamp(), id, version],
@@ -1162,8 +1416,7 @@ export class MotherDuckEngine implements ResearchEngine {
           job.flight_run_number === run.run_number &&
           !["SUCCEEDED", "FAILED", "CANCELLED"].includes(status)
         ) {
-          if (job.status === "completed")
-            await this.readResult({ result_id: job.result_id, limit: 0 });
+          if (job.status === "completed") await this.authorizeCompletedJob(job);
           return this.envelope(job);
         }
         job = await this.transaction(true, async (client) => {
@@ -1174,6 +1427,7 @@ export class MotherDuckEngine implements ResearchEngine {
               [run.run_id, run.run_number, stamp(), id],
             );
             if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(status)) {
+              await this.recordFlightUsage(client, current, run);
               await client.query(
                 `UPDATE ${this.table("jobs")} SET flight_settled=true,updated_at=$1 WHERE id=$2::UUID`,
                 [stamp(), id],
@@ -1190,9 +1444,10 @@ export class MotherDuckEngine implements ResearchEngine {
       }
       // No match or multiple matches stays uncertain. Never repeat submission.
     }
-    if (job.status === "completed")
-      await this.readResult({ result_id: job.result_id, limit: 0 });
-    return this.queuedEnvelope(job);
+    if (job.status === "completed") await this.authorizeCompletedJob(job);
+    const result = await this.queuedEnvelope(job);
+    const capacity = await this.providerCapacity(job);
+    return { ...result, ...(capacity ? { capacity } : {}) };
   }
   async cancelJob(id: string): Promise<Row> {
     id = identity(id);
@@ -1243,6 +1498,7 @@ export class MotherDuckEngine implements ResearchEngine {
         flight_id := '${job.flight_id}'::UUID,run_number := ${job.flight_run_number}::UBIGINT)`),
       ).catch(() => undefined);
     }
+    if (job.status === "completed") await this.authorizeCompletedJob(job);
     return this.envelope(job);
   }
   private async exportResult(id: string): Promise<Row> {
@@ -1286,6 +1542,7 @@ export class MotherDuckEngine implements ResearchEngine {
         sqlglot_version: "30.19.0",
         operators: [
           "WEB_SEARCH",
+          "SOURCE_WINDOW",
           "WEB_FETCH",
           "SEM_MATCH",
           "SEM_EXTRACT",
@@ -1388,25 +1645,83 @@ export class MotherDuckEngine implements ResearchEngine {
         execution_mode: "async_jobs",
         storage: "motherduck",
         max_flight_runtime_seconds: this.maxRuntime,
-        daily_execution_reserve_seconds: this.dailySeconds ?? null,
-        monthly_execution_reserve_seconds: this.monthlySeconds ?? null,
+        usage_mode: this.usageMode,
+        usage_reporting: true,
+        daily_execution_reserve_seconds:
+          this.usageMode === "operator_reserved"
+            ? (this.dailySeconds ?? null)
+            : null,
+        monthly_execution_reserve_seconds:
+          this.usageMode === "operator_reserved"
+            ? (this.monthlySeconds ?? null)
+            : null,
         monthly_provider_reserve_microusd:
-          this.monthlyProviderCostMicrousd ?? null,
+          this.usageMode === "operator_reserved"
+            ? (this.monthlyProviderCostMicrousd ?? null)
+            : null,
         reservation_period: "UTC calendar month; optional UTC day",
         flight_submission_enabled: !!this.options.allowSubmission,
         limitations: [
           this.options.exa?.policyVersion === "exa-research.v3"
             ? "Live research uses retained provider text; exact quotes establish text support, not source completeness or factual truth"
             : "Hosted private profiles are not configured; optional live providers are search-only",
-          "Explain requires local engine",
+          "Hosted explain runs canonical admission in a provider-free Flight and consumes configured Flight capacity",
           "Queued jobs require explicit start; status never dispatches",
-          "Execution reserves are not an account-wide billing cap",
+          this.usageMode === "provider_managed"
+            ? "Provider-managed usage: reference allowance notices do not block work; finite per-job bounds remain enforced"
+            : "Execution reserves are not an account-wide billing cap",
+          "Usage reports cover sourcesQL activity, not provider account-wide balances or final bills",
         ],
       };
-    else if (method === "query") result = await this.enqueue(params);
-    else if (method === "import_table" || method === "import")
+    else if (method === "query" || method === "explain")
       result = await this.enqueue(params, method);
-    else if (method === "read_result") result = await this.readResult(params);
+    else if (method === "resume_run") {
+      if (
+        Object.keys(params).some(
+          (key) => !["run_id", "request_id"].includes(key),
+        )
+      )
+        throw new BackendError(
+          "invalid_request",
+          "Invalid continuation request",
+        );
+      const previous = await this.call<Row>("run_status", {
+        run_id: params.run_id,
+      });
+      if (
+        previous.status !== "failed" ||
+        previous.settlement_status !== "settled" ||
+        !previous.resume_request
+      )
+        throw new BackendError(
+          "unsupported_capability",
+          "Run cannot continue without inspection",
+        );
+      result = await this.enqueue({
+        ...previous.resume_request,
+        request_id: identity(params.request_id),
+        continuation_of: params.run_id,
+      });
+    } else if (
+      method === "import_table" ||
+      method === "import" ||
+      method === "recover_run"
+    )
+      result = await this.enqueue(params, method);
+    else if (method === "usage_report") result = await this.usageReport(params);
+    else if (method === "usage_notices") result = await this.usageNotices();
+    else if (method === "dismiss_usage_notice") {
+      const noticeId = identity(params.notice_id, /^[a-f0-9]{64}$/);
+      if (Object.keys(params).some((key) => key !== "notice_id"))
+        throw new BackendError("invalid_request", "Invalid usage notice");
+      await this.transaction(true, async (client) => {
+        await client.query(
+          `INSERT OR IGNORE INTO ${this.table("usage_notice_dismissals")} VALUES($1,$2)`,
+          [noticeId, stamp()],
+        );
+      });
+      result = { dismissed: true };
+    } else if (method === "read_result") result = await this.readResult(params);
     else if (method === "job_status")
       result = await this.jobStatus(params.job_id);
     else if (method === "cancel_job")
@@ -1551,7 +1866,10 @@ export async function createMotherDuckBackend(
       approvedCostMicrousd: Number(
         environment[`${prefix}_APPROVED_COST_MICROUSD`],
       ),
-      dailyCostMicrousd: Number(environment[`${prefix}_DAILY_COST_MICROUSD`]),
+      dailyCostMicrousd: Number(
+        environment[`${prefix}_DAILY_COST_MICROUSD`] ??
+          environment[`${prefix}_APPROVED_COST_MICROUSD`],
+      ),
       requestCostMicrousd: Number(
         environment[`${prefix}_REQUEST_COST_MICROUSD`],
       ),
@@ -1563,6 +1881,8 @@ export async function createMotherDuckBackend(
     token: environment.MOTHERDUCK_TOKEN ?? "",
     flightId: environment.SOURCESQL_FLIGHT_ID ?? "",
     principal,
+    usageMode:
+      environment.SOURCESQL_USAGE_MODE as MotherDuckOptions["usageMode"],
     allowSubmission: environment.SOURCESQL_ALLOW_FLIGHT_SUBMISSION === "1",
     maxRuntimeSeconds: Number(
       environment.SOURCESQL_FLIGHT_MAX_RUNTIME_SEC ?? 120,
@@ -1590,7 +1910,10 @@ export async function createMotherDuckBackend(
               environment.SOURCESQL_EXA_APPROVED_COST_MICROUSD ?? 50000,
             ),
             dailyCostMicrousd: Number(
-              environment.SOURCESQL_EXA_DAILY_COST_MICROUSD ?? 1000000,
+              environment.SOURCESQL_EXA_DAILY_COST_MICROUSD ??
+                (environment.SOURCESQL_USAGE_MODE === "provider_managed"
+                  ? (environment.SOURCESQL_EXA_APPROVED_COST_MICROUSD ?? 50000)
+                  : 1000000),
             ),
             secretName: environment.SOURCESQL_EXA_SECRET_NAME ?? "",
             policyVersion:

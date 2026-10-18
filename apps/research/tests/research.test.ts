@@ -422,6 +422,8 @@ test("MCP stdio handshake, UI resource, correction, import and follow-up round t
         "sourcesql_explain",
         "sourcesql_query",
         "sourcesql_run_status",
+        "sourcesql_resume_run",
+        "sourcesql_recover_run",
         "sourcesql_read_result",
         "sourcesql_inspect_evidence",
         "sourcesql_cancel",

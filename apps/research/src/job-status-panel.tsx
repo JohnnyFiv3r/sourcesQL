@@ -42,6 +42,17 @@ const BILLING_DESTINATIONS = {
 } as const satisfies Record<CapacityService, { label: string; href: string }>;
 
 function capacityMessage(capacity: ResearchCapacity) {
+  if (capacity.reason === "provider_limit" && capacity.limit_kind !== undefined)
+    return {
+      title:
+        capacity.limit_kind === "rate"
+          ? "Research is temporarily rate limited"
+          : "The provider needs more research capacity",
+      description:
+        capacity.limit_kind === "rate"
+          ? "Completed work is saved. Wait for the provider's cooldown before continuing."
+          : "Completed work is saved. Check the provider's credits or billing, then inspect this saved job before continuing.",
+    };
   if (capacity.reason === "account_configuration")
     return {
       title: "Hosted research needs account setup",
@@ -83,7 +94,11 @@ function jobMessage(view: ResearchJobView) {
         ? "This job’s result is saved and ready to open. Further research steps may remain."
         : "The completed job record is saved.",
     };
-  if (job.capacity && job.status === "queued")
+  if (
+    job.capacity &&
+    (job.status === "queued" ||
+      (job.status === "failed" && job.capacity.reason === "provider_limit"))
+  )
     return capacityMessage(job.capacity);
   switch (job.status) {
     case "queued":
@@ -177,7 +192,7 @@ export function ResearchJobStatusPanel({
       : undefined;
   const usage = job.capacity && capacityUsage(job.capacity);
   const billing =
-    job.status === "queued" && job.capacity
+    ["queued", "failed"].includes(job.status) && job.capacity
       ? [...new Set(job.capacity.services ?? [])]
           .filter((service) => Object.hasOwn(BILLING_DESTINATIONS, service))
           .map((service) => BILLING_DESTINATIONS[service])
@@ -208,8 +223,9 @@ export function ResearchJobStatusPanel({
       {billing.length > 0 && (
         <div className="job-status-billing">
           <p className="job-status-billing-note">
-            Upgrades or adding a card are optional. Configured app limits may
-            still need adjustment. Billing changes do not resume this job.
+            {job.capacity?.reason === "operator_limit"
+              ? "Upgrades or adding a card are optional. Configured app limits may still need adjustment. Billing changes do not resume this job."
+              : "The provider manages payment methods and credits. Billing changes do not replay a failed request or resume this saved job."}
           </p>
           <nav
             className="job-status-billing-links"

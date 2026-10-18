@@ -7,7 +7,11 @@ import csv
 import hashlib
 import importlib.util
 import io
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -33,6 +37,7 @@ def test_execution_wheel_omits_only_declared_resources_and_recomputes_every_reco
     files = {
         "sourcesql/engine.py": b"# reviewed research engine\n",
         "sourcesql/resources.py": b"# public provisioning helpers\n",
+        "sourcesql/onboarding/__init__.py": b"# public provisioning CLI\n",
         "sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz": b"reviewed tokenizer data",
         "sourcesql/_resources/tokenizers/TIKTOKEN_LICENSE.txt": b"MIT tokenizer license",
         "sourcesql/_resources/personal-cloud.zip": archive({"setup.mjs": "public installer"}),
@@ -134,3 +139,56 @@ def test_full_current_source_flight_retains_the_reviewed_200kb_limit(tmp_path):
         "distribution_resource_sha256": builder.digest(files[builder.TOKENIZER_RESOURCE]),
     }
     assert builder.TOKENIZER_RESOURCE in manifest["engine_source_sha256"]
+    assert manifest["distribution_wheel_sha256"] == builder.digest(wheel.read_bytes())
+    # All original code, including deployment-only omissions, remains attested
+    # against the complete public distribution before producing execution bytes.
+    assert all(
+        manifest["engine_source_sha256"][name] == builder.digest(data)
+        for name, data in files.items()
+        if name.endswith(".py")
+    )
+    assert set(builder.EXECUTION_OMISSIONS) == {
+        "sourcesql/_resources/personal-cloud.zip",
+        builder.TOKENIZER_RESOURCE,
+        "sourcesql/resources.py",
+        "sourcesql/onboarding/__init__.py",
+    }
+    with zipfile.ZipFile(tmp_path / "flight/bundle.zip") as bundle:
+        execution = bundle.read("wheel/" + wheel.name)
+    assert builder.digest(execution) == manifest["execution_wheel_sha256"]
+    installed = tmp_path / "execution-wheel"
+    with zipfile.ZipFile(io.BytesIO(execution)) as compact:
+        assert set(compact.namelist()) == set(files) - set(builder.EXECUTION_OMISSIONS)
+        for name in compact.namelist():
+            if name != record_path:
+                assert compact.read(name) == files[name]
+        compact.extractall(installed)
+    # Use only this execution wheel in a new interpreter. The normal CLI path
+    # still executes real fixture research through the protected SQL worker.
+    queried = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "sourcesql.cli",
+            "--store",
+            str(tmp_path / "fixture-store"),
+            "query",
+            "--sql",
+            "SELECT title,url FROM WEB_SEARCH('fictional Aurora Birch campuses')",
+            "--json",
+        ],
+        cwd=tmp_path,
+        env={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONPATH": str(installed),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert queried.returncode == 0, queried.stderr
+    result = json.loads(queried.stdout)
+    assert result["receipt"]["status"] == "completed"
+    assert result["rows"] and any("aurora.example" in row["url"] for row in result["rows"])

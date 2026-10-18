@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from copy import deepcopy
 from datetime import date, datetime
 from time import monotonic
 from typing import Any
@@ -12,10 +13,15 @@ import httpx
 from ..contracts import Budget, SourcesQLError
 from .common import (
     api_json,
+    capture_provider_failure,
     normalized_text,
     normalized_url,
     provider_usage,
+    provider_effect_state,
+    project_search_provenance,
     resolve_public,
+    search_coverage_record,
+    search_hit,
     source_record,
 )
 
@@ -107,6 +113,7 @@ class BraveProvider:
         self.client = client or httpx.Client(timeout=20, trust_env=False, follow_redirects=False)
         self.events: list[dict] = []
         self.hits: list[dict] = []
+        self.search_coverage: list[dict] = []
 
     def capabilities(self) -> dict:
         return {
@@ -139,7 +146,10 @@ class BraveProvider:
                 "provider_unavailable", "Brave credentials are not configured", "acquisition"
             )
         result = []
+        coverage = search_coverage_record("brave", queries, count)
+        self.search_coverage.append(coverage)
         for query_index, query in enumerate(queries):
+            query_coverage = coverage["queries"][query_index]
             budget.reserve("search_queries", limit="max_search_queries")
             params: dict[str, Any] = {"q": query, "count": count, "extra_snippets": "true"}
             for key in ("country", "search_lang", "ui_lang", "safesearch"):
@@ -150,10 +160,12 @@ class BraveProvider:
                 "kind": "search",
                 "provider": "brave",
                 "query_index": query_index,
+                "search_id": coverage["search_id"],
                 "status": "dispatched",
                 "usage": provider_usage("brave"),
             }
             self.events.append(event)
+            query_coverage["status"] = "dispatched"
             try:
                 body = api_json(
                     self.client,
@@ -161,10 +173,12 @@ class BraveProvider:
                     self.endpoint,
                     headers={"X-Subscription-Token": self.api_key, "Accept": "application/json"},
                     params=params,
+                    provider="brave",
                 )
                 hits = body.get("web", {}).get("results", [])
                 if not isinstance(hits, list):
                     raise SourcesQLError("invalid_output", "Invalid Brave results", "acquisition")
+                query_coverage["returned_hits"] = len(hits)
                 rows = []
                 for rank, hit in enumerate(hits[:count], 1):
                     if not isinstance(hit, dict) or not isinstance(hit.get("url"), str):
@@ -194,13 +208,9 @@ class BraveProvider:
                         provider="brave",
                     )
                     row["hits"] = [
-                        {
-                            "provider": "brave",
-                            "query": query,
-                            "query_index": query_index,
-                            "rank": rank,
-                        }
+                        search_hit("brave", coverage["search_id"], query, query_index, rank)
                     ]
+                    project_search_provenance(row)
                     self.hits.extend(row["hits"])
                     rows.append(row)
                 event.update(
@@ -208,13 +218,17 @@ class BraveProvider:
                     usage=provider_usage("brave", body),
                     more_results_available=body.get("query", {}).get("more_results_available"),
                 )
-                result.extend(publication_filter(rows, options))
+                retained = publication_filter(rows, options)
+                query_coverage.update(status="completed", retained_hits=len(retained))
+                result.extend(retained)
             except SourcesQLError as error:
+                capture_provider_failure(event, error)
                 event["status"] = (
                     "remote_outcome_unknown"
                     if getattr(error, "remote_outcome_unknown", False)
                     else "failed"
                 )
+                query_coverage["status"] = event["status"]
                 raise
         return result
 
@@ -245,7 +259,10 @@ class ExaProvider:
         )
         self.events: list[dict] = []
         self.hits: list[dict] = []
+        self.search_coverage: list[dict] = []
         self.resolver = resolver
+        self.stage_journal: dict[str, Any] | None = None
+        self.stage_options: dict[str, Any] | None = None
 
     def capabilities(self) -> dict:
         return {
@@ -312,12 +329,13 @@ class ExaProvider:
                 self.endpoint + path,
                 headers={"x-api-key": self.api_key},
                 body=body,
+                provider="exa",
             )
             event.update(
                 status="completed",
                 request_id=result.get("requestId"),
-                usage=provider_usage("exa", result),
             )
+            event["usage"] = provider_usage("exa", result)
             if path == "/search":
                 # Exa deprecates this field and may send an empty string. Retain
                 # provider telemetry verbatim, without using it for dispatch.
@@ -325,15 +343,19 @@ class ExaProvider:
                 event["resolved_search_type"] = resolved if isinstance(resolved, str) else None
             return result
         except SourcesQLError as error:
-            event["status"] = (
-                "not_dispatched"
-                if event["status"] == "reserved"
-                else (
-                    "remote_outcome_unknown"
-                    if getattr(error, "remote_outcome_unknown", False)
-                    else "failed"
+            capture_provider_failure(event, error)
+            if event["status"] != "completed":
+                event["status"] = (
+                    "not_dispatched"
+                    if event["status"] == "reserved"
+                    else (
+                        "completed_validation_failed"
+                        if getattr(error, "effect_state", None) == "completed_unretained"
+                        else "remote_outcome_unknown"
+                        if getattr(error, "remote_outcome_unknown", False)
+                        else "failed"
+                    )
                 )
-            )
             raise
 
     def _rows(self, body: dict) -> list[dict]:
@@ -366,6 +388,203 @@ class ExaProvider:
             rows.append(row)
         return rows
 
+    def _search_body(self, query: str, options: dict, count: int) -> dict:
+        body: dict[str, Any] = {
+            "query": query,
+            "type": self.search_type,
+            "contents": {"highlights": True},
+        }
+        if count != 10:
+            body["numResults"] = count
+        for source, target in (
+            ("published_after", "startPublishedDate"),
+            ("published_before", "endPublishedDate"),
+        ):
+            if options.get(source) is not None:
+                value = options[source]
+                body[target] = value + "T00:00:00Z" if len(value) == 10 else value
+        for source, target in (
+            ("include_domains", "includeDomains"),
+            ("exclude_domains", "excludeDomains"),
+        ):
+            if source in options:
+                body[target] = options[source]
+        return body
+
+    def _journal_search(self, queries, options, budget, count, coverage, deadline, concurrency):
+        """Owner-thread journal/budget operations around bounded HTTP-only workers."""
+        journal = self.stage_journal
+        if not isinstance(journal, dict) or any(
+            not callable(journal.get(key)) for key in ("begin", "finish", "fail")
+        ):
+            raise SourcesQLError(
+                "invalid_request", "Invalid search checkpoint callbacks", "acquisition"
+            )
+        stage_options = dict(self.stage_options if self.stage_options is not None else options)
+        acquired, errors, stage_keys, bounds = {}, {}, {}, {}
+        owners, aliases, cached = {}, {}, set()
+        pending: dict[Future, int] = {}
+        next_query, pending_slots = 0, 0
+
+        def failed(index, key, error):
+            if key is None:
+                return
+            event = next(
+                (
+                    event
+                    for event in self.events
+                    if event.get("search_id") == coverage["search_id"]
+                    and event.get("query_index") == index
+                ),
+                {},
+            )
+            if not isinstance(error, SourcesQLError):
+                error = SourcesQLError("execution_failed", "Search stage failed", "acquisition")
+            error.effect_state = provider_effect_state(event.get("status"))
+            error.remote_outcome_unknown = error.effect_state == "outcome_unknown"
+            try:
+                journal["fail"](key, error)
+            except Exception as journal_error:
+                # A terminal write failure cannot abandon already started siblings.
+                errors[index] = journal_error
+
+        with ThreadPoolExecutor(
+            max_workers=concurrency, thread_name_prefix="sourcesql-exa"
+        ) as pool:
+            while pending or (next_query < len(queries) and not errors):
+                while not errors and next_query < len(queries) and len(pending) < concurrency:
+                    index, query = next_query, queries[next_query]
+                    if query in owners:
+                        aliases[index] = owners[query]
+                        coverage["queries"][index].update(
+                            checkpoint_reused=True, reuse_query_index=owners[query]
+                        )
+                        next_query += 1
+                        continue
+                    key = None
+                    try:
+                        key, retained, reused = journal["begin"](
+                            "WEB_SEARCH", [query], stage_options
+                        )
+                        stage_keys[index] = key
+                        owners[query] = index
+                        if reused:
+                            acquired[index] = retained
+                            cached.add(index)
+                            coverage["queries"][index].update(
+                                status="completed",
+                                retained_hits=len(retained),
+                                checkpoint_reused=True,
+                            )
+                            next_query += 1
+                            continue
+                        self._check_dispatch(budget, deadline)
+                        available = (
+                            budget.limits["max_candidates"]
+                            - budget.counts.get("candidates", 0)
+                            - pending_slots
+                        )
+                        unstarted = len(set(queries[index:]) - (set(owners) - {query}))
+                        bound = min(count, available // unstarted)
+                        if bound < 1:
+                            raise SourcesQLError(
+                                "budget_exhausted", "Candidate allowance exhausted", "dispatch"
+                            )
+                        budget.reserve("search_queries", limit="max_search_queries")
+                        event = self._reserve_request("/search", budget, "search_requests")
+                        event.update(query_index=index, search_id=coverage["search_id"])
+                        coverage["queries"][index].update(status="reserved", effective_limit=bound)
+                        future = pool.submit(
+                            self._request,
+                            "/search",
+                            self._search_body(query, options, bound),
+                            budget,
+                            "search_requests",
+                            event=event,
+                            deadline=deadline,
+                        )
+                        bounds[index] = bound
+                        pending_slots += bound
+                        pending[future] = index
+                        next_query += 1
+                    except Exception as error:
+                        errors[index] = error
+                        failed(index, key, error)
+                if not pending:
+                    break
+                done, _ = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
+                for future in sorted(done, key=pending.__getitem__):
+                    index = pending.pop(future)
+                    bound, key = bounds.pop(index), stage_keys[index]
+                    query_coverage = coverage["queries"][index]
+                    try:
+                        result = future.result()
+                        query_coverage.update(
+                            returned_hits=len(result["results"])
+                            if isinstance(result.get("results"), list)
+                            else None,
+                            request_id=result.get("requestId")
+                            if isinstance(result.get("requestId"), str)
+                            else None,
+                        )
+                        rows = self._rows(result)[:bound]
+                        for rank, row in enumerate(rows, 1):
+                            row["hits"] = [
+                                search_hit(
+                                    "exa",
+                                    coverage["search_id"],
+                                    queries[index],
+                                    index,
+                                    rank,
+                                    result.get("requestId"),
+                                )
+                            ]
+                            project_search_provenance(row)
+                        budget.reserve("candidates", len(rows), "max_candidates")
+                        journal["finish"](key, "WEB_SEARCH", rows)
+                        acquired[index] = rows
+                        query_coverage.update(status="completed", retained_hits=len(rows))
+                    except Exception as error:
+                        errors[index] = error
+                        event = next(
+                            (
+                                event
+                                for event in self.events
+                                if event.get("search_id") == coverage["search_id"]
+                                and event.get("query_index") == index
+                            ),
+                            {},
+                        )
+                        query_coverage["status"] = (
+                            "failed"
+                            if event.get("status") == "completed"
+                            else event.get("status", "failed")
+                        )
+                        failed(index, key, error)
+                    finally:
+                        pending_slots -= bound
+                if not errors:
+                    try:
+                        self._check_dispatch(budget, deadline)
+                    except SourcesQLError as error:
+                        errors[next_query] = error
+        for index, owner in aliases.items():
+            if owner in acquired:
+                acquired[index] = deepcopy(acquired[owner])
+                cached.add(index)
+                coverage["queries"][index].update(
+                    status="completed", retained_hits=len(acquired[index]), checkpoint_reused=True
+                )
+        rows = []
+        for index in sorted(acquired):
+            for row in acquired[index]:
+                if index not in cached:
+                    self.hits.extend(row["hits"])
+                rows.append(row)
+        if errors:
+            raise errors[min(errors)]
+        return rows
+
     def search(self, queries: list[str], options: dict, budget: Budget) -> list[dict]:
         validate_queries(queries)
         count = search_options({"per_query_limit": 10, **options}, maximum=100)
@@ -384,51 +603,56 @@ class ExaProvider:
                 "budget_exhausted", "External concurrency allowance exhausted", "dispatch"
             )
         deadline = monotonic() + budget.limits["dispatch_deadline_seconds"]
+        coverage = search_coverage_record("exa", queries, count)
+        self.search_coverage.append(coverage)
+        if getattr(self, "stage_journal", None) is not None:
+            return self._journal_search(
+                queries, options, budget, count, coverage, deadline, concurrency
+            )
 
         # Exa's additionalQueries merges all variations into one ranked result
         # pool without per-query attribution. SQL's variadic WEB_SEARCH promises
         # a limit and honest hit lineage for each input, so retain one request per
         # query; deep modes still perform Exa's internal multi-step retrieval.
         def request_body(query: str) -> dict:
-            body: dict[str, Any] = {
-                "query": query,
-                "type": self.search_type,
-                "contents": {"highlights": True},
-            }
-            if count != 10:
-                body["numResults"] = count
-            for source, target in (
-                ("published_after", "startPublishedDate"),
-                ("published_before", "endPublishedDate"),
-            ):
-                if options.get(source) is not None:
-                    value = options[source]
-                    body[target] = value + "T00:00:00Z" if len(value) == 10 else value
-            for source, target in (
-                ("include_domains", "includeDomains"),
-                ("exclude_domains", "excludeDomains"),
-            ):
-                if source in options:
-                    body[target] = options[source]
-            return body
+            return self._search_body(query, options, count)
 
         def acquire(query_index: int, query: str, body: dict, event: dict) -> list[dict]:
-            result = self._request(
-                "/search", body, budget, "search_requests", event=event, deadline=deadline
-            )
-            result_rows = []
-            for rank, row in enumerate(self._rows(result)[:count], 1):
-                row["hits"] = [
-                    {
-                        "provider": "exa",
-                        "query": query,
-                        "query_index": query_index,
-                        "rank": rank,
-                        "request_id": result.get("requestId"),
-                    }
-                ]
-                result_rows.append(row)
-            return result_rows
+            query_coverage = coverage["queries"][query_index]
+            try:
+                result = self._request(
+                    "/search", body, budget, "search_requests", event=event, deadline=deadline
+                )
+                result_rows = []
+                query_coverage.update(
+                    returned_hits=len(result["results"])
+                    if isinstance(result.get("results"), list)
+                    else None,
+                    request_id=result.get("requestId")
+                    if isinstance(result.get("requestId"), str)
+                    else None,
+                )
+                rows = self._rows(result)
+                for rank, row in enumerate(rows[:count], 1):
+                    row["hits"] = [
+                        search_hit(
+                            "exa",
+                            coverage["search_id"],
+                            query,
+                            query_index,
+                            rank,
+                            result.get("requestId"),
+                        )
+                    ]
+                    project_search_provenance(row)
+                    result_rows.append(row)
+                query_coverage.update(status="completed", retained_hits=len(result_rows))
+                return result_rows
+            except Exception:
+                query_coverage["status"] = (
+                    "failed" if event["status"] == "completed" else event["status"]
+                )
+                raise
 
         # Only the owner thread reserves attempts and creates events. At most
         # `concurrency` requests are in flight, so failure/cancellation stops
@@ -449,6 +673,8 @@ class ExaProvider:
                         budget.reserve("search_queries", limit="max_search_queries")
                         event = self._reserve_request("/search", budget, "search_requests")
                         event["query_index"] = query_index
+                        event["search_id"] = coverage["search_id"]
+                        coverage["queries"][query_index]["status"] = "reserved"
                         pending[
                             pool.submit(acquire, query_index, query, request_body(query), event)
                         ] = query_index
@@ -535,6 +761,7 @@ class SerperProvider:
         self.client = client or httpx.Client(timeout=20, trust_env=False, follow_redirects=False)
         self.events: list[dict] = []
         self.hits: list[dict] = []
+        self.search_coverage: list[dict] = []
 
     def capabilities(self) -> dict:
         return {
@@ -566,7 +793,10 @@ class SerperProvider:
                 "provider_unavailable", "Serper credentials are not configured", "acquisition"
             )
         rows = []
+        coverage = search_coverage_record("serper", queries, count)
+        self.search_coverage.append(coverage)
         for query_index, query in enumerate(queries):
+            query_coverage = coverage["queries"][query_index]
             budget.reserve("search_queries", limit="max_search_queries")
             body = {"q": query, "num": count}
             for key in ("gl", "hl"):
@@ -576,10 +806,13 @@ class SerperProvider:
             event = {
                 "kind": "search",
                 "provider": "serper",
+                "search_id": coverage["search_id"],
+                "query_index": query_index,
                 "status": "dispatched",
                 "usage": provider_usage("serper"),
             }
             self.events.append(event)
+            query_coverage["status"] = "dispatched"
             try:
                 result = api_json(
                     self.client,
@@ -587,10 +820,12 @@ class SerperProvider:
                     self.endpoint,
                     headers={"X-API-KEY": self.api_key},
                     body=body,
+                    provider="serper",
                 )
                 hits = result.get("organic")
                 if not isinstance(hits, list):
                     raise SourcesQLError("invalid_output", "Invalid Serper results", "acquisition")
+                query_coverage["returned_hits"] = len(hits)
                 result_rows = []
                 for rank, hit in enumerate(hits[:count], 1):
                     if not isinstance(hit, dict) or not isinstance(hit.get("link"), str):
@@ -611,22 +846,22 @@ class SerperProvider:
                         provider="serper",
                     )
                     row["hits"] = [
-                        {
-                            "query": query,
-                            "query_index": query_index,
-                            "rank": rank,
-                            "provider": "serper",
-                        }
+                        search_hit("serper", coverage["search_id"], query, query_index, rank)
                     ]
+                    project_search_provenance(row)
                     self.hits.extend(row["hits"])
                     result_rows.append(row)
                 event["status"] = "completed"
-                rows.extend(publication_filter(result_rows, options))
+                retained = publication_filter(result_rows, options)
+                query_coverage.update(status="completed", retained_hits=len(retained))
+                rows.extend(retained)
             except SourcesQLError as error:
+                capture_provider_failure(event, error)
                 event["status"] = (
                     "remote_outcome_unknown"
                     if getattr(error, "remote_outcome_unknown", False)
                     else "failed"
                 )
+                query_coverage["status"] = event["status"]
                 raise
         return rows

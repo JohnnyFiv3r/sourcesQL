@@ -2,11 +2,19 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { queryFeedbackSchema } from "../src/query-feedback.js";
 import {
   snapshotSchema,
   webUrl,
+  id,
+  key,
+  cellDiagnosticSchema,
+  cellDiagnosticStatusSchema,
+  researchQualitySchema,
   type Snapshot,
   type CellValue,
+  type CellDiagnostic,
+  type ResearchQuality,
 } from "../src/schema.js";
 
 export type EngineResult = {
@@ -27,11 +35,16 @@ export type EngineResult = {
   data_classification?: Snapshot["dataClassification"];
   evidence: Record<string, unknown>[];
   source_versions: Record<string, unknown>[];
+  cell_diagnostics?: Record<string, unknown>[];
+  research_quality?: Record<string, unknown>;
+  query_feedback?: unknown;
   receipt: Record<string, unknown>;
   next_offset: number | null;
 };
 export interface ResearchEngine {
   readonly supportsExplain?: boolean;
+  readonly supportsAsyncJobs?: boolean;
+  readonly supportsUsageReporting?: boolean;
   call<T = Record<string, unknown>>(
     method: string,
     params?: Record<string, unknown>,
@@ -150,6 +163,69 @@ export type ResultReference = {
   snapshot_id: string;
   title: string;
 };
+
+function safeCellDiagnostic(value: Record<string, unknown>): CellDiagnostic {
+  const status = cellDiagnosticStatusSchema.safeParse(value.status);
+  const candidate: CellDiagnostic = {
+    status: status.success ? status.data : "unknown",
+  };
+  for (const [raw, field] of [
+    ["diagnostic_id", "diagnosticId"],
+    ["source_version_id", "sourceVersionId"],
+  ] as const) {
+    const reference = id.safeParse(value[raw]);
+    if (reference.success) candidate[field] = reference.data;
+  }
+  const path = cellDiagnosticSchema.shape.valuePath.safeParse(value.value_path);
+  if (path.success && path.data !== undefined) candidate.valuePath = path.data;
+  return candidate;
+}
+
+function safeResearchQuality(
+  value: unknown,
+  fields: Set<string>,
+): ResearchQuality | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const raw = value as Record<string, unknown>;
+  const gaps: ResearchQuality["gaps"] = [];
+  // The app carries a preview; the engine retains the full gap inventory.
+  for (const entry of Array.isArray(raw.gaps) ? raw.gaps.slice(0, 64) : []) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const row = id.safeParse(entry.row_id),
+      column = key.safeParse(entry.column_key);
+    if (!row.success || !column.success || !fields.has(column.data)) continue;
+    const status =
+      researchQualitySchema.shape.gaps.element.shape.diagnosticStatus.safeParse(
+        entry.diagnostic_status,
+      );
+    gaps.push({
+      ...safeCellDiagnostic(entry),
+      rowId: row.data,
+      columnKey: column.data,
+      ...(status.success && status.data !== undefined
+        ? { diagnosticStatus: status.data }
+        : {}),
+    });
+  }
+  const parsed = researchQualitySchema.safeParse({
+    goalStatus: raw.goal_status,
+    requiredCells: raw.required_cells,
+    unresolvedCells: raw.unresolved_cells,
+    rowShortfall: raw.row_shortfall,
+    gaps,
+    gapsTotal: raw.gaps_total,
+    gapsOmitted:
+      typeof raw.gaps_total === "number"
+        ? raw.gaps_total - gaps.length
+        : raw.gaps_omitted,
+    complete: raw.complete,
+    scope: raw.scope,
+    factualTruthVerified: raw.factual_truth_verified,
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function resultSnapshot(
   result: EngineResult,
   reference: ResultReference,
@@ -158,6 +234,59 @@ export function resultSnapshot(
     result.receipt.finished_at ?? result.receipt.completed_at ?? "",
   );
   const fields = new Set(result.columns.map((column) => column.key));
+  const rowIds = new Set(result.row_ids);
+  const quality = safeResearchQuality(result.research_quality, fields);
+  const feedback = queryFeedbackSchema.safeParse(result.query_feedback);
+  const diagnostics = new Map<string, Record<string, CellDiagnostic[]>>();
+  const retainDiagnostic = (
+    rowId: string,
+    field: string,
+    diagnostic: CellDiagnostic,
+  ) => {
+    if (!rowIds.has(rowId) || !fields.has(field)) return;
+    const row =
+      diagnostics.get(rowId) ??
+      (Object.create(null) as Record<string, CellDiagnostic[]>);
+    const cell = (row[field] ??= []);
+    // A representative of every finite status survives repeated same-status references.
+    if (
+      cell.some((entry) => JSON.stringify(entry) === JSON.stringify(diagnostic))
+    )
+      return;
+    if (cell.length < 32) cell.push(diagnostic);
+    else if (!cell.some((entry) => entry.status === diagnostic.status)) {
+      const duplicate = cell.findLastIndex(
+        (entry, index) =>
+          cell.findIndex((first) => first.status === entry.status) !== index,
+      );
+      if (duplicate >= 0) cell[duplicate] = diagnostic;
+    }
+    row[field] = cell;
+    diagnostics.set(rowId, row);
+  };
+  for (const entry of Array.isArray(result.cell_diagnostics)
+    ? result.cell_diagnostics
+    : []) {
+    if (
+      entry &&
+      typeof entry.row_id === "string" &&
+      typeof entry.column_key === "string"
+    )
+      retainDiagnostic(
+        entry.row_id,
+        entry.column_key,
+        safeCellDiagnostic(entry),
+      );
+  }
+  for (const gap of quality?.gaps ?? []) {
+    const {
+      rowId,
+      columnKey,
+      diagnosticStatus: _diagnosticStatus,
+      ...diagnostic
+    } = gap;
+    retainDiagnostic(rowId, columnKey, diagnostic);
+  }
   const sources = new Map(
     result.source_versions.map((source) => [source.source_version_id, source]),
   );
@@ -165,9 +294,9 @@ export function resultSnapshot(
   const rows = result.rows.map((values, index) => {
     const rowId = result.row_ids[index];
     const records = result.evidence.filter((e) => e.row_id === rowId);
-    const evidence: Record<string, string[]> = {};
+    const evidence = Object.create(null) as Record<string, string[]>;
     const cellSources: NonNullable<Snapshot["rows"][number]["cellSources"]> =
-      {};
+      Object.create(null);
     const urls = new Set<string>();
     const seenSupport = new Set<string>();
     for (const entry of records) {
@@ -230,8 +359,15 @@ export function resultSnapshot(
       evidenceRefs: [...records, ...lineage]
         .map((entry) => String(entry.id ?? entry.evidence_id ?? ""))
         .filter((id, index, refs) => !!id && refs.indexOf(id) === index),
-      evidence,
-      cellSources,
+      evidence: Object.fromEntries(Object.entries(evidence)),
+      cellSources: Object.fromEntries(Object.entries(cellSources)),
+      ...(diagnostics.has(rowId)
+        ? {
+            cellDiagnostics: Object.fromEntries(
+              Object.entries(diagnostics.get(rowId)!),
+            ),
+          }
+        : {}),
       verificationNote: Object.keys(evidence).length
         ? "Direct textual support; not a truth guarantee."
         : lineage.length
@@ -280,6 +416,8 @@ export function resultSnapshot(
       contentSha256: result.content_sha256,
     },
     previewOffset: 0,
+    ...(quality ? { researchQuality: quality } : {}),
+    ...(feedback.success ? { queryFeedback: feedback.data } : {}),
   };
 }
 export function boundedPreview(snapshot: Snapshot, offset = 0): Snapshot {
@@ -289,6 +427,15 @@ export function boundedPreview(snapshot: Snapshot, offset = 0): Snapshot {
     rows: snapshot.rows.slice(offset, offset + count),
     ...(snapshot.dataRef ? { previewOffset: offset } : {}),
   };
+  if (
+    preview.queryFeedback !== undefined &&
+    new TextEncoder().encode(JSON.stringify(preview)).byteLength > 195000
+  ) {
+    // A descriptive sidecar must not displace otherwise valid saved cells.
+    // Canonical feedback stays in storage and sourcesql_read_result.
+    const { queryFeedback: _feedback, ...cells } = preview;
+    preview = cells;
+  }
   while (
     new TextEncoder().encode(JSON.stringify(preview)).byteLength > 195000 &&
     count > 1

@@ -21,6 +21,10 @@ import {
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
+import {
+  answerIntentSchema,
+  queryFeedbackSchema,
+} from "../src/query-feedback.js";
 import { readFileSync } from "node:fs";
 import {
   LEGACY_RESOURCE_URI,
@@ -59,14 +63,20 @@ import {
   type CheckpointPendingState,
   type ResearchCheckpoint,
 } from "./checkpoints.js";
-import { researchJobView } from "../src/job-view.js";
-import { safeExecutionError, safeRunErrors } from "./execution-errors.js";
+import { capacitySchema, researchJobView } from "../src/job-view.js";
+import { encodeResearchView, type ResearchViewWire } from "../src/view-wire.js";
+import {
+  safeExecutionError,
+  safeRunErrors,
+  safeFailureContext,
+} from "./execution-errors.js";
 import {
   SOURCESQL_SERVER_INSTRUCTIONS,
   SOURCESQL_QUERY_DESCRIPTION,
   SOURCESQL_CAPABILITIES_DESCRIPTION,
   SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS,
   SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+  SOURCESQL_OPEN_RESEARCH_HANDOFF,
 } from "./agent-guidance.js";
 
 const appVersion: string = JSON.parse(
@@ -179,7 +189,7 @@ export function createServer(
       },
       options.access,
     );
-  const presentation = (view: ResearchView, offset = 0): ResearchView => {
+  const presentation = (view: ResearchView, offset = 0): ResearchViewWire => {
     authorizeSnapshot(
       {
         ...view.snapshot,
@@ -192,7 +202,7 @@ export function createServer(
     const snapshot = boundedPreview(view.snapshot, offset);
     const rows = snapshot.rows;
     const total = view.snapshot.rows.length;
-    return {
+    return encodeResearchView({
       ...view,
       snapshots: view.snapshots.filter(
         (s) =>
@@ -216,7 +226,7 @@ export function createServer(
         total,
         nextOffset: offset + rows.length < total ? offset + rows.length : null,
       },
-    };
+    });
   };
   const viewResult = (fullView: ResearchView, offset = 0): CallToolResult => {
     const view = presentation(fullView, offset);
@@ -235,6 +245,17 @@ export function createServer(
   ): Promise<CallToolResult> => {
     try {
       const result = await work();
+      if (
+        options.responseByteLimit &&
+        Buffer.byteLength(JSON.stringify(result)) > options.responseByteLimit &&
+        result.structuredContent &&
+        typeof result.structuredContent === "object" &&
+        "usageNotices" in result.structuredContent
+      ) {
+        const { usageNotices: _notices, ...required } =
+          result.structuredContent;
+        result.structuredContent = required;
+      }
       if (
         options.responseByteLimit &&
         Buffer.byteLength(JSON.stringify(result)) > options.responseByteLimit
@@ -273,6 +294,61 @@ export function createServer(
     "failed",
     "cancelled",
   ]);
+  const legacyCapacity = (capacity: Record<string, unknown>) =>
+    Object.fromEntries(
+      [
+        "resource",
+        "reason",
+        "period",
+        "allowance",
+        "services",
+        "resets_at",
+        "limit",
+        "used",
+        "unit",
+      ]
+        .filter((key) => Object.hasOwn(capacity, key))
+        .map((key) => [key, capacity[key]]),
+    );
+  // Advisory usage cannot make a valid saved table fail to open.
+  const currentUsageNotices = async () =>
+    options.engine?.supportsUsageReporting &&
+    options.access?.mode !== "fixture-anonymous"
+      ? options.engine
+          .call<import("../src/usage.js").UsageNotice[]>("usage_notices")
+          .catch(() => [])
+      : [];
+  if (options.engine?.supportsUsageReporting)
+    registerAppTool(
+      tools,
+      "research_dismiss_usage_notice",
+      {
+        description:
+          "Dismiss this owner's estimated usage notice for its provider allowance period. Does not change billing, limits, jobs or research.",
+        inputSchema: z
+          .object({ notice_id: z.string().regex(/^[a-f0-9]{64}$/) })
+          .strict(),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        _meta: { ui: { visibility: ["app"] } },
+      },
+      (args) =>
+        safe(async () => {
+          if (options.access?.mode === "fixture-anonymous")
+            throw new Error("Usage notices require authenticated owner access");
+          return {
+            content: [],
+            structuredContent: await options.engine!.call(
+              "dismiss_usage_notice",
+              args,
+            ),
+          };
+        }),
+    );
   const jobResult = async (
     receipt: Record<string, unknown>,
     continuation?: string,
@@ -287,7 +363,9 @@ export function createServer(
         "Invalid durable job receipt; inspect the existing request before retrying.",
       );
     const completed = receipt.status === "completed";
-    if (completed) {
+    const preflight = receipt.operation === "explain";
+    let feedback: z.infer<typeof queryFeedbackSchema> | undefined;
+    if (completed && !preflight) {
       if (typeof receipt.result_id !== "string")
         throw new Error(
           "Completed job has no result handle; inspect the same job.",
@@ -298,12 +376,17 @@ export function createServer(
         limit: 1,
       });
       authorizeSnapshot(resultSnapshotForAccess(page), options.access);
+      const checkedFeedback = queryFeedbackSchema.safeParse(
+        page.query_feedback,
+      );
+      if (checkedFeedback.success) feedback = checkedFeedback.data;
     }
     const pending =
       !["completed", "failed", "cancelled"].includes(receipt.status) ||
       (receipt.status === "cancelled" && receipt.pending === true);
     const keys = [
       "job_id",
+      "operation",
       "request_id",
       "status",
       "cancellation_requested",
@@ -313,18 +396,30 @@ export function createServer(
       "finished_at",
       "dispatch_blocked",
       "capacity",
+      "usageNotices",
       "can_resume",
-      ...(completed ? ["result_id", "run_id"] : []),
+      ...(completed
+        ? preflight
+          ? ["preflight"]
+          : ["result_id", "run_id"]
+        : []),
     ];
     const result = Object.fromEntries(
       keys
         .filter((key) => Object.hasOwn(receipt, key))
         .map((key) => [key, receipt[key]]),
     );
+    const capacity = capacitySchema.safeParse(receipt.capacity);
+    if (capacity.success) {
+      result.capacity = legacyCapacity(capacity.data);
+      if (capacity.data.limit_kind !== undefined)
+        result.provider_capacity_v1 = capacity.data;
+    }
     if (receipt.status === "failed") {
       const error = safeExecutionError(receipt.error_code);
       result.error_code = error.code;
       result.error = error;
+      Object.assign(result, safeFailureContext(receipt));
       if (
         typeof receipt.run_id === "string" &&
         id.safeParse(receipt.run_id).success
@@ -332,6 +427,9 @@ export function createServer(
         result.run_id = receipt.run_id;
     }
     result.pending = pending;
+    if (!pending && options.engine?.supportsUsageReporting)
+      result.usageNotices = await currentUsageNotices();
+    if (feedback) result.query_feedback = feedback;
     const guidance =
       receipt.status === "submission_unknown"
         ? "Submission outcome is unknown. Poll sourcesql_job_status with this job_id. Do not submit a new request ID or automatically repeat submission."
@@ -346,7 +444,9 @@ export function createServer(
                   ? "This job is queued. Poll sourcesql_job_status for state; when capacity is available, call sourcesql_start_job with this same job_id to resume. A new request ID starts different work. No result is available yet."
                   : "Poll sourcesql_job_status with this job_id. Reuse the same request_id to recover this job; a new ID starts different work. No result is available yet."
             : completed
-              ? "Query execution completed and the result is stored. Further SQL can reuse its result_id; open_research displays the final table. This response does not render a component."
+              ? preflight
+                ? "Canonical validation completed without provider dispatch. This consumed an on-demand Flight reservation, not a research result. Execute the validated query with a new request_id only when ready; execution revalidates dependencies and limits."
+                : "Query execution completed and the result is stored. Inspect sourcesql_read_result and advisory query_feedback against the intended answer before presenting; further SQL can reuse its result_id. open_research displays the final table. This response does not render a component."
               : `This job is terminal. No result was published; ${result.run_id ? "inspect sourcesql_run_status with this run_id" : "inspect this job"} before deciding whether to start new work.`;
     return {
       content: [
@@ -400,7 +500,11 @@ export function createServer(
         idempotentHint: true,
         openWorldHint: false,
       },
-      _meta: { ui: { resourceUri } },
+      _meta: {
+        ui: { resourceUri },
+        // Mirror the standard field for ChatGPT integrations using its compatibility path.
+        "openai/outputTemplate": resourceUri,
+      },
     },
     ({ snapshot_id, snapshot, result_ref, offset, row_id, job_id }) =>
       safe(async () => {
@@ -414,12 +518,30 @@ export function createServer(
             { job_id },
           );
           const checked = await jobResult(receipt);
-          const view = researchJobView(
+          const { usageNotices, job, ...base } = researchJobView(
             checked.structuredContent as Record<string, unknown>,
           );
+          // Published job cards strictly validate both this envelope and capacity.
+          // Add new presentation facts only through optional versioned metadata.
+          const view = {
+            ...base,
+            job: {
+              ...job,
+              ...(job.capacity
+                ? { capacity: legacyCapacity(job.capacity) }
+                : {}),
+            },
+          };
           return {
             content: [{ type: "text" as const, text: JSON.stringify(view) }],
             structuredContent: view,
+            _meta: {
+              sourcesqlJobPresentationV1: {
+                job_id: job.job_id,
+                ...(job.capacity ? { capacity: job.capacity } : {}),
+                ...(usageNotices ? { usageNotices } : {}),
+              },
+            },
           };
         }
         const full = result_ref
@@ -428,12 +550,33 @@ export function createServer(
             ? (authorizeSnapshot(snapshot, options.access),
               await store.import(snapshot))
             : await store.open(snapshot_id);
+        if (
+          !result_ref &&
+          !snapshot &&
+          !snapshot_id &&
+          full.snapshots.filter(
+            (saved) =>
+              options.access?.allowPrivateDisclosure !== false ||
+              !saved.dataClassification?.startsWith("private_"),
+          ).length !== 1
+        )
+          throw new Error(
+            "Choose the saved research explicitly with snapshot_id. Recovery cannot select a default table when several tables are available.",
+          );
         const start = row_id
           ? full.snapshot.rows.findIndex((row) => row.id === row_id)
           : (offset ?? 0);
         if (start < 0 || start > full.snapshot.rows.length)
           throw new Error("Research row or window not found");
-        return viewResult(full, start);
+        const result = viewResult(
+          { ...full, usageNotices: await currentUsageNotices() },
+          start,
+        );
+        result.content.push({
+          type: "text",
+          text: SOURCESQL_OPEN_RESEARCH_HANDOFF,
+        });
+        return result;
       }),
   );
   tools.registerTool(
@@ -1560,9 +1703,222 @@ export function createServer(
   );
   if (options.engine) {
     const engine = options.engine;
-    const engineResult = (result: Record<string, unknown>): CallToolResult => ({
-      content: [{ type: "text", text: JSON.stringify(result) }],
-      structuredContent: result,
+    const authorizeRunReceipt = (receipt: Record<string, unknown>) => {
+      if (!options.access) return;
+      if (
+        ["private_local", "private_derived"].includes(
+          String(receipt.data_classification),
+        ) &&
+        !options.access.allowPrivateDisclosure
+      )
+        throw new Error(
+          "Private host disclosure is not authorized by this server policy.",
+        );
+      if (
+        options.access.mode === "fixture-anonymous" &&
+        receipt.data_classification !== "synthetic_fixture"
+      )
+        throw new Error(
+          "Anonymous fixture mode accepts synthetic fixture runs only.",
+        );
+    };
+    const checkpointSummary = (raw: unknown) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return undefined;
+      const value = raw as Record<string, unknown>;
+      const entries = Array.isArray(value.stages) ? value.stages : [];
+      const stages = entries.slice(0, 128).flatMap((entry: unknown) => {
+        if (!entry || typeof entry !== "object") return [];
+        const item = entry as Record<string, unknown>;
+        if (
+          typeof item.stage_key !== "string" ||
+          !/^[A-Za-z0-9_-]{1,128}$/.test(item.stage_key) ||
+          typeof item.status !== "string" ||
+          !["intent", "completed", "rejected", "outcome_unknown"].includes(
+            item.status,
+          )
+        )
+          return [];
+        return [
+          {
+            stage_key: item.stage_key,
+            status: item.status,
+            error_code:
+              item.error_code == null
+                ? null
+                : safeExecutionError(item.error_code).code,
+          },
+        ];
+      });
+      const total =
+        Number.isInteger(value.total) &&
+        Number(value.total) >= stages.length &&
+        Number(value.total) <= 256
+          ? Number(value.total)
+          : stages.length;
+      return { stages, total, omitted: total - stages.length };
+    };
+    const publicReceipt = (raw: unknown) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+      const result = { ...raw } as Record<string, unknown>;
+      delete result.resume_request;
+      if (Array.isArray(result.errors))
+        result.errors = safeRunErrors(result.errors);
+      if (Object.hasOwn(result, "checkpoints"))
+        result.checkpoints = checkpointSummary(result.checkpoints);
+      if (Array.isArray(result.provider_events))
+        result.provider_events = result.provider_events
+          .slice(0, 256)
+          .map((raw: unknown) => {
+            if (!raw || typeof raw !== "object" || Array.isArray(raw))
+              return {};
+            const event = raw as Record<string, unknown>;
+            return Object.fromEntries(
+              Object.entries(event).filter(
+                ([name, value]) =>
+                  ([
+                    "kind",
+                    "provider",
+                    "operator",
+                    "status",
+                    "search_type",
+                    "resolved_search_type",
+                    "search_id",
+                    "request_id",
+                    "batch_id",
+                  ].includes(name) &&
+                    (value === null ||
+                      (typeof value === "string" &&
+                        /^[A-Za-z0-9_.:-]{0,128}$/.test(value)))) ||
+                  (["query_index", "inputs", "reserved_input_tokens"].includes(
+                    name,
+                  ) &&
+                    Number.isSafeInteger(value) &&
+                    Number(value) >= 0) ||
+                  (name === "fixture_only" && typeof value === "boolean"),
+              ),
+            );
+          });
+      return result;
+    };
+    const engineResult = (raw: Record<string, unknown>): CallToolResult => {
+      const result = publicReceipt(raw) as Record<string, unknown>;
+      for (const name of ["receipt", "latest_receipt", "foreign_receipt"])
+        if (Object.hasOwn(result, name)) {
+          result[name] = publicReceipt(result[name]);
+          // Retain the advisory once at the result level, not in each receipt.
+          if (result[name] && typeof result[name] === "object")
+            delete (result[name] as Record<string, unknown>).query_feedback;
+        }
+      if (Object.hasOwn(result, "query_feedback")) {
+        const checkedFeedback = queryFeedbackSchema.safeParse(
+          result.query_feedback,
+        );
+        if (checkedFeedback.success)
+          result.query_feedback = checkedFeedback.data;
+        else delete result.query_feedback;
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify(result) }],
+        structuredContent: result,
+      };
+    };
+    const diagnosticStatus = z.enum([
+      "processed",
+      "supported_text",
+      "no_match",
+      "not_stated",
+      "unknown",
+      "uninspected",
+      "not_inspected",
+      "ambiguous",
+      "conflicting",
+      "evidence_invalid",
+      "invalid_output",
+      "failed",
+      "unprocessed",
+      "not_processed",
+      "budget_exhausted",
+      "cancelled",
+      "provider_unavailable",
+      "provider_timeout",
+      "provider_connection_error",
+      "provider_http_error",
+      "provider_error",
+    ]);
+    const referenceId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
+    const valuePath = z.array(z.string().regex(/^[A-Za-z0-9_]{1,64}$/)).max(8);
+    const cellDiagnosticSchema = z.object({
+      diagnostic_id: referenceId,
+      row_id: referenceId,
+      column_key: key,
+      value_path: valuePath,
+      operator: z.enum([
+        "SEM_MATCH",
+        "SEM_SCORE",
+        "SEM_EXTRACT",
+        "SEM_EXTRACT_ALL",
+        "SEM_NORM",
+      ]),
+      status: diagnosticStatus,
+      reason: z.enum([
+        "not_stated_in_inspected_evidence",
+        "not_inspected",
+        "ambiguous",
+        "conflicting",
+        "invalid_evidence",
+        "invalid_output",
+        "provider_failure",
+        "unprocessed",
+        "capacity_limited",
+        "resolved",
+        "unknown",
+      ]),
+      source_version_id: referenceId.nullable().optional(),
+      inspected_windows: z
+        .array(
+          z.object({
+            start: z.number().int().nonnegative(),
+            end: z.number().int().nonnegative(),
+          }),
+        )
+        .max(64)
+        .optional(),
+      input_omitted_characters: z
+        .number()
+        .int()
+        .nonnegative()
+        .nullable()
+        .optional(),
+    });
+    const count = z.number().int().min(0).max(1_000_000);
+    const qualitySchema = z.object({
+      goal_status: z.enum([
+        "not_evaluated",
+        "requirements_satisfied",
+        "partial",
+      ]),
+      required_cells: count,
+      unresolved_cells: count,
+      row_shortfall: count,
+      gaps: z
+        .array(
+          z.object({
+            row_id: referenceId,
+            column_key: key,
+            status: diagnosticStatus,
+            diagnostic_status: diagnosticStatus.optional(),
+            diagnostic_id: referenceId.optional(),
+            source_version_id: referenceId.optional(),
+            value_path: valuePath.optional(),
+          }),
+        )
+        .max(256),
+      gaps_total: count,
+      gaps_omitted: count,
+      complete: z.boolean(),
+      scope: z.literal("declared_cells_and_minimum_rows"),
+      factual_truth_verified: z.literal(false),
     });
     const inputPin = z
       .object({
@@ -1590,6 +1946,27 @@ export function createServer(
           .uuid()
           .optional()
           .describe(SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS.request_id),
+        continuation_of: id
+          .optional()
+          .describe(
+            "Explicitly continue the same settled failed run with a new request_id; preserved stages are reused without replaying rejected or uncertain effects.",
+          ),
+        research_requirements: z
+          .object({
+            key_columns: z.array(key).min(1).max(4),
+            fields: z.array(key).min(1).max(32),
+            minimum_rows: z.number().int().min(0).max(1000).optional(),
+          })
+          .strict()
+          .optional()
+          .describe(
+            "Declare identity and required cells only for columns projected by this query. Use answer_intent for overall requested fields absent from intermediate results. Missing cell values report coverage gaps without rejecting results.",
+          ),
+        answer_intent: answerIntentSchema
+          .optional()
+          .describe(
+            "Record the intended answer independently of this query: row_unit describes one answer row; fields gives each requested output key and its meaning, units or period; optional question preserves the request. Keep the same intent across intermediate and final queries. Missing projected fields are advisory feedback and do not reject execution. SQL descriptions are derived independently from the actual query.",
+          ),
         parameters: z
           .record(
             z.string(),
@@ -1632,6 +2009,108 @@ export function createServer(
           .describe(SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS.budgets),
       })
       .strict();
+    const executeQueryOperation = async (
+      method: "query" | "explain",
+      args: z.infer<typeof querySchema>,
+    ): Promise<CallToolResult> => {
+      const capabilities = await engine.call<{
+        profiles?: { name: string; mode: string }[];
+        execution_mode?: string;
+      }>("capabilities");
+      if (capabilities.execution_mode === "async_jobs" && !args.request_id)
+        throw new Error(
+          `Hosted ${method === "explain" ? "validation" : "execution"} requires request_id before materializing inputs or submitting work.`,
+        );
+      if (
+        options.access?.mode === "fixture-anonymous" &&
+        !capabilities.profiles?.some(
+          (p) => p.name === args.profile && p.mode === "fixture",
+        )
+      )
+        throw new Error(
+          "Anonymous mode only executes fixture profiles; use a configured protected endpoint for other profiles.",
+        );
+      const inputs: Record<string, unknown> = {};
+      for (const [alias, pin] of Object.entries(args.inputs)) {
+        const original = await engine.call<EngineResult>("read_result", {
+          result_id: pin.result_id,
+          offset: 0,
+          limit: 1,
+        });
+        authorizeSnapshot(resultSnapshotForAccess(original), options.access);
+        if (pin.view !== "effective") {
+          inputs[alias] = pin;
+          continue;
+        }
+        const views = await store.viewsForResult(pin.result_id);
+        if (views.length !== 1)
+          throw new Error(
+            "Effective input requires one canonical research snapshot for this result",
+          );
+        const view = views[0];
+        authorizeView(view);
+        if (view.revision !== pin.amendment_revision)
+          throw new Error(
+            "App amendment revision changed; reopen research and pin the current revision",
+          );
+        const imported = await engine.call<
+          EngineResult & Record<string, unknown>
+        >("import_table", {
+          columns: view.snapshot.columns.map((c) => ({
+            key: c.key,
+            label: c.label,
+            logical_type: c.logicalType ?? "VARCHAR",
+            nullable: c.nullable ?? true,
+          })),
+          rows: view.snapshot.rows.map((r) =>
+            Object.fromEntries(
+              view.snapshot.columns.map((c) => [
+                c.key,
+                effectiveValue(view, r, c.key),
+              ]),
+            ),
+          ),
+          row_ids: view.snapshot.rows.map((r) => r.id),
+          data_classification: view.snapshot.dataClassification ?? "public_web",
+          parents: [
+            {
+              result_id: pin.result_id,
+              view: "effective",
+              amendment_revision: view.revision,
+            },
+          ],
+          provenance: {
+            engine_result_id: pin.result_id,
+            result_id: pin.result_id,
+            snapshot_id: view.snapshot.id,
+            view: "effective",
+            amendment_revision: view.revision,
+            dependencies: [pin.result_id],
+          },
+        });
+        if (Object.hasOwn(imported, "job_id") || imported.pending === true)
+          return jobResult(
+            imported,
+            `When materialization completes, repeat the original sourcesql_${method} with the same ${method} request_id ${args.request_id ?? "and identical arguments"} to resume. The ${method === "explain" ? "validation" : "research query"} has not been submitted.`,
+          );
+        inputs[alias] = {
+          result_id: imported.result_id,
+          view: "effective",
+          amendment_revision: view.revision,
+        };
+      }
+      const result = await engine.call(method, { ...args, inputs });
+      if (Object.hasOwn(result, "job_id")) return jobResult(result);
+      if (method === "query" && typeof result.result_id === "string") {
+        const page = await engine.call<EngineResult>("read_result", {
+          result_id: result.result_id,
+          offset: 0,
+          limit: 1,
+        });
+        authorizeSnapshot(resultSnapshotForAccess(page), options.access);
+      }
+      return engineResult(result);
+    };
     tools.registerTool(
       "sourcesql_materialize_research",
       {
@@ -1739,21 +2218,50 @@ export function createServer(
       },
       () => safe(async () => engineResult(await engine.call("capabilities"))),
     );
-    if (engine.supportsExplain !== false)
+    if (engine.supportsUsageReporting)
       tools.registerTool(
-        "sourcesql_explain",
+        "sourcesql_usage_report",
         {
+          title: "Research usage report",
           description:
-            "Admit and explain a bounded query without provider dispatch.",
-          inputSchema: querySchema,
+            "Report sourcesQL provider requests, response cost estimates, model tokens and observed MotherDuck Flight runtime for an ISO time interval (default current UTC calendar month), optionally one job_id. Includes failed/cancelled work and explicit unknown costs. This is sourcesQL activity, not an account-wide invoice or remaining credit balance. No searches, models or Flights are started. Separate MotherDuck SQL compute/storage and unobserved runtime remain unknown. A research workflow can contain several jobs; specify the interval to include all of them.",
+          inputSchema: z
+            .object({
+              start: z.iso.datetime().optional(),
+              end: z.iso.datetime().optional(),
+              job_id: z.uuid().optional(),
+            })
+            .strict(),
           annotations: {
             readOnlyHint: true,
+            destructiveHint: false,
             idempotentHint: true,
             openWorldHint: false,
           },
         },
         (args) =>
-          safe(async () => engineResult(await engine.call("explain", args))),
+          safe(async () => {
+            if (options.access?.mode === "fixture-anonymous")
+              throw new Error(
+                "Usage reports require authenticated owner access",
+              );
+            return engineResult(await engine.call("usage_report", args));
+          }),
+      );
+    if (engine.supportsExplain !== false)
+      tools.registerTool(
+        "sourcesql_explain",
+        {
+          description:
+            "Admit and explain a bounded query without search/model dispatch. Exact effective-view inputs are materialized first when needed. Hosted execution requires request_id and returns async materialization/validation jobs: poll sourcesql_job_status and repeat this tool with the same request_id after materialization. On-demand Flights consume configured capacity. Local validation is synchronous. Validation never authorizes later execution or raises its limits.",
+          inputSchema: querySchema,
+          annotations: {
+            readOnlyHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        (args) => safe(() => executeQueryOperation("explain", args)),
       );
     tools.registerTool(
       "sourcesql_query",
@@ -1767,99 +2275,88 @@ export function createServer(
           openWorldHint: true,
         },
       },
+      (args) => safe(() => executeQueryOperation("query", args)),
+    );
+    tools.registerTool(
+      "sourcesql_recover_run",
+      {
+        description:
+          "Recover a bounded page of successful source acquisitions retained by a stopped or partial run. No search or model calls. Hosted recovery can start a provider-free Flight and consume configured Flight capacity. The result is explicitly incomplete input data; author corrected SQL over it and do not present raw recovery as finished research. Poll any pending job and repeat the same arguments to recover its result.",
+        inputSchema: z
+          .object({
+            run_id: id,
+            offset: z.number().int().nonnegative().default(0),
+            limit: z.number().int().min(1).max(1000).default(1000),
+          })
+          .strict(),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
       (args) =>
         safe(async () => {
-          const capabilities = await engine.call<{
-            profiles?: { name: string; mode: string }[];
-            execution_mode?: string;
-          }>("capabilities");
-          if (capabilities.execution_mode === "async_jobs" && !args.request_id)
-            throw new Error(
-              "Hosted execution requires request_id before materializing inputs or submitting a query.",
-            );
+          authorizeRunReceipt(
+            await engine.call("run_status", { run_id: args.run_id }),
+          );
+          const result = await engine.call("recover_run", args);
+          if (Object.hasOwn(result, "job_id")) return jobResult(result);
+          const page = await engine.call<EngineResult>("read_result", {
+            result_id: result.result_id,
+            offset: 0,
+            limit: 1,
+          });
+          authorizeSnapshot(resultSnapshotForAccess(page), options.access);
+          return engineResult(result);
+        }),
+    );
+    tools.registerTool(
+      "sourcesql_resume_run",
+      {
+        description:
+          "Continue an authorized failed, settled run using the same SQL, input pins and limits plus this new request_id. Inspect sourcesql_run_status first. Completed stages are reused; rejected effects and unknown outcomes never authorize replay. This may start research and consume configured capacity within the existing authorization. Do not widen limits or retry an uncertain effect.",
+        inputSchema: z.object({ run_id: id, request_id: z.uuid() }).strict(),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
+      },
+      (args) =>
+        safe(async () => {
+          const prior = await engine.call("run_status", {
+            run_id: args.run_id,
+          });
+          authorizeRunReceipt(prior);
           if (
-            options.access?.mode === "fixture-anonymous" &&
-            !capabilities.profiles?.some(
-              (p) => p.name === args.profile && p.mode === "fixture",
-            )
+            prior.status !== "failed" ||
+            prior.settlement_status !== "settled"
           )
             throw new Error(
-              "Anonymous mode only executes fixture profiles; use a configured protected endpoint for other profiles.",
+              "Only an authorized failed, settled run can continue; inspect the existing run before starting work.",
             );
-          const inputs: Record<string, unknown> = {};
-          for (const [alias, pin] of Object.entries(args.inputs)) {
-            const original = await engine.call<EngineResult>("read_result", {
-              result_id: pin.result_id,
-              offset: 0,
-              limit: 1,
-            });
-            authorizeSnapshot(
-              resultSnapshotForAccess(original),
-              options.access,
-            );
-            if (pin.view !== "effective") {
-              inputs[alias] = pin;
-              continue;
-            }
-            const views = await store.viewsForResult(pin.result_id);
-            if (views.length !== 1)
+          if (options.access?.mode === "fixture-anonymous") {
+            const request = prior.resume_request as
+              Record<string, unknown> | undefined;
+            const capabilities = await engine.call<{
+              profiles?: { name: string; mode: string }[];
+            }>("capabilities");
+            if (
+              !request ||
+              !capabilities.profiles?.some(
+                (profile) =>
+                  profile.name === (request.profile ?? "fixture") &&
+                  profile.mode === "fixture",
+              )
+            )
               throw new Error(
-                "Effective input requires one canonical research snapshot for this result",
+                "Anonymous mode only continues fixture profiles; use a configured protected endpoint for other profiles.",
               );
-            const view = views[0];
-            authorizeView(view);
-            if (view.revision !== pin.amendment_revision)
-              throw new Error(
-                "App amendment revision changed; reopen research and pin the current revision",
-              );
-            const imported = await engine.call<
-              EngineResult & Record<string, unknown>
-            >("import_table", {
-              columns: view.snapshot.columns.map((c) => ({
-                key: c.key,
-                label: c.label,
-                logical_type: c.logicalType ?? "VARCHAR",
-                nullable: c.nullable ?? true,
-              })),
-              rows: view.snapshot.rows.map((r) =>
-                Object.fromEntries(
-                  view.snapshot.columns.map((c) => [
-                    c.key,
-                    effectiveValue(view, r, c.key),
-                  ]),
-                ),
-              ),
-              row_ids: view.snapshot.rows.map((r) => r.id),
-              data_classification:
-                view.snapshot.dataClassification ?? "public_web",
-              parents: [
-                {
-                  result_id: pin.result_id,
-                  view: "effective",
-                  amendment_revision: view.revision,
-                },
-              ],
-              provenance: {
-                engine_result_id: pin.result_id,
-                result_id: pin.result_id,
-                snapshot_id: view.snapshot.id,
-                view: "effective",
-                amendment_revision: view.revision,
-                dependencies: [pin.result_id],
-              },
-            });
-            if (Object.hasOwn(imported, "job_id") || imported.pending === true)
-              return jobResult(
-                imported,
-                `When materialization completes, repeat the original sourcesql_query with the same query request_id ${args.request_id ?? "and identical arguments"} to resume. The research query has not been submitted.`,
-              );
-            inputs[alias] = {
-              result_id: imported.result_id,
-              view: "effective",
-              amendment_revision: view.revision,
-            };
           }
-          const result = await engine.call("query", { ...args, inputs });
+          const result = await engine.call("resume_run", args);
           if (Object.hasOwn(result, "job_id")) return jobResult(result);
           if (typeof result.result_id === "string") {
             const page = await engine.call<EngineResult>("read_result", {
@@ -1921,7 +2418,7 @@ export function createServer(
       "sourcesql_inspect_evidence",
       {
         description:
-          "Inspect a bounded result page's published evidence, source versions and receipt. Textual support is not a truth guarantee.",
+          "Inspect a bounded result page's published evidence, source versions, safe cell diagnostics and declared research-quality assessment. Textual support and completion are not factual-truth guarantees.",
         inputSchema: z
           .object({
             result_id: id,
@@ -1937,13 +2434,36 @@ export function createServer(
       },
       (args) =>
         safe(async () => {
-          const result = await engine.call<EngineResult>("read_result", args);
+          const result = await engine.call<
+            EngineResult & Record<string, unknown>
+          >("read_result", args);
           authorizeSnapshot(resultSnapshotForAccess(result), options.access);
+          const quality = qualitySchema.safeParse(result.research_quality);
+          const feedback = queryFeedbackSchema.safeParse(result.query_feedback);
+          const pageRows = new Set(result.row_ids);
+          const rawDiagnostics = Array.isArray(result.cell_diagnostics)
+            ? result.cell_diagnostics.filter(
+                (entry) =>
+                  entry &&
+                  typeof entry === "object" &&
+                  typeof entry.row_id === "string" &&
+                  pageRows.has(entry.row_id),
+              )
+            : [];
+          const diagnostics = rawDiagnostics.slice(0, 256).flatMap((entry) => {
+            const checked = cellDiagnosticSchema.safeParse(entry);
+            return checked.success ? [checked.data] : [];
+          });
           return engineResult({
             result_id: result.result_id,
             evidence: result.evidence,
             source_versions: result.source_versions,
             receipt: result.receipt,
+            cell_diagnostics: diagnostics,
+            cell_diagnostics_omitted:
+              rawDiagnostics.length - diagnostics.length,
+            ...(quality.success ? { research_quality: quality.data } : {}),
+            ...(feedback.success ? { query_feedback: feedback.data } : {}),
           });
         }),
     );
@@ -1966,6 +2486,7 @@ export function createServer(
         (args) =>
           safe(async () => {
             const receipt = await engine.call(method, args);
+            authorizeRunReceipt(receipt);
             if (typeof receipt.result_id === "string") {
               const page = await engine.call<EngineResult>("read_result", {
                 result_id: receipt.result_id,
@@ -1985,6 +2506,7 @@ export function createServer(
               "finished_at",
               "result_id",
               "plan_complete",
+              "checkpoints",
             ];
             const result = Object.fromEntries(
               keys

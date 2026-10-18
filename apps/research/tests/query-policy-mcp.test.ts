@@ -82,7 +82,7 @@ test("MCP defaults to retained partial work and forwards an explicit strict choi
   }
 });
 
-test("native hosted tool discovery omits local-only explain without touching the database", async () => {
+test("native hosted tool discovery exposes provider-free preflight and recovery without touching the database", async () => {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-native-tools-"));
   const htmlPath = join(directory, "research.html");
   await writeFile(htmlPath, "<!doctype html><html>Fixture</html>");
@@ -108,11 +108,13 @@ test("native hosted tool discovery omits local-only explain without touching the
     const { tools } = await client.listTools();
     assert.equal(
       tools.some((tool) => tool.name === "sourcesql_explain"),
-      false,
+      true,
     );
     for (const name of [
       "sourcesql_capabilities",
       "sourcesql_query",
+      "sourcesql_resume_run",
+      "sourcesql_recover_run",
       "sourcesql_job_status",
       "open_research",
     ])

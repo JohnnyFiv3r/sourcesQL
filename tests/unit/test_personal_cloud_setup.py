@@ -3,6 +3,10 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 import sys
 
@@ -181,3 +185,59 @@ def test_world_readable_env_file_is_refused(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().err
     assert "private_env_file_required" in output
     assert "never-logged" not in output
+
+
+def test_cold_materialized_setup_loads_research_policy_without_node_modules(tmp_path, monkeypatch):
+    from sourcesql import resources
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the personal-cloud template check")
+    root = Path(__file__).resolve().parents[2]
+    package = tmp_path / "installed"
+    archive = package / "_resources/personal-cloud.zip"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(resources.build_personal_cloud_archive(root))
+    monkeypatch.setattr(resources, "files", lambda _: package)
+    destination = resources.materialize_personal_cloud(tmp_path / "cold-template")
+    assert not (destination / "apps/research/node_modules").exists()
+    script = """
+globalThis.fetch = () => { throw Error('Unexpected network request'); };
+const { validateConfig, providerBindings, setupArguments } = await import(process.argv[1]);
+const config = validateConfig({
+  project: 'personal-research', account_id: 'account_fixture1',
+  alias: 'personal-research-fixture.vercel.app', database: 'research',
+  principal: 'owner', oauth: {
+    issuer: 'https://login.example.org/', subject: 'auth0|owner',
+    jwks_uri: 'https://login.example.org/.well-known/jwks.json'
+  }, provider: {
+    name: 'exa', secret_name: 'personal_exa',
+    approved_cost_microusd: 50000, daily_cost_microusd: 100000,
+    model: { name: 'configured-model', secret_name: 'personal_openai' },
+    embedding: { name: 'text-embedding-3-small', secret_name: 'personal_openai' }
+  }
+});
+console.log(JSON.stringify({
+  keys: providerBindings(config).map(binding => binding.keyName),
+  args: setupArguments(config, '/synthetic-workspace')
+}));
+"""
+    result = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            script,
+            (destination / "hosted/personal-cloud.mjs").as_uri(),
+        ],
+        cwd=tmp_path,
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path)},
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=True,
+    )
+    output = json.loads(result.stdout)
+    assert output["keys"] == ["EXA_API_KEY", "OPENAI_API_KEY"]
+    assert "--openai-model" in output["args"]
+    assert "--embedding-model" in output["args"]

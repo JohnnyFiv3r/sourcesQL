@@ -31,6 +31,7 @@ EXTERNAL = frozenset(
         "SEM_EXTRACT_ALL",
         "SEM_SCORE",
         "SEM_NORM",
+        "SOURCE_WINDOW",
     }
 )
 SOURCE_COLUMNS = [
@@ -48,6 +49,17 @@ SOURCE_COLUMNS = [
         "source_version_id",
     )
 ]
+SOURCE_COLUMNS.extend(
+    [
+        Column(
+            "search_hits",
+            "STRUCT(provider VARCHAR, search_id VARCHAR, query VARCHAR, query_index BIGINT, rank BIGINT, request_id VARCHAR)[]",
+        ),
+        Column("search_hit_count", "BIGINT"),
+        Column("search_query_count", "BIGINT"),
+        Column("best_search_rank", "BIGINT"),
+    ]
+)
 SCALAR_TYPES = frozenset(
     {
         "VARCHAR",
@@ -464,7 +476,7 @@ def operator_type(node: exp.Anonymous, parameters: dict[str, Any]) -> str:
         return "BOOLEAN"
     if name == "SEM_SCORE":
         return "DOUBLE"
-    if name == "SEM_NORM":
+    if name in ("SEM_NORM", "SOURCE_WINDOW"):
         return "VARCHAR"
     fields = [k for k in kwargs if k not in ("type", "evidence")]
     result = (
@@ -796,6 +808,18 @@ class _Binder:
                 and "undated_policy" not in kwargs
             ):
                 refuse("Publication filters require an explicit undated_policy", "invalid_query")
+        elif name == "SOURCE_WINDOW":
+            if len(args) != 3 or kwargs or self.infer(args[0], sources) != "VARCHAR":
+                refuse(
+                    "SOURCE_WINDOW requires content, zero-based start and length", "invalid_query"
+                )
+            for argument in args[1:]:
+                if self.infer(argument, sources) not in {"BIGINT", "INT"}:
+                    refuse("SOURCE_WINDOW offsets must be integers", "invalid_query")
+                if isinstance(argument, (exp.Literal, exp.Neg, exp.Parameter, exp.Placeholder)):
+                    value = literal_value(argument, self.parameters)
+                    if type(value) is not int or value < 0:
+                        refuse("SOURCE_WINDOW offsets must be nonnegative", "invalid_query")
         else:
             if len(args) != 2:
                 refuse(
