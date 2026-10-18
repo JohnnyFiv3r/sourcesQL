@@ -8,6 +8,7 @@ import { createServer } from "../server/mcp.js";
 import { ResearchStore } from "../server/store.js";
 import type { ResearchEngine } from "../server/engine.js";
 import {
+  SOURCESQL_ANSWER_REVIEW_GUIDANCE,
   SOURCESQL_CAPABILITIES_DESCRIPTION,
   SOURCESQL_EXTRACTION_BATCH_GUIDANCE,
   SOURCESQL_RECOVERY_GUIDANCE,
@@ -160,6 +161,24 @@ test("MCP initialize exposes the research workflow before any tool or provider i
     /prefer the strongest configured research profile/i,
   );
   assert.match(instructions, /Presentation is the final step/);
+  assert.ok(instructions.includes(SOURCESQL_ANSWER_REVIEW_GUIDANCE));
+  assert.match(
+    instructions,
+    /Inspect the actual saved rows with sourcesql_read_result and their support with sourcesql_inspect_evidence before opening a new answer/,
+  );
+  assert.match(
+    instructions,
+    /express that interpretation in final SQL over the saved inputs/,
+  );
+  assert.match(
+    instructions,
+    /one unresolved cell need not block a useful partial answer/,
+  );
+  assert.match(
+    instructions,
+    /Compute reported counts, totals and other aggregates in SQL/,
+  );
+  assert.match(instructions, /Reinspect the final result if you change it/);
   assert.match(
     instructions,
     /Call open_research once for the final curated table/,
@@ -388,6 +407,12 @@ test("tools/list describes research capabilities, inputs and side effects concis
     query.description!,
     /Declare requested answer fields through research_requirements/,
   );
+  assert.match(query.description!, /Inspect saved rows and evidence/);
+  assert.match(query.description!, /express your interpretation in final SQL/);
+  assert.match(
+    query.description!,
+    /widget displays saved rows, not conclusions left in chat/,
+  );
   assert.match(query.description!, /may return a durable job/);
   assert.match(
     query.description!,
@@ -405,6 +430,14 @@ test("tools/list describes research capabilities, inputs and side effects concis
   );
   assert.match(open.description!, /host display can fail independently/);
   assert.match(open.description!, /requested row unit and answer fields/);
+  assert.match(
+    open.description!,
+    /Before presenting a new answer, inspect saved rows and evidence/,
+  );
+  assert.match(
+    open.description!,
+    /Save your supported interpretation as the final table/,
+  );
   assert.match(open.description!, /unless the user requested a source catalog/);
   assert.match(open.description!, /do not put the actual answer only in chat/);
   assert.match(open.description!, /do not repeat rows or a Markdown table/);

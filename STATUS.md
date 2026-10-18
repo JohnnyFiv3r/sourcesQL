@@ -8,6 +8,33 @@ and [release notes](docs/releases/0.2.3.md).
 
 ## Unreleased research completion work
 
+Advisory SQL feedback is implemented locally. Each new query records an
+AST-derived description independently of optional intended answer metadata,
+alongside exact SQL/parameter/input-pin hashes, missing intended columns and
+full-result row/NULL counts. Descriptions retain scoped CTEs, joins, aggregates,
+semantic instructions and limits; incomplete descriptions remain explicit.
+Missing fields and unavailable explanations do not reject valid research,
+remove rows or trigger automatic retries. The agent receives the feedback
+through query/result/evidence tools, and Table options opens a read-only
+explanation without another model call or Flight. Compatibility metadata stays
+outside legacy snapshot wire fields. Local, hosted and user acceptance evidence
+are recorded separately; see [query feedback](docs/query-feedback.md).
+Offline qualification passes 846 Python tests (44 opt-in cases skipped), 186
+Flight tests and 407 app/MCP tests, plus Python typing and the Node 24 build.
+Desktop and mobile headless checks cover dialog navigation, focus, escaping and
+read-only behavior. Fresh ChatGPT acceptance is still outstanding.
+
+The agent workflow now explicitly requires reviewing actual saved rows and
+supporting evidence, interpreting findings against the requested row unit and
+fields, and saving that interpretation through final SQL before opening the
+table. The renderer displays saved rows; it cannot turn a source catalog into an
+answer from the conversation. Query and render descriptions repeat this handoff
+so it is available through tool discovery as well as server instructions.
+Missing cells remain valid in honest partial answers, and explicit reopening
+does not trigger new research or transformations. This instruction change is
+local and still needs fresh-host research acceptance; it introduces no new
+validation gates or provider calls.
+
 The render tool now returns a concise answer-surface handoff alongside saved
 data. Its tool-local description requires the requested row unit and answer
 fields, treats source hit lists as acquisition unless a catalog was requested,

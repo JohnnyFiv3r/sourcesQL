@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { queryFeedbackSchema } from "../src/query-feedback.js";
 import {
   snapshotSchema,
   webUrl,
@@ -36,6 +37,7 @@ export type EngineResult = {
   source_versions: Record<string, unknown>[];
   cell_diagnostics?: Record<string, unknown>[];
   research_quality?: Record<string, unknown>;
+  query_feedback?: unknown;
   receipt: Record<string, unknown>;
   next_offset: number | null;
 };
@@ -233,6 +235,7 @@ export function resultSnapshot(
   const fields = new Set(result.columns.map((column) => column.key));
   const rowIds = new Set(result.row_ids);
   const quality = safeResearchQuality(result.research_quality, fields);
+  const feedback = queryFeedbackSchema.safeParse(result.query_feedback);
   const diagnostics = new Map<string, Record<string, CellDiagnostic[]>>();
   const retainDiagnostic = (
     rowId: string,
@@ -413,6 +416,7 @@ export function resultSnapshot(
     },
     previewOffset: 0,
     ...(quality ? { researchQuality: quality } : {}),
+    ...(feedback.success ? { queryFeedback: feedback.data } : {}),
   };
 }
 export function boundedPreview(snapshot: Snapshot, offset = 0): Snapshot {

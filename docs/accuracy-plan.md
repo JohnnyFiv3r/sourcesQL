@@ -1,6 +1,6 @@
 # Research accuracy and completion plan
 
-Updated: 2026-10-17. This is the working backlog for answer quality and reliable
+Updated: 2026-10-18. This is the working backlog for answer quality and reliable
 completion. The released baseline is 0.2.3. Working-branch builds are identified by commit
 and artifact hashes and have not been published as a new release. A deployed
 test build is not full qualification. Controlled workflow checks, offline
@@ -60,6 +60,11 @@ The host composes ordinary SQL for the actual question:
    feasible batches.
 5. Use collection-scoped `SEM_NORM` for equivalent values, then verified identity
    joins, consolidation, final eligibility and presentation in ordinary SQL.
+6. Compare the intended answer with the actual query description, returned rows
+   and evidence before presenting. `answer_intent` is retained independently of
+   projected columns; advisory `query_feedback` reports actual SQL semantics and
+   observable gaps without rejecting a result or requiring another query. See
+   [query feedback](query-feedback.md).
 
 SQL filters and ranking criteria remain task-authored. Missing title, geography
 or date metadata is not an automatic exclusion. `WHERE` drops NULL as well as

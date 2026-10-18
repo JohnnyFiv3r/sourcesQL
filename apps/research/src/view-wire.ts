@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queryFeedbackSchema } from "./query-feedback.js";
 import {
   cellDiagnosticSchema,
   id,
@@ -26,10 +27,14 @@ const presentationV1Schema = z.object({
 
 export type ResearchViewWire = ResearchView & {
   presentationV1?: z.infer<typeof presentationV1Schema>;
+  queryFeedbackV1?: {
+    snapshotId: string;
+    feedback: z.infer<typeof queryFeedbackSchema>;
+  };
 };
 
 export function encodeResearchView(view: ResearchView): ResearchViewWire {
-  const { researchQuality, ...snapshot } = view.snapshot;
+  const { researchQuality, queryFeedback, ...snapshot } = view.snapshot;
   const diagnostics: z.infer<typeof presentationV1Schema>["rows"] = [];
   const rows = snapshot.rows.map((row) => {
     const { cellDiagnostics, ...base } = row;
@@ -40,6 +45,11 @@ export function encodeResearchView(view: ResearchView): ResearchViewWire {
   return {
     ...view,
     snapshot: { ...snapshot, rows },
+    ...(queryFeedback !== undefined
+      ? {
+          queryFeedbackV1: { snapshotId: snapshot.id, feedback: queryFeedback },
+        }
+      : {}),
     ...(researchQuality !== undefined || diagnostics.length
       ? {
           presentationV1: {
@@ -88,7 +98,17 @@ export function decodeResearchView(value: unknown): ResearchView {
         })),
       });
     }
-    const { presentationV1: _presentation, ...base } = view;
+    // Advisory metadata must not prevent otherwise valid saved cells opening.
+    const feedback = z
+      .object({ snapshotId: id, feedback: queryFeedbackSchema })
+      .safeParse(view.queryFeedbackV1);
+    if (feedback.success && feedback.data.snapshotId === snapshot.id)
+      snapshot = { ...snapshot, queryFeedback: feedback.data.feedback };
+    const {
+      presentationV1: _presentation,
+      queryFeedbackV1: _feedback,
+      ...base
+    } = view;
     return { ...base, snapshot };
   } catch {
     throw new Error(DISPLAY_ERROR);

@@ -26,6 +26,7 @@ from sourcesql.contracts import (
 from sourcesql.storage.store import Store
 from sourcesql.storage.stages import MAX_JOURNAL_STAGES
 from sourcesql.research_quality import validate_requirements, assess_requirements
+from sourcesql.query_feedback import build_query_feedback, observe_result
 from sourcesql.execution.worker import run_sql, WorkerSession
 
 
@@ -375,6 +376,7 @@ class Engine:
             "row_id_column",
             "continuation_of",
             "research_requirements",
+            "answer_intent",
         }
         if not isinstance(request, dict) or set(request) - allowed:
             raise SourcesQLError("invalid_request", "Unknown request field")
@@ -475,6 +477,7 @@ class Engine:
                 session.__exit__(None, None, None)
         return {
             "plan": getattr(plan, "explain", {}),
+            "query_feedback": build_query_feedback(plan, request, parents),
             "input_pins": parents,
             "data_classification": classification,
             "effective_limits": budget.limits,
@@ -668,6 +671,7 @@ class Engine:
             else "unknown",
             "goal_status": "not_evaluated",
             "data_classification": classification,
+            "query_feedback": build_query_feedback(plan, request, parents),
             "parents": parents,
             "resume_request": dict(request),
             "journal_id": continuation.get("journal_id", continuation["run_id"])
@@ -1555,6 +1559,7 @@ class Engine:
                 request.get("research_requirements"), table.columns
             )
             quality = assess_requirements(table, row_ids, cell_diagnostics, requirements)
+            receipt["query_feedback"] = observe_result(receipt["query_feedback"], table)
             receipt["goal_status"] = quality["goal_status"]
             receipt["research_quality"] = quality
             with self.lock:
@@ -1595,6 +1600,7 @@ class Engine:
                         "cell_diagnostics": cell_diagnostics,
                         "research_requirements": requirements,
                         "research_quality": quality,
+                        "query_feedback": receipt["query_feedback"],
                         "replay_level": "recomputable_inputs" if sources else "values_only",
                         "created_at": receipt["finished_at"],
                     },

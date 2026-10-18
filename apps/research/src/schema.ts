@@ -1,5 +1,6 @@
 import { validateTypedCell, validInstant } from "./typed-values.js";
 import { z } from "zod";
+import { queryFeedbackSchema, type QueryFeedback } from "./query-feedback.js";
 
 export const key = z
   .string()
@@ -287,6 +288,7 @@ export const v2SnapshotSchema = z
       .optional(),
     previewOffset: z.number().int().nonnegative().default(0),
     researchQuality: researchQualitySchema.optional(),
+    queryFeedback: queryFeedbackSchema.optional(),
   })
   .strict()
   .superRefine((s, ctx) => {
@@ -389,6 +391,7 @@ export type Snapshot = {
   dataRef?: { resultId: string; contentSha256: string };
   previewOffset?: number;
   researchQuality?: ResearchQuality;
+  queryFeedback?: QueryFeedback;
 };
 
 const diagnosticMessages: Partial<Record<CellDiagnostic["status"], string>> = {

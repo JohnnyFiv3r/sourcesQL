@@ -37,6 +37,7 @@ import {
   LoaderCircle,
   ListTree,
   ListChecks,
+  FileText,
 } from "lucide-react";
 import { Button, Input, Textarea, GrowingTextarea, Select } from "./ui.js";
 import {
@@ -76,6 +77,8 @@ import {
   SavedTableRecovery,
 } from "./saved-table-recovery.js";
 import { decodeResearchView } from "./view-wire.js";
+import { QueryFeedbackPanel } from "./query-feedback-panel.js";
+import "./query-feedback-panel.css";
 import { readNavigation } from "./navigation-read.js";
 import {
   UpdateReviewPanel,
@@ -185,6 +188,8 @@ function Workspace() {
   const [proposalsOpen, setProposalsOpen] = useState(false);
   const [manualCorrection, setManualCorrection] = useState(false);
   const checkpointDialog = useRef<HTMLDialogElement>(null);
+  const queryFeedbackDialog = useRef<HTMLDialogElement>(null);
+  const [queryFeedbackOpen, setQueryFeedbackOpen] = useState(false);
   const [updateQuestion, setUpdateQuestion] = useState("");
   const [updateExisting, setUpdateExisting] = useState(true);
   const [updateDiscovery, setUpdateDiscovery] = useState(false);
@@ -358,6 +363,8 @@ function Workspace() {
       setManualCorrection(false);
       proposalReviewDialog.current?.close();
       setProposalsOpen(false);
+      queryFeedbackDialog.current?.close();
+      setQueryFeedbackOpen(false);
       setError("");
       setNotice("");
       scrollToRestore.current = {
@@ -1400,6 +1407,7 @@ function Workspace() {
         !updateDialog.current?.open &&
         !proposalReviewDialog.current?.open &&
         !checkpointDialog.current?.open &&
+        !queryFeedbackDialog.current?.open &&
         !treeOpen
       ) {
         event.preventDefault();
@@ -1825,6 +1833,21 @@ function Workspace() {
                 <MoreHorizontal size={20} />
               </summary>
               <div className="menu-items">
+                <Button
+                  variant="ghost"
+                  aria-haspopup="dialog"
+                  aria-expanded={queryFeedbackOpen}
+                  aria-controls="query-feedback-dialog"
+                  onClick={() => {
+                    if (menu.current) menu.current.open = false;
+                    setHeaderPanel(null);
+                    setQueryFeedbackOpen(true);
+                    queryFeedbackDialog.current?.showModal();
+                  }}
+                >
+                  <FileText />
+                  How this table was built
+                </Button>
                 <Button
                   variant="ghost"
                   disabled={
@@ -2830,6 +2853,32 @@ function Workspace() {
           </div>
         )}
       </div>
+      <dialog
+        ref={queryFeedbackDialog}
+        id="query-feedback-dialog"
+        className="continuation-dialog query-feedback-dialog"
+        aria-labelledby="query-feedback-title"
+        onClose={() => {
+          setQueryFeedbackOpen(false);
+          menu.current
+            ?.querySelector("summary")
+            ?.focus({ preventScroll: true });
+        }}
+      >
+        <div className="dialog-heading">
+          <h2 id="query-feedback-title">How this table was built</h2>
+          <Button
+            variant="ghost"
+            aria-label="Close query description"
+            onClick={() => queryFeedbackDialog.current?.close()}
+          >
+            <X />
+          </Button>
+        </div>
+        {queryFeedbackOpen && (
+          <QueryFeedbackPanel feedback={view.snapshot.queryFeedback} />
+        )}
+      </dialog>
       <dialog
         ref={proposalReviewDialog}
         id="proposal-review-dialog"

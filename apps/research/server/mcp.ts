@@ -21,6 +21,10 @@ import {
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
+import {
+  answerIntentSchema,
+  queryFeedbackSchema,
+} from "../src/query-feedback.js";
 import { readFileSync } from "node:fs";
 import {
   LEGACY_RESOURCE_URI,
@@ -294,6 +298,7 @@ export function createServer(
       );
     const completed = receipt.status === "completed";
     const preflight = receipt.operation === "explain";
+    let feedback: z.infer<typeof queryFeedbackSchema> | undefined;
     if (completed && !preflight) {
       if (typeof receipt.result_id !== "string")
         throw new Error(
@@ -305,6 +310,10 @@ export function createServer(
         limit: 1,
       });
       authorizeSnapshot(resultSnapshotForAccess(page), options.access);
+      const checkedFeedback = queryFeedbackSchema.safeParse(
+        page.query_feedback,
+      );
+      if (checkedFeedback.success) feedback = checkedFeedback.data;
     }
     const pending =
       !["completed", "failed", "cancelled"].includes(receipt.status) ||
@@ -345,6 +354,7 @@ export function createServer(
         result.run_id = receipt.run_id;
     }
     result.pending = pending;
+    if (feedback) result.query_feedback = feedback;
     const guidance =
       receipt.status === "submission_unknown"
         ? "Submission outcome is unknown. Poll sourcesql_job_status with this job_id. Do not submit a new request ID or automatically repeat submission."
@@ -361,7 +371,7 @@ export function createServer(
             : completed
               ? preflight
                 ? "Canonical validation completed without provider dispatch. This consumed an on-demand Flight reservation, not a research result. Execute the validated query with a new request_id only when ready; execution revalidates dependencies and limits."
-                : "Query execution completed and the result is stored. Further SQL can reuse its result_id; open_research displays the final table. This response does not render a component."
+                : "Query execution completed and the result is stored. Inspect sourcesql_read_result and advisory query_feedback against the intended answer before presenting; further SQL can reuse its result_id. open_research displays the final table. This response does not render a component."
               : `This job is terminal. No result was published; ${result.run_id ? "inspect sourcesql_run_status with this run_id" : "inspect this job"} before deciding whether to start new work.`;
     return {
       content: [
@@ -1698,8 +1708,20 @@ export function createServer(
     const engineResult = (raw: Record<string, unknown>): CallToolResult => {
       const result = publicReceipt(raw) as Record<string, unknown>;
       for (const name of ["receipt", "latest_receipt", "foreign_receipt"])
-        if (Object.hasOwn(result, name))
+        if (Object.hasOwn(result, name)) {
           result[name] = publicReceipt(result[name]);
+          // Retain the advisory once at the result level, not in each receipt.
+          if (result[name] && typeof result[name] === "object")
+            delete (result[name] as Record<string, unknown>).query_feedback;
+        }
+      if (Object.hasOwn(result, "query_feedback")) {
+        const checkedFeedback = queryFeedbackSchema.safeParse(
+          result.query_feedback,
+        );
+        if (checkedFeedback.success)
+          result.query_feedback = checkedFeedback.data;
+        else delete result.query_feedback;
+      }
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
         structuredContent: result,
@@ -1842,7 +1864,12 @@ export function createServer(
           .strict()
           .optional()
           .describe(
-            "Declare output identity columns and requested fields so completion can report missing coverage honestly.",
+            "Declare identity and required cells only for columns projected by this query. Use answer_intent for overall requested fields absent from intermediate results. Missing cell values report coverage gaps without rejecting results.",
+          ),
+        answer_intent: answerIntentSchema
+          .optional()
+          .describe(
+            "Record the intended answer independently of this query: row_unit describes one answer row; fields gives each requested output key and its meaning, units or period; optional question preserves the request. Keep the same intent across intermediate and final queries. Missing projected fields are advisory feedback and do not reject execution. SQL descriptions are derived independently from the actual query.",
           ),
         parameters: z
           .record(
@@ -2286,6 +2313,7 @@ export function createServer(
           >("read_result", args);
           authorizeSnapshot(resultSnapshotForAccess(result), options.access);
           const quality = qualitySchema.safeParse(result.research_quality);
+          const feedback = queryFeedbackSchema.safeParse(result.query_feedback);
           const pageRows = new Set(result.row_ids);
           const rawDiagnostics = Array.isArray(result.cell_diagnostics)
             ? result.cell_diagnostics.filter(
@@ -2309,6 +2337,7 @@ export function createServer(
             cell_diagnostics_omitted:
               rawDiagnostics.length - diagnostics.length,
             ...(quality.success ? { research_quality: quality.data } : {}),
+            ...(feedback.success ? { query_feedback: feedback.data } : {}),
           });
         }),
     );

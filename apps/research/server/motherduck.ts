@@ -662,6 +662,7 @@ export class MotherDuckEngine implements ResearchEngine {
         "row_id_column",
         "continuation_of",
         "research_requirements",
+        "answer_intent",
       ]);
       if (
         Object.keys(params).some((key) => !allowed.has(key)) ||
