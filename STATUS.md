@@ -26,8 +26,8 @@ Provider-independent validation passes 1,284 Python/Flight tests (44 opt-in
 cases skipped), 477 app/MCP tests and 69 setup/onboarding checks, plus lint,
 typing and the Node 24 build. The built wheel passes 129 installed regressions;
 its materialized adopter templates load the shared policies with native Node 24.
-The compact Flight source is 194,570 bytes under the unchanged 200,000-byte
-guard. No provider requests or cloud jobs run during this qualification.
+The compact Flight source remains under the unchanged 200,000-byte guard.
+No provider requests or cloud jobs run during this qualification.
 
 PR #3 review repairs distinguish proven pre-dispatch stops, known provider
 refusals, unknown outcomes and completed responses whose payload could not be
