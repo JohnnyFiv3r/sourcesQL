@@ -451,7 +451,10 @@ test("DeepSeek published request estimate is a floor and does not enable unselec
     validateHostedSearchPolicy({ ...policy, requestCostMicrousd: 749 }),
   );
   assert.throws(() =>
-    validateHostedSearchPolicy({ ...policy, policyVersion: "deepseek-research.v2" }),
+    validateHostedSearchPolicy({
+      ...policy,
+      policyVersion: "deepseek-research.v2",
+    }),
   );
 });
 
@@ -474,4 +477,73 @@ test("legacy Exa descriptors and fingerprints are unchanged", () => {
     exaFingerprint({ ...policy, policyVersion: "exa-research.v2" }),
     "5e31ea3484b972d2f9b0c9e69ad88f226582b19234e236bc6c3dca5bf0e1e901",
   );
+});
+
+test("compiled Docker policy modules resolve JavaScript imports with the same reviewed descriptor", async () => {
+  const [{ mkdtemp, readFile, writeFile, rm }, { tmpdir }, { join }, ts] =
+    await Promise.all([
+      import("node:fs/promises"),
+      import("node:os"),
+      import("node:path"),
+      import("typescript"),
+    ]);
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-compiled-policy-"));
+  try {
+    const config = JSON.parse(
+      await readFile(new URL("../tsconfig.json", import.meta.url), "utf8"),
+    );
+    const parsed = ts.convertCompilerOptionsFromJson(
+      config.compilerOptions,
+      process.cwd(),
+    );
+    assert.deepEqual(parsed.errors, []);
+    await writeFile(
+      join(directory, "package.json"),
+      JSON.stringify({ type: "module" }),
+    );
+    for (const name of ["hosted-research", "hosted-search", "hosted-exa"]) {
+      const source = await readFile(
+        new URL(`../server/${name}.ts`, import.meta.url),
+        "utf8",
+      );
+      const emitted = ts.transpileModule(source, {
+        fileName: `${name}.ts`,
+        reportDiagnostics: true,
+        compilerOptions: { ...parsed.options, noEmit: false },
+      });
+      assert.deepEqual(emitted.diagnostics, []);
+      await writeFile(join(directory, `${name}.js`), emitted.outputText);
+    }
+    const { pathToFileURL } = await import("node:url");
+    const compiled = await import(
+      pathToFileURL(join(directory, "hosted-search.js")).href
+    );
+    const reviewed: HostedSearchPolicy = {
+      provider: "deepseek",
+      secretName: "sourcesql_deepseek",
+      approvedCostMicrousd: 50000,
+      dailyCostMicrousd: 1000000,
+      requestCostMicrousd: 750,
+      policyVersion: "deepseek-research.v1",
+      embedding: {
+        name: "text-embedding-3-small",
+        secretName: "sourcesql_openai",
+      },
+    };
+    assert.deepEqual(
+      compiled.hostedSearchDescriptor(reviewed),
+      hostedSearchDescriptor(reviewed),
+    );
+    assert.equal(
+      compiled.hostedSearchFingerprint(reviewed),
+      hostedSearchFingerprint(reviewed),
+    );
+    assert.ok(compiled.hostedSearchOperators(reviewed).includes("SEM_SCORE"));
+    const compiledExa = await import(
+      pathToFileURL(join(directory, "hosted-exa.js")).href
+    );
+    assert.equal(typeof compiledExa.exaFingerprint, "function");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

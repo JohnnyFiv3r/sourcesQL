@@ -27,10 +27,13 @@ DeepSeek free allowance is assumed. Versioned job presentation preserves the
 strict wire shape accepted by previously published widgets.
 
 Offline DeepSeek qualification passes 1,414 Python/Flight tests (44 opt-in
-cases skipped), including 69 adapter cases, plus 506 app/MCP tests and 77
-onboarding checks. The final wheel passes 286 installed regressions, and its
+cases skipped), including 69 adapter cases, plus 507 app/MCP tests and 77
+onboarding checks. The final wheel passes 289 installed regressions, and its
 materialized templates load under native Node 24. Gateway and frozen-widget
-compatibility checks, Python lint and typing pass. A single compression layer now stores the same execution-wheel file bytes
+compatibility checks, Python lint and typing pass. The Docker compiler path emits
+loadable JavaScript policy modules while native Node setup still loads TypeScript;
+a regression exercises both provider descriptors after emission. A single
+compression layer now stores the same execution-wheel file bytes
 inside the existing outer XZ bundle, preserving hashes, RECORD verification and
 the unchanged 200,000-byte Flight guard while restoring source headroom. No
 provider requests, cloud jobs, deployments or release publication are included
@@ -40,7 +43,7 @@ acceptance remain unverified.
 Brave and Serper now support optional language-model matching, extraction and
 normalization plus independently configured embedding scoring in hosted
 research policies (`brave-research.v2` and `serper-research.v2`). Guided setup
-shares the same model/embedding configuration across all three search providers;
+shares the same model/embedding configuration across these search providers;
 named OpenAI secrets may be shared by those two adapters. The reviewed plan,
 gateway and worker bind the same policy, model names, secret references and
 effective execution limits. Search-only legacy policies and fingerprints remain
