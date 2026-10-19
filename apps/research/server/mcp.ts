@@ -294,6 +294,7 @@ export function createServer(
     "failed",
     "cancelled",
   ]);
+  // Frozen enum from published cards. New identities remain in versioned metadata.
   const legacyCapacity = (capacity: Record<string, unknown>) =>
     Object.fromEntries(
       [
@@ -308,7 +309,16 @@ export function createServer(
         "unit",
       ]
         .filter((key) => Object.hasOwn(capacity, key))
-        .map((key) => [key, capacity[key]]),
+        .map((key) => [
+          key,
+          key === "services"
+            ? (capacity.services as string[]).filter((service) =>
+                ["motherduck", "exa", "brave", "serper", "openai"].includes(
+                  service,
+                ),
+              )
+            : capacity[key],
+        ]),
     );
   // Advisory usage cannot make a valid saved table fail to open.
   const currentUsageNotices = async () =>
@@ -412,7 +422,7 @@ export function createServer(
     const capacity = capacitySchema.safeParse(receipt.capacity);
     if (capacity.success) {
       result.capacity = legacyCapacity(capacity.data);
-      if (capacity.data.limit_kind !== undefined)
+      if (JSON.stringify(result.capacity) !== JSON.stringify(capacity.data))
         result.provider_capacity_v1 = capacity.data;
     }
     if (receipt.status === "failed") {

@@ -57,5 +57,25 @@
       "name": "SET_APPROVED_EMBEDDING_MODEL_NAME",
       "api_key_env": "OPENAI_API_KEY"
     }
+  },
+  "deepseek": {
+    "mode": "live",
+    "provider": "deepseek",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "allow_live": false,
+    "approved_cost_microusd": 0,
+    "metering_policy": "estimated",
+    "allowed_source_hosts": [],
+    "allow_public_source_hosts": true,
+    "model": {
+      "name": "SET_APPROVED_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY",
+      "retries": 0
+    },
+    "embedding": {
+      "name": "SET_APPROVED_EMBEDDING_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY"
+    },
+    "fetch_adapter": "deepseek"
   }
 }

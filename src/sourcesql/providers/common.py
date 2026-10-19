@@ -17,6 +17,7 @@ from uuid import uuid4
 import httpx
 
 from ..contracts import Budget, SourcesQLError, digest
+from ..provider_rates import DEEPSEEK_REQUEST_COST_MICROUSD
 
 
 class ProviderTransportError(SourcesQLError):
@@ -87,7 +88,7 @@ def provider_http_error(response: httpx.Response, provider: str | None = None) -
         seconds = int(retry_after)
         if seconds <= 604_800:
             error.retry_after_seconds = seconds
-    if provider in {"exa", "brave", "serper"} and response.status_code in {402, 429}:
+    if provider in {"exa", "brave", "serper", "deepseek"} and response.status_code in {402, 429}:
         limit_kind = (
             "rate"
             if response.status_code == 429
@@ -313,7 +314,9 @@ def source_record(
     }
 
 
-def provider_usage(provider: str, body: dict | None = None) -> dict[str, Any]:
+def provider_usage(
+    provider: str, body: dict | None = None, *, operation: str | None = None
+) -> dict[str, Any]:
     usage: dict[str, Any] = {
         "provider": provider,
         "requests": 1,
@@ -325,6 +328,20 @@ def provider_usage(provider: str, body: dict | None = None) -> dict[str, Any]:
         usage.update(
             cost_microusd=0, cost_basis="fixture_no_spending", cost_unavailable_reason=None
         )
+    elif provider == "deepseek" and body is not None:
+        # Published nonempty-request pricing is an estimate, never an invoice.
+        # A malformed body or transport timeout cannot establish a free request.
+        billable = None
+        if operation == "search" and isinstance(body.get("results"), list):
+            billable = bool(body["results"])
+        elif operation == "fetch" and isinstance(body.get("content"), str):
+            billable = bool(body["content"].strip())
+        if billable is not None:
+            usage.update(
+                estimated_cost_microusd=DEEPSEEK_REQUEST_COST_MICROUSD if billable else 0,
+                cost_basis="published_rate_estimate",
+                cost_unavailable_reason="published_rate_is_not_billing",
+            )
     elif body and isinstance(body.get("costDollars"), dict):
         total = body["costDollars"].get("total")
         if type(total) in {int, float} and total >= 0 and total < float("inf"):

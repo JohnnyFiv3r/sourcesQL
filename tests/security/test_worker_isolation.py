@@ -103,6 +103,7 @@ def test_worker_launch_environment_omits_injected_provider_credentials(probe_wor
         "BRAVE_SEARCH_API_KEY",
         "EXA_API_KEY",
         "SERPER_API_KEY",
+        "DEEPSEEK_API_KEY",
         "OPENAI_API_KEY",
         "SOURCESQL_PROFILES_FILE",
         "SOURCESQL_PRINCIPAL",

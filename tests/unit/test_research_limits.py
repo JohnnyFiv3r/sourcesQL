@@ -55,7 +55,9 @@ def test_research_overrides_still_require_nonnegative_json_integers(name, value)
     assert error.value.code == "invalid_request"
 
 
-@pytest.mark.parametrize(("provider", "maximum"), [("exa", 100), ("brave", 20), ("serper", 20)])
+@pytest.mark.parametrize(
+    ("provider", "maximum"), [("exa", 100), ("brave", 20), ("serper", 20), ("deepseek", 50)]
+)
 def test_result_count_is_authorized_for_the_selected_adapter_before_http(provider, maximum):
     calls = []
 
@@ -65,8 +67,10 @@ def test_result_count_is_authorized_for_the_selected_adapter_before_http(provide
             assert request.url.params["count"] == str(maximum)
             return httpx.Response(200, json={"web": {"results": []}})
         body = json.loads(request.content)
-        assert body["numResults" if provider == "exa" else "num"] == maximum
-        return httpx.Response(200, json={"results": []} if provider == "exa" else {"organic": []})
+        assert body[{"exa": "numResults", "deepseek": "count"}.get(provider, "num")] == maximum
+        return httpx.Response(
+            200, json={"results": []} if provider in {"exa", "deepseek"} else {"organic": []}
+        )
 
     with httpx.Client(transport=httpx.MockTransport(respond), trust_env=False) as client:
         registry = ProviderRegistry(

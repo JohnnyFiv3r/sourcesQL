@@ -8,6 +8,72 @@ and [release notes](docs/releases/0.2.3.md).
 
 ## Unreleased research completion work
 
+DeepSeek is now an optional search provider across local/Docker profiles and
+reviewed personal-cloud setup. `deepseek-search.v1` enables search;
+`deepseek-research.v1` independently opts into the same OpenAI model matching,
+extraction and normalization, plus embedding `SEM_SCORE`, as the other providers.
+Native DeepSeek Fetch supplies retained Markdown after public-URL authorization.
+Provider summaries and ranking remain discovery metadata; unavailable page text
+and incomplete coverage remain explicit. Whole-batch input validation catches
+unsupported lengths, malformed Unicode and impossible completeness/freshness
+requests before paid dispatch. No automatic provider switching is introduced.
+
+Search and fetch share a finite per-run request estimate, with a published-rate
+estimate of 750 micro-USD for each successful nonempty response and zero for valid
+empty responses. Unknown outcomes and unavailable billing stay unknown. Usage
+reports include DeepSeek independently from OpenAI; provider refusals retain
+saved work and expose a fixed provider-owned billing destination. No recurring
+DeepSeek free allowance is assumed. Versioned job presentation preserves the
+strict wire shape accepted by previously published widgets.
+
+DeepSeek now retains identifiable search hits when optional fields or page text
+are unavailable. Bad fetch payloads and URL-specific 403/404 refusals produce
+per-URL failure records while valid neighbors continue; account refusals and
+unknown outcomes still stop without retries. Admission bounds paid fetches as
+well as searches, with a shared runtime reservation across both. Stage ceilings
+remain independent optional maxima, not a promised total execution cost.
+Search-only deployments ignore unrelated OpenAI variables without enabling
+semantic operators. Full-batch preparation performs URL authorization and one
+DNS check per unique URL before checkpoint splitting. Rate estimates have one
+shared constant per language; reports distinguish operator reservations from
+published usage estimates. Legacy card projection remains frozen and preserves
+the complete capacity reason and service identities in versioned metadata.
+
+Offline qualification covers 1,453 Python/Flight cases (44 opt-in cases skipped),
+including 91 DeepSeek adapter cases, plus 515 app/MCP tests and 77 onboarding
+checks. The final wheel passes 326 installed regressions, and its
+materialized templates load under native Node 24. Gateway and frozen-widget
+compatibility checks, Python lint and typing pass. The Docker compiler path emits
+loadable JavaScript policy modules while native Node setup still loads TypeScript;
+a regression exercises both provider descriptors after emission. A single
+compression layer now stores the same execution-wheel file bytes
+inside the existing outer XZ bundle, preserving hashes, RECORD verification and
+the unchanged 200,000-byte Flight guard while restoring source headroom. No
+provider requests, cloud jobs, deployments or release publication are included
+in this qualification; live DeepSeek billing, retrieval quality and host
+acceptance remain unverified.
+
+Brave and Serper now support optional language-model matching, extraction and
+normalization plus independently configured embedding scoring in hosted
+research policies (`brave-research.v2` and `serper-research.v2`). Guided setup
+shares the same model/embedding configuration across these search providers;
+named OpenAI secrets may be shared by those two adapters. The reviewed plan,
+gateway and worker bind the same policy, model names, secret references and
+effective execution limits. Search-only legacy policies and fingerprints remain
+unchanged, and no existing deployment is migrated automatically. Brave/Serper
+research fetches public HTML/text directly through the guarded fetcher; rendered
+JavaScript and PDF extraction are unavailable on that path. Mocked HTTP with the
+real SQL engine exercises qualified answer cells, citations, semantic operators
+and saved-source reuse without another search or fetch. This implementation has
+not been deployed or live-qualified with those providers.
+
+Provider-independent validation passes 1,284 Python/Flight tests (44 opt-in
+cases skipped), 477 app/MCP tests and 69 setup/onboarding checks, plus lint,
+typing and the Node 24 build. The built wheel passes 129 installed regressions;
+its materialized adopter templates load the shared policies with native Node 24.
+The compact Flight source remains under the unchanged 200,000-byte guard.
+No provider requests or cloud jobs run during this qualification.
+
 PR #3 review repairs distinguish proven pre-dispatch stops, known provider
 refusals, unknown outcomes and completed responses whose payload could not be
 retained. Explicit continuation can rearm only proven undispatched stages;

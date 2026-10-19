@@ -126,6 +126,8 @@ test("gateway and credential-bearing Flight produce identical legacy and researc
       "-c",
       `
 import importlib.util, json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]).resolve().parents[2] / "src"))
 spec = importlib.util.spec_from_file_location("reviewed_exa_policy", sys.argv[1])
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)

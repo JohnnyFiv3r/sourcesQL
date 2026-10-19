@@ -231,116 +231,121 @@ test("anonymous clients cannot dismiss owner usage notices", async () => {
   }
 });
 
-test("provider refusals retain the frozen job-card wire while current clients restore optional presentation", async () => {
-  const active = await session({
-    mode: "protected",
-    principal: "owner-a",
-    allowPrivateDisclosure: false,
+for (const [service, reason] of [
+  ["exa", "provider_limit"],
+  ["deepseek", "provider_limit"],
+  ["deepseek", "operator_limit"],
+] as const)
+  test(`${service} ${reason} retains the frozen job-card wire while current clients restore optional presentation`, async () => {
+    const active = await session({
+      mode: "protected",
+      principal: "owner-a",
+      allowPrivateDisclosure: false,
+    });
+    // Published widgets validate this old capacity shape strictly. Keep this
+    // independent from today's schema so new fields cannot weaken the regression.
+    const legacyCapacitySchema = z
+      .object({
+        resource: z.enum([
+          "flight_compute",
+          "search_model_budget",
+          "hosted_capacity",
+        ]),
+        reason: z.enum([
+          "operator_limit",
+          "provider_limit",
+          "account_configuration",
+        ]),
+        period: z.enum(["day", "month", "unknown"]),
+        allowance: z.enum(["configured", "included", "unknown"]),
+        services: z
+          .array(z.enum(["motherduck", "exa", "brave", "serper", "openai"]))
+          .max(5)
+          .optional(),
+        resets_at: z.iso.datetime().optional(),
+        limit: z.number().int().nonnegative().optional(),
+        used: z.number().int().nonnegative().optional(),
+        unit: z.enum(["seconds", "microusd"]).optional(),
+      })
+      .strict();
+    const capacity = {
+      resource: "search_model_budget",
+      reason,
+      period: "unknown",
+      allowance: reason === "operator_limit" ? "configured" : "unknown",
+      services: [service],
+      ...(reason === "provider_limit"
+        ? { limit_kind: "credits", http_status: 402, retry_after_seconds: 30 }
+        : {}),
+    };
+    const legacyCapacity = {
+      resource: "search_model_budget",
+      reason,
+      period: "unknown",
+      allowance: reason === "operator_limit" ? "configured" : "unknown",
+      services: service === "deepseek" ? [] : [service],
+    };
+    const jobId = "synthetic-provider-refusal";
+    active.engine.jobStatus = {
+      job_id: jobId,
+      request_id: "01010101-0101-4101-8101-010101010101",
+      status: "failed",
+      pending: false,
+      error_code: "provider_unavailable",
+      capacity,
+    };
+    try {
+      const opened = await active.client.callTool({
+        name: "open_research",
+        arguments: { job_id: jobId },
+      });
+      assert.notEqual(opened.isError, true);
+      const wire = opened.structuredContent as Record<string, any>;
+      assert.deepEqual(Object.keys(wire).sort(), ["job", "kind"]);
+      assert.equal(wire.kind, "research_job_status");
+      assert.equal(Object.hasOwn(wire, "usageNotices"), false);
+      assert.deepEqual(wire.job.capacity, legacyCapacity);
+      assert.deepEqual(
+        legacyCapacitySchema.parse(wire.job.capacity),
+        legacyCapacity,
+      );
+      assert.throws(
+        () => legacyCapacitySchema.parse(capacity),
+        "The frozen schema would reject the new fields if they leaked into structuredContent",
+      );
+      const meta = opened._meta as Record<string, any>;
+      assert.equal(meta.sourcesqlJobPresentationV1.job_id, jobId);
+      assert.deepEqual(meta.sourcesqlJobPresentationV1.capacity, capacity);
+      assert.deepEqual(meta.sourcesqlJobPresentationV1.usageNotices, [notice]);
+      const current = decodeResearchJobView(wire, meta);
+      assert.deepEqual(current.job.capacity, capacity);
+      assert.deepEqual(current.usageNotices, [notice]);
+      assert.deepEqual(
+        decodeResearchJobView(wire, {
+          sourcesqlJobPresentationV1: {
+            ...meta.sourcesqlJobPresentationV1,
+            job_id: "other-job",
+          },
+        }).job.capacity,
+        legacyCapacity,
+      );
+      const status = await active.client.callTool({
+        name: "sourcesql_job_status",
+        arguments: { job_id: jobId },
+      });
+      assert.notEqual(status.isError, true);
+      const receipt = status.structuredContent as Record<string, any>;
+      assert.deepEqual(
+        legacyCapacitySchema.parse(receipt.capacity),
+        legacyCapacity,
+      );
+      assert.deepEqual(receipt.provider_capacity_v1, capacity);
+      assert.deepEqual(researchJobView(receipt).job.capacity, capacity);
+      assert.deepEqual(
+        active.engine.calls.map((call) => call.method),
+        ["job_status", "usage_notices", "job_status", "usage_notices"],
+      );
+    } finally {
+      await active.close();
+    }
   });
-  // Published widgets validate this old capacity shape strictly. Keep this
-  // independent from today's schema so new fields cannot weaken the regression.
-  const legacyCapacitySchema = z
-    .object({
-      resource: z.enum([
-        "flight_compute",
-        "search_model_budget",
-        "hosted_capacity",
-      ]),
-      reason: z.enum([
-        "operator_limit",
-        "provider_limit",
-        "account_configuration",
-      ]),
-      period: z.enum(["day", "month", "unknown"]),
-      allowance: z.enum(["configured", "included", "unknown"]),
-      services: z
-        .array(z.enum(["motherduck", "exa", "brave", "serper", "openai"]))
-        .max(5)
-        .optional(),
-      resets_at: z.iso.datetime().optional(),
-      limit: z.number().int().nonnegative().optional(),
-      used: z.number().int().nonnegative().optional(),
-      unit: z.enum(["seconds", "microusd"]).optional(),
-    })
-    .strict();
-  const capacity = {
-    resource: "search_model_budget",
-    reason: "provider_limit",
-    period: "unknown",
-    allowance: "unknown",
-    services: ["exa"],
-    limit_kind: "credits",
-    http_status: 402,
-    retry_after_seconds: 30,
-  };
-  const legacyCapacity = {
-    resource: "search_model_budget",
-    reason: "provider_limit",
-    period: "unknown",
-    allowance: "unknown",
-    services: ["exa"],
-  };
-  const jobId = "synthetic-provider-refusal";
-  active.engine.jobStatus = {
-    job_id: jobId,
-    request_id: "01010101-0101-4101-8101-010101010101",
-    status: "failed",
-    pending: false,
-    error_code: "provider_unavailable",
-    capacity,
-  };
-  try {
-    const opened = await active.client.callTool({
-      name: "open_research",
-      arguments: { job_id: jobId },
-    });
-    assert.notEqual(opened.isError, true);
-    const wire = opened.structuredContent as Record<string, any>;
-    assert.deepEqual(Object.keys(wire).sort(), ["job", "kind"]);
-    assert.equal(wire.kind, "research_job_status");
-    assert.equal(Object.hasOwn(wire, "usageNotices"), false);
-    assert.deepEqual(wire.job.capacity, legacyCapacity);
-    assert.deepEqual(
-      legacyCapacitySchema.parse(wire.job.capacity),
-      legacyCapacity,
-    );
-    assert.throws(
-      () => legacyCapacitySchema.parse(capacity),
-      "The frozen schema would reject the new fields if they leaked into structuredContent",
-    );
-    const meta = opened._meta as Record<string, any>;
-    assert.equal(meta.sourcesqlJobPresentationV1.job_id, jobId);
-    assert.deepEqual(meta.sourcesqlJobPresentationV1.capacity, capacity);
-    assert.deepEqual(meta.sourcesqlJobPresentationV1.usageNotices, [notice]);
-    const current = decodeResearchJobView(wire, meta);
-    assert.deepEqual(current.job.capacity, capacity);
-    assert.deepEqual(current.usageNotices, [notice]);
-    assert.deepEqual(
-      decodeResearchJobView(wire, {
-        sourcesqlJobPresentationV1: {
-          ...meta.sourcesqlJobPresentationV1,
-          job_id: "other-job",
-        },
-      }).job.capacity,
-      legacyCapacity,
-    );
-    const status = await active.client.callTool({
-      name: "sourcesql_job_status",
-      arguments: { job_id: jobId },
-    });
-    assert.notEqual(status.isError, true);
-    const receipt = status.structuredContent as Record<string, any>;
-    assert.deepEqual(
-      legacyCapacitySchema.parse(receipt.capacity),
-      legacyCapacity,
-    );
-    assert.deepEqual(receipt.provider_capacity_v1, capacity);
-    assert.deepEqual(researchJobView(receipt).job.capacity, capacity);
-    assert.deepEqual(
-      active.engine.calls.map((call) => call.method),
-      ["job_status", "usage_notices", "job_status", "usage_notices"],
-    );
-  } finally {
-    await active.close();
-  }
-});

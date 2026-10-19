@@ -235,3 +235,157 @@ test("report intervals are explicit, bounded and UTC-normalized", () => {
     usageWindow({ start: "2024-01-01T00:00:00Z", end: "2026-01-01T00:00:00Z" }),
   );
 });
+
+test("DeepSeek search and fetch estimates stay separate from OpenAI and invent no free allowance", () => {
+  const result = report([
+    {
+      run_id: "deepseek",
+      started_at: started,
+      events: [
+        {
+          provider: "deepseek",
+          kind: "search",
+          status: "completed",
+          usage: { estimated_cost_microusd: 750, cost_microusd: null },
+        },
+        {
+          provider: "deepseek",
+          kind: "fetch",
+          status: "completed",
+          usage: { estimated_cost_microusd: 750, cost_microusd: null },
+        },
+        {
+          provider: "deepseek",
+          kind: "search",
+          status: "completed",
+          usage: { estimated_cost_microusd: 0, cost_microusd: null },
+        },
+        {
+          provider: "deepseek",
+          kind: "fetch",
+          status: "remote_outcome_unknown",
+          usage: { cost_microusd: null },
+        },
+        {
+          provider: "pydantic_ai",
+          kind: "semantic",
+          status: "completed",
+          usage: { input_tokens: 100, output_tokens: 10, cost_microusd: null },
+        },
+      ],
+    },
+  ]);
+  const search = result.providers.find((p) => p.service === "deepseek")!;
+  assert.equal(search.requests, 4);
+  assert.equal(search.estimated_cost_microusd, 1500);
+  assert.equal(search.reported_cost_microusd, null);
+  assert.equal(search.estimated_cost_requests, 3);
+  assert.equal(search.cost_unavailable_requests, 1);
+  assert.equal(search.uncertain_requests, 1);
+  assert.equal(
+    result.providers.find((p) => p.service === "openai")!.input_tokens,
+    100,
+  );
+  assert.deepEqual(allowanceNotices(result, report([], [], day)), []);
+});
+
+test("DeepSeek provider refusals render a fixed billing destination without a fabricated monthly reset", () => {
+  const view = researchJobView({
+    job_id: "deepseek-refused",
+    request_id: "11111111-1111-4111-8111-111111111111",
+    status: "failed",
+    pending: false,
+    can_resume: false,
+    capacity: {
+      resource: "search_model_budget",
+      reason: "provider_limit",
+      period: "unknown",
+      allowance: "unknown",
+      services: ["deepseek"],
+      limit_kind: "unknown",
+      http_status: 402,
+    },
+  });
+  const html = renderToStaticMarkup(
+    createElement(ResearchJobStatusPanel, {
+      view,
+      busy: false,
+      onCheck() {},
+      onResume() {},
+    }),
+  );
+  assert.match(html, /https:\/\/platform.deepseek.com\//);
+  assert.match(html, /DeepSeek billing/);
+  assert.doesNotMatch(html, /free|for this month|Capacity resets/);
+});
+
+test("DeepSeek configured reservations are distinct from published usage estimates", () => {
+  const result = report([
+    {
+      run_id: "reserve-vs-usage",
+      started_at: started,
+      events: [
+        {
+          provider: "deepseek",
+          kind: "search",
+          status: "completed",
+          reservation_microusd: 1000,
+          usage: { estimated_cost_microusd: 750, cost_microusd: null },
+        },
+        {
+          provider: "deepseek",
+          kind: "fetch",
+          status: "completed",
+          reservation_microusd: 1000,
+          usage: { estimated_cost_microusd: 0, cost_microusd: null },
+        },
+        {
+          provider: "deepseek",
+          kind: "fetch",
+          status: "remote_outcome_unknown",
+          reservation_microusd: 1000,
+          usage: { cost_microusd: null },
+        },
+      ],
+    },
+  ]).providers[0];
+  assert.equal(result.reserved_cost_microusd, 3000);
+  assert.equal(result.reserved_cost_requests, 3);
+  assert.equal(result.estimated_cost_microusd, 750);
+  assert.equal(result.reported_cost_microusd, null);
+  assert.equal(result.cost_unavailable_requests, 1);
+  assert.equal(
+    report([{ run_id: "older", started_at: started, events: [event("old")] }])
+      .providers[0].reserved_cost_microusd,
+    null,
+  );
+});
+
+test("DeepSeek operator limits remain application limits in the capacity UI", () => {
+  const view = researchJobView({
+    job_id: "operator-limit",
+    request_id: "11111111-1111-4111-8111-111111111111",
+    status: "queued",
+    capacity: {
+      resource: "search_model_budget",
+      reason: "operator_limit",
+      period: "month",
+      allowance: "configured",
+      services: ["deepseek"],
+      limit: 10000,
+      used: 10000,
+      unit: "microusd",
+    },
+  });
+  const html = renderToStaticMarkup(
+    createElement(ResearchJobStatusPanel, {
+      view,
+      busy: false,
+      onCheck() {},
+      onResume() {},
+    }),
+  );
+  assert.match(html, /configured application limit/);
+  assert.doesNotMatch(html, /provider needs more|free credits|Free hosted/);
+  assert.equal(view.job.capacity!.reason, "operator_limit");
+});

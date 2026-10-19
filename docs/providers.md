@@ -1,6 +1,6 @@
 # Provider setup
 
-Fixture mode is the default and uses fictional Aurora/Birch sources without network calls or spending. The [profile template](../examples/profiles.example.json) also defines Exa, Brave and Serper profiles with live dispatch disabled. Configuration, adapter tests and live research quality are separate checks; see [current qualification](../STATUS.md) for the recorded deployment and host evidence.
+Fixture mode is the default and uses fictional Aurora/Birch sources without network calls or spending. The [profile template](../examples/profiles.example.json) also defines Exa, Brave, Serper and DeepSeek profiles with live dispatch disabled. Configuration, adapter tests and live research quality are separate checks; see [current qualification](../STATUS.md) for the recorded deployment and host evidence.
 
 Copy the template to an operator-controlled file outside published artifacts. Load it through `SOURCESQL_PROFILES_FILE` in the CLI or JSON-lines bridge; the Python SDK accepts the same name-to-profile mapping through `Engine(..., profiles=mapping)`. Supply credentials through the named environment variables. Replace both `SET_APPROVED_*_MODEL_NAME` placeholders with exact approved model identifiers before configuring semantic work. No credentials belong in the example file.
 
@@ -13,17 +13,17 @@ This command reads configuration and creates a local store; it does not contact 
 | Trusted profile field | Actual behavior |
 |---|---|
 | `mode` | `fixture` or `live`; default is `fixture`. |
-| `provider` | Live search adapter: `exa`, `brave` or `serper`. One adapter per profile; no automatic switching. |
+| `provider` | Live search adapter: `exa`, `brave`, `serper` or `deepseek`. One adapter per profile; no automatic switching. |
 | `api_key_env` | Environment variable containing the search credential. |
 | `allow_live` | Must be `true` in trusted configuration before live dispatch. |
 | `approved_cost_microusd` | Positive integer approval ceiling for a run request. One million micro-USD equals USD 1. This is not a debited account balance or an enforced billing cap. |
 | `metering_policy` | These adapters require explicit `estimated`. `strict` refuses before dispatch because hard total cash/token enforcement is unavailable. |
-| `allowed_source_hosts` | Exact lowercase hostnames approved for fetching, including redirects. Empty means live fetch is unavailable. Public DNS and permitted HTTP ports are also checked. |
+| `allowed_source_hosts` | Exact lowercase hostnames approved for fetching, including redirects. Empty means live fetch is unavailable unless an explicit public-source grant is configured. Public DNS and permitted HTTP ports are also checked. |
 | `model` | `{ "name": "approved-model", "api_key_env": "OPENAI_API_KEY", "retries": 0 }` configures PydanticAI leaf inference. Optional `base_url` selects a trusted OpenAI-compatible destination. |
 | `embedding` | `{ "name": "text-embedding-3-small", "api_key_env": "OPENAI_API_KEY" }` configures `SEM_SCORE`. Optional `endpoint` selects a trusted compatible destination. An unfamiliar compatible model also needs an explicit supported `encoding`, currently `cl100k_base`. Known model/encoding conflicts refuse. No scorer means refusal; there is no lexical substitute. |
+| `allow_public_source_hosts` | Exact `true` opts into public HTTP(S) source fetching. Public DNS, standard ports and redirects are still checked. This does not authorize private-source disclosure. |
 
 Both `model` and `embedding` can be omitted for search-only work. Credentials, destination permissions and a spending grant are separate requirements. Private inputs additionally require exact trusted disclosure permissions; query text cannot grant them.
-
 
 ## Semantic matching, ranking and normalization
 
@@ -59,7 +59,14 @@ credential can serve both model adapters, but both capabilities must be opted
 into separately. The OpenAI adapter returns cosine similarity of the bounded
 source text and criterion. It does not score truth or establish source support.
 Inspect omissions and unavailable outcomes instead of interpreting them as a
-zero score. Hosted configuration is described in the [Exa research guide](exa-research.md).
+zero score. Hosted Exa, Brave, Serper and DeepSeek can independently opt into the same model
+and embedding adapters; see the [hosted provider guide](providers-hosted.md) and
+[guided onboarding](personal-cloud-setup.md#opt-into-model-extraction-and-embedding-ranking).
+The search provider remains responsible for discovery: hosted Brave/Serper
+research can fetch public pages through the engine's guarded fetcher, while Exa
+research uses Contents fetching. DeepSeek research uses its native Markdown
+fetch endpoint.
+No semantic adapter establishes evidence missing from the acquired material.
 
 Scoring batches unique source inputs sharing a criterion and embeds that criterion
 once. The adapter caches exact submitted text by model and endpoint for its own
@@ -135,3 +142,56 @@ retries. The key came from a bound MotherDuck Flight secret. The stored result
 then passed MCP open/save and fresh-factory reopening without another Flight.
 Operator receipts remain outside public artifacts under
 `artifacts/hosted-exa-20261014/`.
+
+## DeepSeek retrieval contract
+
+The `deepseek` adapter uses the official [Search API](https://api-docs.deepseek.com/api/search/)
+and [Fetch API](https://api-docs.deepseek.com/api/fetch/) with `DEEPSEEK_API_KEY`.
+Search requests ask for page content, default to ten results and accept an
+explicit `per_query_limit` from one to 50. Queries must contain one to 128 Unicode
+characters. The complete query batch is checked before dispatch; long queries are
+not truncated. Narrow or split a long criterion deliberately in the authored SQL.
+Ordinary SQL may shortlist and reconcile acquired sources before semantic work.
+Publication-date options use the shared explicit local post-filter contract;
+missing dates remain unknown. Domain and query syntax do not become implicit
+relevance gates.
+
+Page content is retained as incomplete provider text. A summary or snippet
+without page content remains discovery metadata rather than quoted page evidence.
+The provider's `rerank_score` and `authority` values are source metadata; neither
+replaces the separately configured embedding `SEM_SCORE` or proves a claim true.
+`SEM_MATCH`, `SEM_EXTRACT`, `SEM_EXTRACT_ALL` and `SEM_NORM` use the independently
+configured model on acquired text, with the same missing-evidence behavior as
+other search providers.
+
+Set `"fetch_adapter": "deepseek"` in a local profile to use native Fetch instead
+of the guarded direct-page fetcher. The example profile explicitly sets
+`"allow_public_source_hosts": true`, allowing public source URLs after the owner
+enables live dispatch and approves a finite spending grant. The example keeps
+`allow_live: false` and `approved_cost_microusd: 0`, so copying it does not enable
+provider calls. To permit only selected sources, remove that public-source grant
+and populate `allowed_source_hosts` with exact approved hostnames instead.
+Both configurations still check public DNS and permitted HTTP ports before
+sending a source URL; private addresses remain refused. Fetch returns incomplete provider Markdown. Only
+`mode := 'cache_preferred'` is supported: the API has no documented force-fresh
+option, so `mode := 'live'` refuses before dispatch instead of promising freshness.
+DeepSeek supports `source_mode: "allow_excerpt"` only: provider text cannot
+establish whole-source completeness. `require_document` refuses before paid
+acquisition rather than spending on an impossible completeness guarantee.
+No application retries, hidden fetches or provider fallback are added.
+
+As checked on October 18, 2026, DeepSeek lists search and fetch at **$0.75 per
+1,000 successful nonempty requests**. The adapter records a 750 micro-USD
+operation estimate for such a response and zero for a valid empty result.
+Before each attempt, the adapter reserves the configured `request_cost_microusd`
+from the shared search/fetch execution allowance; a larger conservative reservation
+does not change the published response estimate or establish an actual charge.
+Unavailable usage or an uncertain remote outcome stays unknown. This is an
+estimate, not a provider billing statement. No recurring free allowance for these
+endpoints is documented; setup does not assume one. Check the account's own
+credit and billing state before enabling live work. See DeepSeek's
+[Search and Fetch guide](https://api-docs.deepseek.com/guides/search/).
+
+DeepSeek is an optional explicitly selected provider. Configuration, mocked
+adapter tests and packaging do not qualify live retrieval quality, billing,
+hosted execution or ChatGPT/Claude behavior for an adopter's account.

@@ -51,6 +51,7 @@ def test_execution_wheel_omits_only_declared_resources_and_recomputes_every_reco
     assert execution == builder.execution_wheel(distribution)
     with zipfile.ZipFile(io.BytesIO(execution)) as output:
         assert set(output.namelist()) == set(files) - set(builder.EXECUTION_OMISSIONS)
+        assert all(info.compress_type == zipfile.ZIP_STORED for info in output.infolist())
         record_path = "sourcesql-0.1.0.dist-info/RECORD"
         records = list(csv.reader(io.StringIO(output.read(record_path).decode())))
         assert {row[0] for row in records} == set(output.namelist())

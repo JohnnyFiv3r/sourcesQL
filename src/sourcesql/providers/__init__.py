@@ -7,8 +7,15 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..contracts import Budget, SemanticOutcome, SourcesQLError
-from .common import SafeFetcher, normalized_url, resolve_public, project_search_provenance
+from .common import (
+    SafeFetcher,
+    normalized_url,
+    resolve_public,
+    project_search_provenance,
+    DEEPSEEK_REQUEST_COST_MICROUSD,
+)
 from .fixture import FixtureProvider
+from .deepseek import DeepSeekProvider
 from .search import BraveProvider, ExaProvider, SerperProvider, search_options, validate_queries
 from .semantic import OpenAIEmbeddingProvider, PydanticSemanticProvider, TYPES
 
@@ -18,6 +25,7 @@ __all__ = [
     "BraveProvider",
     "ExaProvider",
     "SerperProvider",
+    "DeepSeekProvider",
     "SafeFetcher",
     "PydanticSemanticProvider",
     "OpenAIEmbeddingProvider",
@@ -38,7 +46,12 @@ class ProviderRegistry:
         self._extra_events: list[dict] = []
         if self.mode == "live":
             provider = self.profile.get("provider", "brave")
-            providers = {"brave": BraveProvider, "exa": ExaProvider, "serper": SerperProvider}
+            providers = {
+                "brave": BraveProvider,
+                "exa": ExaProvider,
+                "serper": SerperProvider,
+                "deepseek": DeepSeekProvider,
+            }
             if provider not in providers:
                 raise SourcesQLError("unsupported_capability", "Unknown search provider")
             credentials = self.profile.get("api_key")
@@ -47,15 +60,23 @@ class ProviderRegistry:
             kwargs = {"api_key": credentials or "", "client": self.profile.get("http_client")}
             if provider == "exa":
                 kwargs["search_type"] = self.profile.get("search_type", "auto")
-            if provider == "exa" and self.profile.get("resolver") is not None:
+            if provider == "deepseek":
+                kwargs["request_cost_microusd"] = self.profile.get(
+                    "request_cost_microusd", DEEPSEEK_REQUEST_COST_MICROUSD
+                )
+            if provider in {"exa", "deepseek"} and self.profile.get("resolver") is not None:
                 kwargs["resolver"] = self.profile["resolver"]
             self.search_provider = providers[provider](**kwargs)
             self.fetch_provider = SafeFetcher(
                 client=self.profile.get("fetch_client"),
-                allowed_hosts=self.profile.get("allowed_source_hosts"),
+                allowed_hosts=(
+                    None
+                    if self.profile.get("allow_public_source_hosts") is True
+                    else self.profile.get("allowed_source_hosts")
+                ),
                 **({"resolver": self.profile["resolver"]} if self.profile.get("resolver") else {}),
             )
-            if self.profile.get("fetch_adapter") == "exa" and provider == "exa":
+            if provider in {"exa", "deepseek"} and self.profile.get("fetch_adapter") == provider:
                 self.fetch_provider = self.search_provider
             self.semantic_provider = None
             self.embedding_provider = None
@@ -209,15 +230,27 @@ class ProviderRegistry:
 
     def search(self, queries: list[str], options: dict, budget: Budget) -> list[dict]:
         self._authorize(budget)
-        validate_queries(queries)
+        prepared_search = None
+        if isinstance(self.search_provider, DeepSeekProvider):
+            prepared_search = self.search_provider.prepare_search(queries, options)
+        else:
+            validate_queries(queries)
         search_settings = (
             {"per_query_limit": 10, **options}
-            if self.mode == "live" and self.profile.get("provider") == "exa"
+            if self.mode == "live" and self.profile.get("provider") in {"exa", "deepseek"}
             else options
         )
-        requested_limit = search_options(
-            search_settings,
-            maximum=100 if self.mode == "live" and self.profile.get("provider") == "exa" else 20,
+        requested_limit = (
+            prepared_search.count
+            if prepared_search is not None
+            else search_options(
+                search_settings,
+                maximum=(
+                    {"exa": 100, "deepseek": 50}.get(self.profile.get("provider", ""), 20)
+                    if self.mode == "live"
+                    else 20
+                ),
+            )
         )
         remaining = budget.limits["max_candidates"] - budget.counts.get("candidates", 0)
         per_query_limit = min(requested_limit, remaining // len(queries))
@@ -241,8 +274,14 @@ class ProviderRegistry:
                         raise SourcesQLError(
                             "budget_exhausted", "Candidate allowance exhausted", "dispatch"
                         )
-                    found = self.search_provider.search(
-                        [query], {**options, "per_query_limit": bound}, budget
+                    found = (
+                        self.search_provider.search_prepared(
+                            prepared_search, budget, index=index, per_query_limit=bound
+                        )
+                        if prepared_search is not None
+                        else self.search_provider.search(
+                            [query], {**options, "per_query_limit": bound}, budget
+                        )
                     )
                     # Count intake before checkpoint completion. Reuse must never
                     # bypass a candidate reservation lost after acquisition.
@@ -257,7 +296,13 @@ class ProviderRegistry:
                 )
                 rows.extend(found)
         else:
-            rows = self.search_provider.search(queries, bounded_options, budget)
+            rows = (
+                self.search_provider.search_prepared(
+                    prepared_search, budget, per_query_limit=per_query_limit
+                )
+                if prepared_search is not None
+                else self.search_provider.search(queries, bounded_options, budget)
+            )
             budget.reserve("candidates", len(rows), "max_candidates")
         # Keep query membership while preserving independently acquired source versions.
         deduplicated: dict[tuple, dict] = {}
@@ -303,6 +348,7 @@ class ProviderRegistry:
 
     def fetch(self, urls: list[str], options: dict, budget: Budget) -> list[dict]:
         self._authorize(budget)
+        prepared_fetch = None
         if not isinstance(urls, list) or any(not isinstance(url, str) for url in urls):
             raise SourcesQLError("invalid_request", "Fetch URLs must be strings", "acquisition")
         if self.mode == "live":
@@ -312,28 +358,41 @@ class ProviderRegistry:
                 raise SourcesQLError(
                     "unauthorized", "Live fetch requires permitted source hosts", "acquisition"
                 )
-            for url in urls:
-                host = urlsplit(normalized_url(url)).hostname
-                if not public_sources and host not in (
-                    allowed if isinstance(allowed, list) else []
-                ):
-                    raise SourcesQLError(
-                        "unauthorized", "Source destination is not permitted", "acquisition"
-                    )
-                resolver = self.profile.get("resolver")
-                resolve_public(url, resolver) if resolver else resolve_public(url)
+            if isinstance(self.fetch_provider, DeepSeekProvider):
+                prepared_fetch = self.fetch_provider.prepare_fetch(
+                    urls, options, allowed_hosts=None if public_sources else allowed
+                )
+            else:
+                for url in urls:
+                    host = urlsplit(normalized_url(url)).hostname
+                    if not public_sources and host not in (
+                        allowed if isinstance(allowed, list) else []
+                    ):
+                        raise SourcesQLError(
+                            "unauthorized", "Source destination is not permitted", "acquisition"
+                        )
+                    resolver = self.profile.get("resolver")
+                    resolve_public(url, resolver) if resolver else resolve_public(url)
         if hasattr(self, "stage_call"):
             rows = []
-            for url in urls:
+            for index, url in enumerate(urls):
                 found, _ = self.stage_call(
                     "WEB_FETCH",
                     [url],
                     options,
-                    lambda url=url: self.fetch_provider.fetch([url], options, budget),
+                    lambda url=url, index=index: (
+                        self.fetch_provider.fetch_prepared(prepared_fetch, budget, index=index)
+                        if prepared_fetch is not None
+                        else self.fetch_provider.fetch([url], options, budget)
+                    ),
                 )
                 rows.extend(found)
         else:
-            rows = self.fetch_provider.fetch(urls, options, budget)
+            rows = (
+                self.fetch_provider.fetch_prepared(prepared_fetch, budget)
+                if prepared_fetch is not None
+                else self.fetch_provider.fetch(urls, options, budget)
+            )
         if options.get("source_mode") == "require_document" and any(
             row.get("status") == "acquired" and not row.get("coverage", {}).get("complete")
             for row in rows

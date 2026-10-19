@@ -217,6 +217,8 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
 def execution_wheel(distribution: bytes) -> bytes:
     """Omit deployment helpers/templates and tokenizer ranks from the bounded Flight.
 
+    Store execution-wheel entries without inner compression: the outer XZ layer
+    compresses their source bytes together, avoiding double-compressed overhead.
     Public wheels retain every file. The reviewed Flight never provisions itself;
     ordinary CLI research imports onboarding lazily only for the setup command.
     The runner explicitly restores verified tokenizer ranks only for an admitted
@@ -247,10 +249,10 @@ def execution_wheel(distribution: bytes) -> bytes:
         writer.writerow((record_name, "", ""))
         entries[record_name] = record.getvalue().encode("utf-8")
         buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as target:
             for name, content in sorted(entries.items()):
                 info = original.getinfo(name)
-                target.writestr(info, content, compress_type=zipfile.ZIP_DEFLATED)
+                target.writestr(info, content, compress_type=zipfile.ZIP_STORED)
         return buffer.getvalue()
 
 

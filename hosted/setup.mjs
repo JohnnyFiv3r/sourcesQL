@@ -19,6 +19,15 @@ import {
   exaFingerprint,
   validateExaPolicy,
 } from "../apps/research/server/hosted-exa.ts";
+import {
+  DEEPSEEK_REQUEST_COST_MICROUSD,
+  HOSTED_SEARCH_POLICY_VERSIONS,
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
+  hostedSearchConfiguration,
+  hostedSearchDescriptor,
+  hostedSearchFingerprint,
+  validateHostedSearchPolicy,
+} from "../apps/research/server/hosted-search.ts";
 const require = createRequire(
   new URL("../apps/research/package.json", import.meta.url),
 );
@@ -40,7 +49,7 @@ export function parseArguments(arguments_, environment = process.env) {
     "--openai-reasoning-effort",
     "--embedding-model",
     "--embedding-secret",
-    ...["brave", "serper"].flatMap((provider) => [
+    ...["brave", "serper", "deepseek"].flatMap((provider) => [
       `--${provider}-secret`,
       `--${provider}-approved-cost-microusd`,
       `--${provider}-daily-cost-microusd`,
@@ -78,67 +87,76 @@ export function parseArguments(arguments_, environment = process.env) {
     ].includes(host)
   )
     throw Error("invalid_configuration");
+  const semanticFlags = [
+    "--openai-model",
+    "--openai-secret",
+    "--openai-reasoning-effort",
+    "--embedding-model",
+    "--embedding-secret",
+  ];
+  const research = semanticFlags.some((flag) => selected.has(flag));
+  const adapters = {
+    ...(selected.has("--openai-model") ||
+    selected.has("--openai-secret") ||
+    selected.has("--openai-reasoning-effort")
+      ? {
+          model: {
+            name: selected.get("--openai-model") ?? "",
+            secretName: selected.get("--openai-secret") ?? "",
+            ...(selected.has("--openai-reasoning-effort")
+              ? { reasoningEffort: selected.get("--openai-reasoning-effort") }
+              : {}),
+          },
+        }
+      : {}),
+    ...(selected.has("--embedding-model") || selected.has("--embedding-secret")
+      ? {
+          embedding: {
+            name: selected.get("--embedding-model") ?? "",
+            secretName: selected.get("--embedding-secret") ?? "",
+          },
+        }
+      : {}),
+  };
+  const collides = (secret) =>
+    [adapters.model?.secretName, adapters.embedding?.secretName].includes(
+      secret,
+    );
   let exa;
   const secretName = selected.get("--exa-secret");
   if (secretName !== undefined) {
     if (!/^[a-z][a-z0-9_]{0,62}$/.test(secretName))
       throw Error("invalid_configuration");
-    const integer = (flag, fallback) => {
+    const integer = (flag, fallback, maximum) => {
       const value = selected.get(flag) ?? String(fallback);
-      if (!/^[1-9][0-9]{0,6}$/.test(value) || Number(value) > 1_000_000)
+      if (!/^[1-9][0-9]{0,7}$/.test(value) || Number(value) > maximum)
         throw Error("invalid_configuration");
       return Number(value);
     };
-    const approved = integer("--exa-approved-cost-microusd", 50_000);
-    const daily = integer("--exa-daily-cost-microusd", 1_000_000);
+    const approved = integer(
+      "--exa-approved-cost-microusd",
+      50_000,
+      research ? 2_000_000 : 1_000_000,
+    );
+    const daily = integer(
+      "--exa-daily-cost-microusd",
+      1_000_000,
+      research ? 50_000_000 : 1_000_000,
+    );
     if (daily < approved) throw Error("invalid_configuration");
-    const semanticFlags = [
-      "--openai-model",
-      "--openai-secret",
-      "--openai-reasoning-effort",
-      "--embedding-model",
-      "--embedding-secret",
-    ];
-    const research = semanticFlags.some((flag) => selected.has(flag));
     const policy = {
       approvedCostMicrousd: approved,
       dailyCostMicrousd: daily,
       secretName,
       policyVersion: research ? "exa-research.v3" : "exa-research.v2",
-      ...(selected.has("--openai-model") ||
-      selected.has("--openai-secret") ||
-      selected.has("--openai-reasoning-effort")
-        ? {
-            model: {
-              name: selected.get("--openai-model") ?? "",
-              secretName: selected.get("--openai-secret") ?? "",
-              ...(selected.has("--openai-reasoning-effort")
-                ? { reasoningEffort: selected.get("--openai-reasoning-effort") }
-                : {}),
-            },
-          }
-        : {}),
-      ...(selected.has("--embedding-model") ||
-      selected.has("--embedding-secret")
-        ? {
-            embedding: {
-              name: selected.get("--embedding-model") ?? "",
-              secretName: selected.get("--embedding-secret") ?? "",
-            },
-          }
-        : {}),
+      ...adapters,
     };
     try {
       validateExaPolicy(policy);
     } catch {
       throw Error("invalid_configuration");
     }
-    if (
-      [policy.model?.secretName, policy.embedding?.secretName].includes(
-        secretName,
-      )
-    )
-      throw Error("invalid_configuration");
+    if (collides(secretName)) throw Error("invalid_configuration");
     const descriptor = exaDescriptor(policy);
     exa = {
       descriptor,
@@ -152,19 +170,8 @@ export function parseArguments(arguments_, environment = process.env) {
   ) {
     throw Error("invalid_configuration");
   }
-  if (
-    !exa &&
-    [
-      "--openai-model",
-      "--openai-secret",
-      "--openai-reasoning-effort",
-      "--embedding-model",
-      "--embedding-secret",
-    ].some((flag) => selected.has(flag))
-  )
-    throw Error("invalid_configuration");
   let search;
-  for (const provider of ["brave", "serper"]) {
+  for (const provider of ["brave", "serper", "deepseek"]) {
     const secret = selected.get(`--${provider}-secret`);
     const costFlags = ["approved", "daily", "request"].map(
       (kind) => `--${provider}-${kind}-cost-microusd`,
@@ -176,35 +183,60 @@ export function parseArguments(arguments_, environment = process.env) {
     }
     if (exa || search || !/^[a-z][a-z0-9_]{0,62}$/.test(secret))
       throw Error("invalid_configuration");
-    const integer = (kind, fallback) => {
+    const integer = (kind, fallback, maximum = 1_000_000) => {
       const value =
         selected.get(`--${provider}-${kind}-cost-microusd`) ?? fallback;
       if (
         typeof value !== "string" ||
-        !/^[1-9][0-9]{0,6}$/.test(value) ||
-        Number(value) > 1_000_000
+        !/^[1-9][0-9]{0,7}$/.test(value) ||
+        Number(value) > maximum
       )
         throw Error("invalid_configuration");
       return Number(value);
     };
-    const approved = integer("approved", "50000");
-    const daily = integer("daily", "1000000");
-    const requestCost = integer("request");
+    const approved = integer(
+      "approved",
+      "50000",
+      research ? 2_000_000 : 1_000_000,
+    );
+    const daily = integer(
+      "daily",
+      "1000000",
+      research ? 50_000_000 : 1_000_000,
+    );
+    const requestCost = integer(
+      "request",
+      provider === "deepseek"
+        ? String(DEEPSEEK_REQUEST_COST_MICROUSD)
+        : undefined,
+    );
     if (daily < approved || requestCost > approved)
       throw Error("invalid_configuration");
-    const descriptor = {
-      approved_cost_microusd: approved,
+    const policy = {
       provider,
-      request_cost_microusd: requestCost,
-      secret_name: secret,
-      version: `${provider}-search.v1`,
+      approvedCostMicrousd: approved,
+      dailyCostMicrousd: daily,
+      requestCostMicrousd: requestCost,
+      secretName: secret,
+      policyVersion: (research
+        ? HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS
+        : HOSTED_SEARCH_POLICY_VERSIONS)[provider],
+      ...adapters,
     };
+    try {
+      validateHostedSearchPolicy(policy);
+    } catch {
+      throw Error("invalid_configuration");
+    }
+    if (collides(secret)) throw Error("invalid_configuration");
     search = {
-      descriptor,
-      providerPolicySha256: hash(JSON.stringify(descriptor)),
+      descriptor: hostedSearchDescriptor(policy),
+      policy,
+      providerPolicySha256: hostedSearchFingerprint(policy),
       dailyCostMicrousd: daily,
     };
   }
+  if (research && !exa && !search) throw Error("invalid_configuration");
   return {
     database,
     principal,
@@ -220,18 +252,10 @@ export function parseArguments(arguments_, environment = process.env) {
 
 function searchSettings(options, includeDaily = false) {
   if (!options.search) return {};
-  const { descriptor, dailyCostMicrousd } = options.search;
+  const { descriptor, policy, dailyCostMicrousd } = options.search;
   const provider = descriptor.provider.toUpperCase();
   return {
-    [`SOURCESQL_ALLOW_LIVE_${provider}`]: "1",
-    [`SOURCESQL_${provider}_POLICY_VERSION`]: descriptor.version,
-    [`SOURCESQL_${provider}_SECRET_NAME`]: descriptor.secret_name,
-    [`SOURCESQL_${provider}_APPROVED_COST_MICROUSD`]: String(
-      descriptor.approved_cost_microusd,
-    ),
-    [`SOURCESQL_${provider}_REQUEST_COST_MICROUSD`]: String(
-      descriptor.request_cost_microusd,
-    ),
+    ...hostedSearchConfiguration(policy),
     ...(includeDaily
       ? {
           [`SOURCESQL_${provider}_DAILY_COST_MICROUSD`]:
@@ -261,6 +285,8 @@ export function flightSecretNames(options) {
         options.search?.descriptor.secret_name,
         options.exa?.descriptor.model?.secret_name,
         options.exa?.descriptor.embedding?.secret_name,
+        options.search?.descriptor.model?.secret_name,
+        options.search?.descriptor.embedding?.secret_name,
       ].filter(Boolean),
     ),
   ];
@@ -327,10 +353,10 @@ export async function main(arguments_ = process.argv.slice(2)) {
     const options = parseArguments(arguments_);
     if (options.help) {
       console.log(
-        "Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--openai-model MODEL --openai-secret NAME [--openai-reasoning-effort low]] [--embedding-model text-embedding-3-small --embedding-secret NAME] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]",
+        `Usage: node hosted/setup.mjs --database NAME --principal OWNER_ID [--bundle artifacts/hosted-flight] [--output local/motherduck/setup.json] [--create-database] [--use-local-login] [--exa-secret NAME] [--exa-approved-cost-microusd 50000] [--exa-daily-cost-microusd 1000000] [--openai-model MODEL --openai-secret NAME [--openai-reasoning-effort low]] [--embedding-model text-embedding-3-small --embedding-secret NAME] [--brave-secret NAME --brave-request-cost-microusd N | --serper-secret NAME --serper-request-cost-microusd N | --deepseek-secret NAME [--deepseek-request-cost-microusd ${DEEPSEEK_REQUEST_COST_MICROUSD}]] [--PROVIDER-approved-cost-microusd 50000] [--PROVIDER-daily-cost-microusd 1000000]`,
       );
       console.log(
-        "Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Search flags bind an existing Flight secret by name. Optional OpenAI model/embedding flags require Exa and bind existing OpenAI secrets under research v3; either may share one OpenAI secret. Brave/Serper require an operator-set conservative request cost estimate; provider billing is unavailable. Saves token-free settings with submission disabled.",
+        `Uses MOTHERDUCK_TOKEN, or explicitly chosen local CLI login. Creates one unscheduled F4/120s Flight; submits no jobs. Select exactly one live search provider. Optional OpenAI model/embedding flags bind existing OpenAI secrets under its research policy; either may share one OpenAI secret. Brave/Serper require an operator-set conservative request cost estimate. DeepSeek defaults to ${DEEPSEEK_REQUEST_COST_MICROUSD} micro-USD per successful nonempty search or fetch; an explicit conservative estimate may override it. Final provider billing is unavailable. Saves token-free settings with submission disabled.`,
       );
       return;
     }

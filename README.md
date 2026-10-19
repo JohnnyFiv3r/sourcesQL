@@ -173,12 +173,12 @@ Start with the [provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/ma
 
 | Capability | Configuration |
 | --- | --- |
-| Local live search | Exa, Brave or Serper adapter; its API key, live permission and finite budget |
+| Local live search | Exa, Brave, Serper or DeepSeek adapter; its API key, live permission and finite budget |
 | Semantic extraction / matching / normalization | An explicitly named model and its credential |
 | Semantic scoring | OpenAI embeddings with an explicitly selected model, such as `text-embedding-3-small` |
-| Hosted Exa, Brave or Serper | Choose one live provider per reviewed Flight; bind its secret and matching gateway policy |
+| Hosted Exa, Brave, Serper or DeepSeek | Choose one live provider per reviewed Flight; bind its secret and matching gateway policy |
 
-For search-only work, omit model and embedding settings. An Exa API key does not enable semantic operators or authorize spending. Request budgets must fit the trusted profile; source fetching also requires approved destination hosts.
+For search-only work, omit model and embedding settings. A search API key does not enable semantic operators or authorize spending. Request budgets must fit the trusted profile; source fetching also requires approved destination hosts.
 
 Hosted setup binds one search provider to each reviewed Flight. The configured profile determines the available search modes, candidate limits, fetching and semantic operators. Start with a small search, inspect its receipt, and configure wider coverage deliberately. A search-only profile returns source excerpts; it does not provide semantic extraction or a complete entity census.
 

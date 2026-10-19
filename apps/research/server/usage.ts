@@ -7,6 +7,8 @@ type ProviderTotals = {
   requests: number;
   estimated_cost_microusd: number;
   reported_cost_microusd: number;
+  reserved_cost_microusd: number;
+  reserved_cost_requests: number;
   estimated_cost_requests: number;
   reported_cost_requests: number;
   cost_unavailable_requests: number;
@@ -67,7 +69,7 @@ const providerName = (event: Row) => {
     name === "openai_embeddings"
   )
     return "openai";
-  return ["exa", "brave", "serper"].includes(name)
+  return ["exa", "brave", "serper", "deepseek"].includes(name)
     ? (name as string)
     : undefined;
 };
@@ -105,6 +107,8 @@ export function summarizeUsage(
         requests: 0,
         estimated_cost_microusd: 0,
         reported_cost_microusd: 0,
+        reserved_cost_microusd: 0,
+        reserved_cost_requests: 0,
         estimated_cost_requests: 0,
         reported_cost_requests: 0,
         cost_unavailable_requests: 0,
@@ -113,6 +117,11 @@ export function summarizeUsage(
         output_tokens: 0,
       };
       row.requests++;
+      const reservation = integer(event.reservation_microusd);
+      if (reservation !== undefined) {
+        row.reserved_cost_microusd += reservation;
+        row.reserved_cost_requests++;
+      }
       const usage = event.usage ?? {};
       const reported = integer(usage.cost_microusd),
         estimate = integer(usage.estimated_cost_microusd);
@@ -153,6 +162,9 @@ export function summarizeUsage(
     providers: [...providers.values()]
       .map((row) => ({
         ...row,
+        reserved_cost_microusd: row.reserved_cost_requests
+          ? row.reserved_cost_microusd
+          : null,
         reported_cost_microusd: row.reported_cost_requests
           ? row.reported_cost_microusd
           : null,
@@ -178,6 +190,7 @@ export function summarizeUsage(
       "MotherDuck SQL compute and storage costs are unavailable; Flight wall time is not SQL compute usage.",
       "Operations are attributed to their run start period; failed and cancelled work remains included.",
       "Unreported costs and uncertain requests are not zero-cost requests.",
+      "Configured request reservations are reported separately and are not usage charges or invoices.",
     ],
   };
 }

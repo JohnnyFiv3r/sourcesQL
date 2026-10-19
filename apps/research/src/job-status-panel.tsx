@@ -35,6 +35,10 @@ const BILLING_DESTINATIONS = {
     href: "https://api-dashboard.search.brave.com/app/settings/billing?tab=payment-method",
   },
   serper: { label: "Serper billing", href: "https://serper.dev/billing" },
+  deepseek: {
+    label: "DeepSeek billing",
+    href: "https://platform.deepseek.com/",
+  },
   openai: {
     label: "OpenAI API billing",
     href: "https://platform.openai.com/account/billing/overview",

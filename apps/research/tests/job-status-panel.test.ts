@@ -290,7 +290,14 @@ test("all provider links use verified hardcoded HTTPS billing destinations", () 
   const html = render(
     view({
       capacity: capacity({
-        services: ["motherduck", "exa", "brave", "serper", "openai"],
+        services: [
+          "motherduck",
+          "exa",
+          "brave",
+          "serper",
+          "deepseek",
+          "openai",
+        ],
       }),
     }),
   );
@@ -302,6 +309,7 @@ test("all provider links use verified hardcoded HTTPS billing destinations", () 
       "https://dashboard.exa.ai/billing",
       "https://api-dashboard.search.brave.com/app/settings/billing?tab=payment-method",
       "https://serper.dev/billing",
+      "https://platform.deepseek.com/",
       "https://platform.openai.com/account/billing/overview",
     ],
   );

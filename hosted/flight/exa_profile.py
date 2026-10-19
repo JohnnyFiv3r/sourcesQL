@@ -12,6 +12,8 @@ import os
 import re
 from collections.abc import Mapping
 
+from sourcesql.provider_rates import DEEPSEEK_REQUEST_COST_MICROUSD
+
 POLICY_VERSION = "exa-research.v2"
 RESEARCH_POLICY_VERSION = "exa-research.v3"
 SEARCH_TYPES = {
@@ -52,7 +54,23 @@ RESEARCH_LIMITS = {
 }
 SEMANTIC_OPERATORS = {"SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL", "SEM_NORM"}
 REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
-SEARCH_POLICY_VERSIONS = {"brave": "brave-search.v1", "serper": "serper-search.v1"}
+SEARCH_POLICY_VERSIONS = {
+    "brave": "brave-search.v1",
+    "serper": "serper-search.v1",
+    "deepseek": "deepseek-search.v1",
+}
+SEARCH_RESEARCH_POLICY_VERSIONS = {
+    "brave": "brave-research.v2",
+    "serper": "serper-research.v2",
+    "deepseek": "deepseek-research.v1",
+}
+
+
+def _is_research(descriptor: dict) -> bool:
+    return descriptor.get("version") in {
+        RESEARCH_POLICY_VERSION,
+        *SEARCH_RESEARCH_POLICY_VERSIONS.values(),
+    }
 
 
 def _model_configuration(environment: Mapping[str, str]) -> dict | None:
@@ -134,32 +152,44 @@ def _credential_available(environment: Mapping[str, str], name: str) -> bool:
     )
 
 
-def _approved_integer(environment: Mapping[str, str], key: str, default=None) -> int:
+def _approved_integer(
+    environment: Mapping[str, str], key: str, default=None, *, ceiling=MAX_APPROVED_COST_MICROUSD
+) -> int:
     value = environment.get(key, default)
     if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,6}", value):
         raise ValueError("Search requires a bounded positive integer approval")
     result = int(value)
-    if result > MAX_APPROVED_COST_MICROUSD:
+    if result > ceiling:
         raise ValueError("Search approval exceeds the hosted policy ceiling")
     return result
 
 
 def _load_search_configuration(provider: str, environment: Mapping[str, str]) -> dict:
     prefix = "SOURCESQL_" + provider.upper()
-    version = SEARCH_POLICY_VERSIONS[provider]
-    if environment.get(prefix + "_POLICY_VERSION", version) != version:
+    version = environment.get(prefix + "_POLICY_VERSION", SEARCH_POLICY_VERSIONS[provider])
+    research = version == SEARCH_RESEARCH_POLICY_VERSIONS[provider]
+    if version not in {SEARCH_POLICY_VERSIONS[provider], SEARCH_RESEARCH_POLICY_VERSIONS[provider]}:
         raise ValueError("Unknown hosted search policy version")
     approved = _approved_integer(
-        environment, prefix + "_APPROVED_COST_MICROUSD", str(DEFAULT_APPROVED_COST_MICROUSD)
+        environment,
+        prefix + "_APPROVED_COST_MICROUSD",
+        str(DEFAULT_APPROVED_COST_MICROUSD),
+        ceiling=MAX_RESEARCH_APPROVED_COST_MICROUSD if research else MAX_APPROVED_COST_MICROUSD,
     )
     request_cost = _approved_integer(environment, prefix + "_REQUEST_COST_MICROUSD")
+    if provider == "deepseek" and request_cost < DEEPSEEK_REQUEST_COST_MICROUSD:
+        raise ValueError("DeepSeek request estimate is below its published unit rate")
     if request_cost > approved:
         raise ValueError("Search approval cannot cover one estimated request")
     secret_name = environment.get(prefix + "_SECRET_NAME")
     if not isinstance(secret_name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", secret_name):
         raise ValueError("Use a simple configured MotherDuck Flight secret name")
+    model = _model_configuration(environment) if research else None
+    embedding = _embedding_configuration(environment) if research else None
     descriptor = {
         "approved_cost_microusd": approved,
+        **({"limits": _research_limits(model, embedding), "model": model} if research else {}),
+        **({"embedding": embedding} if embedding is not None else {}),
         "provider": provider,
         "request_cost_microusd": request_cost,
         "secret_name": secret_name,
@@ -175,8 +205,13 @@ def _load_search_configuration(provider: str, environment: Mapping[str, str]) ->
         "allow_live": True,
         "approved_cost_microusd": approved,
         "metering_policy": "estimated",
+        **({"request_cost_microusd": request_cost} if provider == "deepseek" else {}),
         "allowed_source_hosts": [],
         "hosted_profile_fingerprint": fingerprint,
+        **({"allow_public_source_hosts": True} if research else {}),
+        **({"fetch_adapter": "deepseek"} if research and provider == "deepseek" else {}),
+        **({"model": _model_profile(model)} if model is not None else {}),
+        **({"embedding": _embedding_profile(embedding)} if embedding is not None else {}),
     }
     return {
         "profiles": {provider: profile},
@@ -189,7 +224,7 @@ def _load_search_configuration(provider: str, environment: Mapping[str, str]) ->
 def load_configuration(environment: Mapping[str, str] | None = None) -> dict:
     environment = os.environ if environment is None else environment
     enabled_providers = []
-    for provider in ("exa", "brave", "serper"):
+    for provider in ("exa", "brave", "serper", "deepseek"):
         enabled = environment.get("SOURCESQL_ALLOW_LIVE_" + provider.upper(), "0")
         if enabled not in {"", "0", "1"}:
             raise ValueError("Live search enablement must be 0 or 1")
@@ -304,7 +339,7 @@ def validate_request(
         )
     profile = settings["profiles"][profile_name]
     provider = settings["descriptor"].get("provider", "exa")
-    research = settings["descriptor"]["version"] == RESEARCH_POLICY_VERSION
+    research = _is_research(settings["descriptor"])
     if (
         not settings["provider_policy_sha256"]
         or profile.get("hosted_profile_fingerprint") != settings["provider_policy_sha256"]
@@ -312,6 +347,11 @@ def validate_request(
         or profile.get("provider") != provider
         or (provider == "exa" and profile.get("search_type") != SEARCH_TYPES.get(profile_name))
         or (provider != "exa" and profile_name != provider)
+        or (
+            provider == "deepseek"
+            and profile.get("request_cost_microusd")
+            != settings["descriptor"]["request_cost_microusd"]
+        )
     ):
         raise SourcesQLError("unauthorized", "Hosted provider policy mismatch", "dispatch")
     if research:
@@ -325,8 +365,8 @@ def validate_request(
         ).hexdigest()
         expected_secret = (
             "EXA_API_KEY"
-            if descriptor["secret_name"] is None
-            else descriptor["secret_name"] + "_EXA_API_KEY"
+            if provider == "exa" and descriptor["secret_name"] is None
+            else descriptor["secret_name"] + "_" + provider.upper() + "_API_KEY"
         )
         if (
             descriptor_fingerprint != settings["provider_policy_sha256"]
@@ -336,13 +376,28 @@ def validate_request(
             or profile.get("allow_live") is not True
             or profile.get("metering_policy") != "estimated"
             or profile.get("allow_public_source_hosts") is not True
-            or profile.get("fetch_adapter") != "exa"
+            or profile.get("fetch_adapter")
+            != (provider if provider in {"exa", "deepseek"} else None)
             or profile.get("allowed_source_hosts") != []
             or profile.get("model") != (_model_profile(model) if model is not None else None)
             or profile.get("embedding")
             != (_embedding_profile(embedding) if embedding is not None else None)
         ):
             raise SourcesQLError("unauthorized", "Hosted research policy mismatch", "dispatch")
+    source_modes = (
+        {"allow_excerpt", "require_document"}
+        if research and provider != "deepseek"
+        else {"allow_excerpt"}
+    )
+    source_mode = request.get("source_mode")
+    if not isinstance(source_mode, str) or source_mode not in source_modes:
+        raise SourcesQLError(
+            "unsupported_capability",
+            "DeepSeek cannot establish complete document coverage; use allow_excerpt"
+            if provider == "deepseek"
+            else "Hosted profile does not permit this source mode",
+            "dispatch",
+        )
     if not _credential_available(environment, profile["api_key_env"]):
         raise SourcesQLError(
             "provider_unavailable", "Search credentials are not configured", "dispatch"
@@ -355,7 +410,6 @@ def validate_request(
         raise SourcesQLError(
             "provider_unavailable", "Semantic model credentials are not configured", "dispatch"
         )
-    source_modes = {"allow_excerpt", "require_document"} if research else {"allow_excerpt"}
     if (
         research
         and embedding is not None
@@ -364,27 +418,29 @@ def validate_request(
         raise SourcesQLError(
             "provider_unavailable", "Embedding credentials are not configured", "dispatch"
         )
-    source_mode = request.get("source_mode")
-    if not isinstance(source_mode, str) or source_mode not in source_modes:
-        raise SourcesQLError(
-            "unsupported_capability", "Hosted profile does not permit this source mode", "dispatch"
-        )
     limits = Budget(request.get("budgets")).limits
     approved = profile["approved_cost_microusd"]
     if not 0 < limits["max_cost_microusd"] <= approved:
-        raise SourcesQLError("unauthorized", "Request exceeds trusted Exa approval", "dispatch")
+        raise SourcesQLError(
+            "unauthorized", "Request exceeds trusted provider approval", "dispatch"
+        )
     ceilings = dict(settings["descriptor"]["limits"] if research else LIMITS)
-    if provider != "exa" or settings["descriptor"]["version"] == "exa-search.v1":
+    if not research and (provider != "exa" or settings["descriptor"]["version"] == "exa-search.v1"):
         ceilings["dispatch_deadline_seconds"] = 60
     if any(limits[name] > ceiling for name, ceiling in ceilings.items()):
         raise SourcesQLError(
-            "unauthorized", "Request exceeds trusted Exa execution limits", "dispatch"
+            "unauthorized", "Request exceeds trusted provider execution limits", "dispatch"
         )
     if provider != "exa":
         request_cost = settings["descriptor"]["request_cost_microusd"]
-        if limits["max_search_requests"] * request_cost > limits["max_cost_microusd"]:
+        if limits["max_search_requests"] * request_cost > limits["max_cost_microusd"] or (
+            provider == "deepseek"
+            and limits["max_fetches"] * request_cost > limits["max_cost_microusd"]
+        ):
             raise SourcesQLError(
-                "unauthorized", "Search attempts exceed the operator cost estimate", "dispatch"
+                "unauthorized",
+                "Paid provider attempts exceed the operator cost estimate",
+                "dispatch",
             )
 
 
@@ -393,7 +449,7 @@ def validate_explain(explanation: dict, settings: dict | None = None) -> None:
 
     allowed = {"WEB_SEARCH", "SOURCE_WINDOW"}
     descriptor = (settings or {}).get("descriptor") or {}
-    if descriptor.get("version") == RESEARCH_POLICY_VERSION:
+    if _is_research(descriptor):
         allowed.add("WEB_FETCH")
         if descriptor["model"] is not None:
             allowed.update(SEMANTIC_OPERATORS)

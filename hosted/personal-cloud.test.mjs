@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   validateConfig,
   createPlan,
@@ -35,6 +36,11 @@ import {
   exaResearchLimits,
   exaSearchTypes,
 } from "../apps/research/server/hosted-exa.ts";
+import {
+  HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS,
+  hostedSearchBudgets,
+  hostedSearchOperators,
+} from "../apps/research/server/hosted-search.ts";
 const root = resolve(import.meta.dirname, "..");
 const hash = (v) => createHash("sha256").update(v).digest("hex");
 const config = () => ({
@@ -151,9 +157,9 @@ test("research opt-in advertises exact operators, processors and provider-manage
   assert.equal(only.research.model, null);
 });
 
-test("semantic setup rejects unsupported providers, keys, partial models and conflicting shared-secret reuse", () => {
+test("semantic setup rejects fixtures, keys, partial models and conflicting shared-secret reuse", () => {
   for (const change of [
-    { name: "brave", request_cost_microusd: 5000 },
+    { name: "fixture" },
     { model: { name: "configured-model" } },
     {
       model: {
@@ -181,6 +187,264 @@ test("semantic setup rejects unsupported providers, keys, partial models and con
       /invalid_(?:provider_)?configuration/,
     );
 });
+
+test("low-grant research onboarding verifies the actual gateway's affordable search limits", () => {
+  for (const name of ["brave", "serper", "deepseek"]) {
+    const path = workspace();
+    const plan = createPlan(
+      {
+        ...config(),
+        provider: {
+          ...researchProvider(),
+          name,
+          secret_name: `personal_${name}`,
+          request_cost_microusd: 5000,
+        },
+      },
+      root,
+      path,
+    );
+    const { policy, descriptor } = parseSetup(
+      setupArguments(plan.config, path),
+      {},
+    ).search;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        new URL(
+          "../apps/research/node_modules/tsx/dist/loader.mjs",
+          import.meta.url,
+        ).href,
+        "--input-type=module",
+        "--eval",
+        `
+import { readFileSync } from 'node:fs';
+const { MotherDuckEngine } = await import(${JSON.stringify(new URL("../apps/research/server/motherduck.ts", import.meta.url).href)});
+const engine = new MotherDuckEngine({
+  database: 'synthetic_test', host: 'pg.us-east-1-aws.motherduck.com',
+  token: 'synthetic-no-network', principal: 'owner-a',
+  flightId: '11111111-1111-4111-a111-111111111111',
+  usageMode: 'provider_managed', search: JSON.parse(readFileSync(0, 'utf8')),
+  clientFactory() { throw Error('capabilities must not connect'); },
+});
+console.log(JSON.stringify(await engine.call('capabilities')));
+`,
+      ],
+      { input: JSON.stringify(policy), encoding: "utf8", cwd: root },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const capabilities = JSON.parse(result.stdout);
+    const live = capabilities.profiles.find((profile) => profile.name === name);
+    assert.equal(live.search_limits.max_search_queries, 10);
+    assert.equal(live.search_limits.max_search_requests, 10);
+    assert.deepEqual(plan.research.search_limits, live.search_limits);
+    assertCapabilities(plan.config, capabilities);
+    // The review fingerprint binds the complete policy, independently of the
+    // lower grant's effective dispatch allowance.
+    assert.equal(descriptor.limits.max_search_queries, 32);
+    assert.equal(descriptor.limits.max_search_requests, 48);
+    assert.deepEqual(plan.research.provider_policy, descriptor);
+    const rawCaps = structuredClone(capabilities);
+    rawCaps.profiles.find((profile) => profile.name === name).search_limits = {
+      ...descriptor.limits,
+      max_cost_microusd: 50000,
+    };
+    assert.throws(
+      () => assertCapabilities(plan.config, rawCaps),
+      /hosted_capabilities_mismatch/,
+    );
+  }
+});
+
+for (const name of ["brave", "serper", "deepseek"]) {
+  test(`${name} guided research preserves exact adapter and budget choices through plan, setup and verification`, () => {
+    const path = workspace();
+    for (const included of ["model", "embedding", "both"]) {
+      const provider = {
+        ...researchProvider(),
+        name,
+        secret_name: `personal_${name}`,
+        request_cost_microusd: 5000,
+      };
+      if (included === "model") delete provider.embedding;
+      if (included === "embedding") delete provider.model;
+      const plan = createPlan({ ...config(), provider }, root, path);
+      const options = parseSetup(setupArguments(plan.config, path), {});
+      const { policy, descriptor, providerPolicySha256 } = options.search;
+      assert.equal(
+        descriptor.version,
+        HOSTED_SEARCH_RESEARCH_POLICY_VERSIONS[name],
+      );
+      assert.equal(
+        descriptor.model?.name ?? null,
+        provider.model?.name ?? null,
+      );
+      assert.deepEqual(plan.research.provider_policy, descriptor);
+      assert.equal(plan.research.provider_policy_sha256, providerPolicySha256);
+      assert.deepEqual(plan.research.third_party_processors, [name, "openai"]);
+      assert.deepEqual(
+        plan.research.live_operators,
+        hostedSearchOperators(policy),
+      );
+      assert.ok(
+        plan.research.live_operators.includes("SEM_MATCH") === !!provider.model,
+      );
+      assert.ok(
+        plan.research.live_operators.includes("SEM_SCORE") ===
+          !!provider.embedding,
+      );
+      assert.ok(plan.research.live_operators.includes("WEB_FETCH"));
+      assert.deepEqual(
+        providerBindings(plan.config).map((binding) => [
+          binding.name,
+          binding.keyName,
+        ]),
+        [
+          [`personal_${name}`, name.toUpperCase() + "_API_KEY"],
+          ["personal_openai", "OPENAI_API_KEY"],
+        ],
+      );
+      const caps = {
+        profiles: [
+          { name: "fixture", mode: "fixture", provider: "fixture" },
+          {
+            name,
+            mode: "live",
+            provider: name,
+            operators: hostedSearchOperators(policy),
+            model_configured: !!provider.model,
+            model_name: provider.model?.name ?? null,
+            embedding_configured: !!provider.embedding,
+            embedding_model: provider.embedding?.name ?? null,
+            ...(provider.embedding
+              ? {
+                  embedding_adapter_version: "openai-embeddings.v2",
+                  embedding_token_encoding: "cl100k_base",
+                  score_basis: "cosine_similarity",
+                }
+              : {}),
+            search_limits: hostedSearchBudgets({}, policy, 100),
+          },
+        ],
+        flight_submission_enabled: false,
+        max_flight_runtime_seconds: 120,
+        usage_mode: "provider_managed",
+        monthly_execution_reserve_seconds: null,
+        monthly_provider_reserve_microusd: null,
+        daily_execution_reserve_seconds: null,
+      };
+      assertCapabilities(plan.config, caps);
+      for (const mutate of [
+        (entry) => {
+          entry.operators = ["WEB_SEARCH"];
+        },
+        (entry) => {
+          entry.search_limits.max_model_requests += 1;
+        },
+        (entry) => {
+          entry.model_name = "different";
+        },
+        (entry) => {
+          entry.operators.push("UNPLANNED");
+        },
+      ]) {
+        const changed = structuredClone(caps);
+        mutate(changed.profiles[1]);
+        assert.throws(
+          () => assertCapabilities(plan.config, changed),
+          /hosted_capabilities_mismatch/,
+        );
+      }
+      for (const mutate of [
+        (changed) => {
+          changed.provider.approved_cost_microusd += 1;
+        },
+        (changed) => {
+          changed.provider.secret_name += "_new";
+        },
+        (changed) => {
+          if (changed.provider.model)
+            changed.provider.model.name = "different-model";
+          else changed.provider.embedding.name = "text-embedding-3-large";
+        },
+        (changed) => {
+          if (changed.provider.model)
+            changed.provider.model.secret_name += "_new";
+          else changed.provider.embedding.secret_name += "_new";
+        },
+      ]) {
+        const changed = structuredClone(plan.config);
+        mutate(changed);
+        assert.throws(
+          () =>
+            assertPlan(plan, createPlan(changed, root, path), plan.plan_sha256),
+          /plan_changed_review_again/,
+        );
+      }
+    }
+  });
+  test(`${name} guided semantic configuration rejects credentials, collisions and conflicting shared-secret reuse`, async () => {
+    const provider = {
+      ...researchProvider(),
+      name,
+      secret_name: `personal_${name}`,
+      request_cost_microusd: 5000,
+    };
+    for (const change of [
+      { model: { name: "configured-model" } },
+      { model: { name: "configured-model", secret_name: `personal_${name}` } },
+      {
+        model: {
+          name: "configured-model",
+          secret_name: "personal_openai",
+          api_key: "private",
+        },
+      },
+      { embedding: { name: "unknown", secret_name: "personal_openai" } },
+      {
+        embedding: {
+          name: "text-embedding-3-small",
+          secret_name: "personal_openai",
+          reuse_secret: true,
+        },
+      },
+    ])
+      assert.throws(
+        () =>
+          validateConfig({ ...config(), provider: { ...provider, ...change } }),
+        /invalid_(?:provider_)?configuration/,
+      );
+    const plan = createPlan({ ...config(), provider }, root, workspace());
+    let accessed = false;
+    await assert.rejects(
+      applyPlan(
+        plan,
+        root,
+        workspace(),
+        { ...env, [name.toUpperCase() + "_API_KEY"]: "private-search" },
+        {},
+        () => {},
+        {
+          api: async () => {
+            accessed = true;
+          },
+        },
+      ),
+      /missing_or_invalid_model_credential/,
+    );
+    assert.equal(accessed, false);
+    const reused = structuredClone(provider);
+    reused.model.reuse_secret = true;
+    reused.embedding.reuse_secret = true;
+    assert.deepEqual(
+      providerBindings(validateConfig({ ...config(), provider: reused })).map(
+        (binding) => binding.reuse,
+      ),
+      [false, true],
+    );
+  });
+}
 
 test("verification rejects capabilities that disagree with the reviewed research adapters or limits", () => {
   const configured = validateConfig({
@@ -609,6 +873,7 @@ test("provider-managed settings omit accumulated limits even from explicit legac
     SOURCESQL_EXA_DAILY_COST_MICROUSD: "1000000",
     SOURCESQL_BRAVE_DAILY_COST_MICROUSD: "1000000",
     SOURCESQL_SERPER_DAILY_COST_MICROUSD: "1000000",
+    SOURCESQL_DEEPSEEK_DAILY_COST_MICROUSD: "1000000",
     SOURCESQL_FLIGHT_MAX_RUNTIME_SEC: "120",
     SOURCESQL_EXA_APPROVED_COST_MICROUSD: "50000",
   };
@@ -693,7 +958,7 @@ test("reviewed plans disclose reference estimates and bind deprecated inputs wit
   );
 });
 test("provider daily allowance metadata is optional and never emitted as an accumulated cap", () => {
-  for (const name of ["exa", "brave", "serper"]) {
+  for (const name of ["exa", "brave", "serper", "deepseek"]) {
     const provider = {
       name,
       secret_name: "sourcesql_" + name,
@@ -1261,8 +1526,50 @@ test("unknown or multiple deployment matches never trigger a replacement submiss
     );
   }
 });
-test("Brave and Serper bind explicit cost policies through existing setup flags", () => {
-  for (const name of ["brave", "serper"]) {
+
+test("DeepSeek guided setup normalizes the published estimate and preserves a conservative override", () => {
+  const rawProvider = {
+    name: "deepseek",
+    secret_name: "personal_deepseek",
+    approved_cost_microusd: 50000,
+  };
+  const original = structuredClone(rawProvider);
+  const configured = validateConfig({ ...config(), provider: rawProvider });
+  assert.equal(configured.provider.request_cost_microusd, 750);
+  assert.deepEqual(rawProvider, original);
+  const path = workspace();
+  const plan = createPlan({ ...config(), provider: rawProvider }, root, path);
+  const options = parseSetup(setupArguments(plan.config, path), {});
+  assert.equal(options.search.descriptor.version, "deepseek-search.v1");
+  assert.equal(options.search.descriptor.request_cost_microusd, 750);
+  assert.deepEqual(plan.research.third_party_processors, ["deepseek"]);
+  assert.deepEqual(
+    providerBindings(plan.config).map(({ name, keyName }) => [name, keyName]),
+    [["personal_deepseek", "DEEPSEEK_API_KEY"]],
+  );
+  assert.ok(!Object.hasOwn(plan.limits.reference_notices, "deepseek"));
+  const override = validateConfig({
+    ...config(),
+    provider: { ...rawProvider, request_cost_microusd: 1000 },
+  });
+  assert.equal(
+    parseSetup(setupArguments(override, path), {}).search.descriptor
+      .request_cost_microusd,
+    1000,
+  );
+  for (const request_cost_microusd of [0, -1, 749, 1.5, 50001, "750", null])
+    assert.throws(
+      () =>
+        validateConfig({
+          ...config(),
+          provider: { ...rawProvider, request_cost_microusd },
+        }),
+      /invalid_(?:provider_)?configuration/,
+    );
+});
+
+test("Search providers bind reviewed cost policies through existing setup flags", () => {
+  for (const name of ["brave", "serper", "deepseek"]) {
     const configured = validateConfig({
       ...config(),
       provider: {
