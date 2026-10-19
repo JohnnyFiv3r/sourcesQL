@@ -34,7 +34,8 @@ ENV PATH=/opt/venv/bin:$PATH \
     HOME=/tmp \
     SOURCESQL_DATA_DIR=/tmp/sourcesql-engine
 USER 10001:10001
-CMD ["python", "-m", "pytest", "-q", "-ra", "-p", "no:cacheprovider", "tests", "hosted/flight/tests"]
+# Reclaim successful per-test fixtures within the fixed qualification tmpfs.
+CMD ["python", "-m", "pytest", "-q", "-ra", "-p", "no:cacheprovider", "-o", "tmp_path_retention_policy=failed", "tests", "hosted/flight/tests"]
 
 FROM ${PYTHON_IMAGE} AS runtime
 COPY --from=builder /opt/venv /opt/venv
