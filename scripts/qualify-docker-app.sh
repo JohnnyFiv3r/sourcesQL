@@ -31,6 +31,7 @@ def add(path):
     paths.add(path)
 for name in ("README.md", "LICENSE", "NOTICE", "hatch_build.py", "pyproject.toml", "uv.lock",
              "Dockerfile", ".dockerignore", "compose.yaml", "scripts/qualify-docker-app.sh",
+             "scripts/qualify-motherduck.mts", "scripts/qualify-motherduck-app.mts", "scripts/qualify-exa-hosted.mts",
              "apps/research/package.json", "apps/research/package-lock.json",
              "apps/research/tsconfig.json", "apps/research/index.html", "apps/research/research.html",
              "apps/research/vercel.json", "apps/research/.vercelignore", "hosted/setup.mjs",
@@ -91,7 +92,7 @@ old = json.loads((previous / "source-hashes.json").read_text())
 new = json.loads((current / "source-hashes-before.json").read_text())
 def python_inputs(values):
     return {name: value for name, value in values.items()
-            if name in {"pyproject.toml", "uv.lock", "Dockerfile", ".dockerignore"}
+            if name in {"pyproject.toml", "uv.lock", "Dockerfile", ".dockerignore", "scripts/qualify-docker-app.sh"}
             or name.startswith(("src/sourcesql/", "tests/", "hosted/flight/"))}
 assert python_inputs(old) == python_inputs(new), "Python inputs changed; run the full suite"
 old_runtime = json.loads((previous / "runtime-environment.json").read_text())
@@ -99,7 +100,7 @@ new_runtime = json.loads((current / "runtime-environment.json").read_text())
 for name in ("python", "kernel", "architecture", "uid"):
     assert old_runtime[name] == new_runtime[name], "Python runtime changed; run the full suite"
 log = (previous / "pytest.log").read_bytes()
-summary = re.search(r"(?m)^(\d+) passed(?:, (\d+) skipped)?(?:, \d+ warnings?)? in [\d.]+s$", log.decode())
+summary = re.search(r"(?m)^(\d+) passed(?:, (\d+) skipped)?(?:, \d+ warnings?)? in [\d.]+s(?: \([\d:]+\))?$", log.decode())
 assert summary is not None, "Prior Python receipt has no successful summary"
 receipt = {"schema": "sourcesql.python-qualification-reuse.v1", "newly_run": False,
            "source_receipt": str(previous), "inputs_identical": True, "runtime_identical": True,
@@ -117,7 +118,8 @@ docker run --rm --network none --read-only --cap-drop ALL \
   --env SOURCESQL_QUALIFICATION_SENTINEL_FILE=/qualification/sentinel.txt \
   --env SOURCESQL_QUALIFICATION_SENTINEL_ENV=SAFE-SYNTHETIC-ENV-SENTINEL \
   --workdir /workspace --entrypoint python sourcesql:app-qualification \
-  -m pytest -q -ra -p no:cacheprovider tests hosted/flight/tests 2>&1 | tee "$receipt_dir/pytest.log"
+  -m pytest -q -ra -p no:cacheprovider -o tmp_path_retention_policy=failed \
+  tests hosted/flight/tests 2>&1 | tee "$receipt_dir/pytest.log"
 fi
 
 # Python is required only for this developer harness, not for Docker adoption.

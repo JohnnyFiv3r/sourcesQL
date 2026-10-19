@@ -1,3 +1,4 @@
+import { buildMaterializationPayload } from "./materialization.js";
 import { authorizeSnapshot, type AccessPolicy } from "./access.js";
 import {
   resolveResult,
@@ -7,7 +8,7 @@ import {
   type ResultReference,
   type EngineResult,
 } from "./engine.js";
-import { originForSnapshot, effectiveValue } from "../src/schema.js";
+import { originForSnapshot } from "../src/schema.js";
 import {
   McpServer,
   ResourceTemplate,
@@ -2019,6 +2020,56 @@ export function createServer(
           .describe(SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS.budgets),
       })
       .strict();
+    // App labels do not replace canonical engine authorization/classification.
+    const authorizeResult = async (
+      resultId: string,
+      classifications: Map<string, Snapshot["dataClassification"]>,
+    ) => {
+      if (!classifications.has(resultId)) {
+        const page = await engine.call<EngineResult>("read_result", {
+          result_id: resultId,
+          offset: 0,
+          limit: 1,
+        });
+        if (page.result_id !== resultId)
+          throw new Error("Engine returned a different result identity");
+        const snapshot = resultSnapshotForAccess(page);
+        authorizeSnapshot(snapshot, options.access);
+        classifications.set(resultId, snapshot.dataClassification);
+      }
+    };
+    const authorizedMaterialization = async (
+      selection: Parameters<ResearchStore["materializationContext"]>[0],
+      classifications = new Map<string, Snapshot["dataClassification"]>(),
+    ) => {
+      const context = await store.materializationContext(
+        selection,
+        async (views) => {
+          for (const view of views) authorizeView(view);
+          for (const view of views)
+            if (view.snapshot.dataRef)
+              await authorizeResult(
+                view.snapshot.dataRef.resultId,
+                classifications,
+              );
+        },
+      );
+      const dependencies = context.dependencies.map((view) => {
+        authorizeView(view);
+        const canonical =
+          view.snapshot.dataRef &&
+          classifications.get(view.snapshot.dataRef.resultId);
+        return canonical?.startsWith("private_")
+          ? { ...view, dataClassification: "private_derived" as const }
+          : view;
+      });
+      return {
+        root: dependencies.find(
+          (view) => view.snapshot.id === context.root.snapshot.id,
+        )!,
+        dependencies,
+      };
+    };
     const executeQueryOperation = async (
       method: "query" | "explain",
       args: z.infer<typeof querySchema>,
@@ -2040,73 +2091,77 @@ export function createServer(
         throw new Error(
           "Anonymous mode only executes fixture profiles; use a configured protected endpoint for other profiles.",
         );
+      const effective = Object.values(args.inputs).some(
+        (pin) => pin.view === "effective",
+      );
+      const classifications = new Map<string, Snapshot["dataClassification"]>();
       const inputs: Record<string, unknown> = {};
+      const imports: Record<
+        string,
+        import("./engine.js").EffectiveMaterialization
+      > = {};
       for (const [alias, pin] of Object.entries(args.inputs)) {
-        const original = await engine.call<EngineResult>("read_result", {
-          result_id: pin.result_id,
-          offset: 0,
-          limit: 1,
-        });
-        authorizeSnapshot(resultSnapshotForAccess(original), options.access);
         if (pin.view !== "effective") {
+          await authorizeResult(pin.result_id, classifications);
           inputs[alias] = pin;
           continue;
         }
-        const views = await store.viewsForResult(pin.result_id);
-        if (views.length !== 1)
-          throw new Error(
-            "Effective input requires one canonical research snapshot for this result",
-          );
-        const view = views[0];
-        authorizeView(view);
-        if (view.revision !== pin.amendment_revision)
-          throw new Error(
-            "App amendment revision changed; reopen research and pin the current revision",
-          );
+        const context = await authorizedMaterialization(
+          {
+            resultId: pin.result_id,
+            expectedRevision: pin.amendment_revision!,
+          },
+          classifications,
+        );
+        imports[alias] = {
+          snapshot_id: context.root.snapshot.id,
+          amendment_revision: context.root.revision,
+          payload: buildMaterializationPayload(
+            context,
+            options.access?.mode === "fixture-anonymous"
+              ? "synthetic_fixture"
+              : "public_web",
+          ),
+        };
+      }
+      // Every retry crosses current app and canonical access checks before a
+      // saved hosted job can dispatch or return a completed handle.
+      if (effective && engine.lookupPreparedQuery) {
+        const prior = await engine.lookupPreparedQuery(method, args, imports);
+        if (prior) return jobResult(prior);
+      }
+      if (effective && engine.prepareQuery) {
+        const prepared = await engine.prepareQuery(method, args, imports);
+        return jobResult(
+          prepared,
+          prepared.operation === "import_table"
+            ? `After this dependency completes, repeat sourcesql_${method} with the original request_id ${args.request_id} and identical arguments. The ${method === "explain" ? "validation" : "research query"} has not been submitted.`
+            : undefined,
+        );
+      }
+      if (effective && method === "query") {
+        const prior = await engine.guardLegacyRequest?.(args, imports);
+        if (prior) {
+          if (typeof prior.result_id === "string") {
+            // Replayed rows have the same host disclosure boundary as fresh output.
+            await authorizeResult(prior.result_id, classifications);
+          }
+          return engineResult(prior);
+        }
+      }
+      for (const [alias, materialization] of Object.entries(imports)) {
         const imported = await engine.call<
           EngineResult & Record<string, unknown>
-        >("import_table", {
-          columns: view.snapshot.columns.map((c) => ({
-            key: c.key,
-            label: c.label,
-            logical_type: c.logicalType ?? "VARCHAR",
-            nullable: c.nullable ?? true,
-          })),
-          rows: view.snapshot.rows.map((r) =>
-            Object.fromEntries(
-              view.snapshot.columns.map((c) => [
-                c.key,
-                effectiveValue(view, r, c.key),
-              ]),
-            ),
-          ),
-          row_ids: view.snapshot.rows.map((r) => r.id),
-          data_classification: view.snapshot.dataClassification ?? "public_web",
-          parents: [
-            {
-              result_id: pin.result_id,
-              view: "effective",
-              amendment_revision: view.revision,
-            },
-          ],
-          provenance: {
-            engine_result_id: pin.result_id,
-            result_id: pin.result_id,
-            snapshot_id: view.snapshot.id,
-            view: "effective",
-            amendment_revision: view.revision,
-            dependencies: [pin.result_id],
-          },
-        });
+        >("import_table", materialization.payload);
         if (Object.hasOwn(imported, "job_id") || imported.pending === true)
           return jobResult(
             imported,
-            `When materialization completes, repeat the original sourcesql_${method} with the same ${method} request_id ${args.request_id ?? "and identical arguments"} to resume. The ${method === "explain" ? "validation" : "research query"} has not been submitted.`,
+            `When materialization completes, repeat the original sourcesql_${method} with the same request_id ${args.request_id ?? "and identical arguments"} and identical arguments. The ${method === "explain" ? "validation" : "research query"} has not been submitted.`,
           );
         inputs[alias] = {
           result_id: imported.result_id,
           view: "effective",
-          amendment_revision: view.revision,
+          amendment_revision: materialization.amendment_revision,
         };
       }
       const result = await engine.call(method, { ...args, inputs });
@@ -2142,70 +2197,21 @@ export function createServer(
       },
       (input) =>
         safe(async () => {
-          const views = await store.dependencyViews(input.snapshot_id);
-          for (const view of views) authorizeView(view);
-          const view = views.find(
-            (item) => item.snapshot.id === input.snapshot_id,
-          )!;
-          if (view.revision !== input.expected_revision)
-            throw new Error(
-              "App amendment revision changed; reopen before materialization",
-            );
-          const parents = [
-            ...new Set(
-              views.flatMap((item) =>
-                item.snapshot.dataRef ? [item.snapshot.dataRef.resultId] : [],
-              ),
-            ),
-          ].map((result_id) => ({
-            result_id,
-            view: "original",
-            amendment_revision: null,
-          }));
-          const inferredType = (field: string) => {
-            const values = view.snapshot.rows
-              .map((row) => effectiveValue(view, row, field))
-              .filter((value) => value !== null);
-            return values.every((value) => typeof value === "string")
-              ? "VARCHAR"
-              : values.every((value) => typeof value === "boolean")
-                ? "BOOLEAN"
-                : values.every((value) => typeof value === "number")
-                  ? "DOUBLE"
-                  : "JSON";
-          };
+          const context = await authorizedMaterialization({
+            snapshotId: input.snapshot_id,
+            expectedRevision: input.expected_revision,
+          });
           const result = await engine.call<
             EngineResult & Record<string, unknown>
-          >("import_table", {
-            columns: view.snapshot.columns.map((column) => ({
-              key: column.key,
-              label: column.label,
-              logical_type: column.logicalType ?? inferredType(column.key),
-              nullable: column.nullable ?? true,
-            })),
-            rows: view.snapshot.rows.map((row) =>
-              Object.fromEntries(
-                view.snapshot.columns.map((column) => [
-                  column.key,
-                  effectiveValue(view, row, column.key),
-                ]),
-              ),
-            ),
-            row_ids: view.snapshot.rows.map((row) => row.id),
-            data_classification:
-              view.dataClassification ??
-              view.snapshot.dataClassification ??
-              (options.access?.mode === "fixture-anonymous"
+          >(
+            "import_table",
+            buildMaterializationPayload(
+              context,
+              options.access?.mode === "fixture-anonymous"
                 ? "synthetic_fixture"
-                : "public_web"),
-            parents,
-            provenance: {
-              snapshot_id: view.snapshot.id,
-              view: "effective",
-              amendment_revision: view.revision,
-              dependencies: parents.map((parent) => parent.result_id),
-            },
-          });
+                : "public_web",
+            ),
+          );
           if (Object.hasOwn(result, "job_id") || result.pending === true)
             return jobResult(
               result,

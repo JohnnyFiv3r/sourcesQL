@@ -41,7 +41,26 @@ export type EngineResult = {
   receipt: Record<string, unknown>;
   next_offset: number | null;
 };
+export type EffectiveMaterialization = {
+  snapshot_id: string;
+  amendment_revision: number;
+  payload: Record<string, unknown>;
+};
 export interface ResearchEngine {
+  lookupPreparedQuery?(
+    operation: "query" | "explain",
+    args: Record<string, unknown>,
+    imports?: Record<string, EffectiveMaterialization>,
+  ): Promise<Record<string, unknown> | undefined>;
+  prepareQuery?(
+    operation: "query" | "explain",
+    args: Record<string, unknown>,
+    imports: Record<string, EffectiveMaterialization>,
+  ): Promise<Record<string, unknown>>;
+  guardLegacyRequest?(
+    args: Record<string, unknown>,
+    imports?: Record<string, EffectiveMaterialization>,
+  ): Promise<Record<string, unknown> | undefined>;
   readonly supportsExplain?: boolean;
   readonly supportsAsyncJobs?: boolean;
   readonly supportsUsageReporting?: boolean;
@@ -67,6 +86,44 @@ export class PythonEngine implements ResearchEngine {
         processOptions.timeoutMs < 1)
     )
       throw new Error("Invalid bridge deadline");
+  }
+  async guardLegacyRequest(
+    args: Record<string, unknown>,
+    imports?: Record<string, EffectiveMaterialization>,
+  ): Promise<Record<string, unknown> | undefined> {
+    if (!args.request_id) return;
+    const prior = await this.call<{
+      found: boolean;
+      current_recipe?: boolean;
+      compatible?: boolean;
+      run_id?: string;
+      result_id?: string;
+    }>("lookup_request", {
+      request_id: args.request_id,
+      ...(imports
+        ? {
+            expected_request: args,
+            materializations: Object.fromEntries(
+              Object.entries(imports).map(([alias, item]) => [
+                alias,
+                item.payload,
+              ]),
+            ),
+          }
+        : {}),
+    });
+    if (prior.found && !prior.current_recipe)
+      throw new Error(
+        "idempotency_conflict: Legacy request requires exact run inspection before reuse; no materialization was dispatched",
+      );
+    if (prior.compatible)
+      return prior.result_id
+        ? this.call("read_result", { result_id: prior.result_id })
+        : {
+            run_id: prior.run_id,
+            result_id: null,
+            receipt: await this.call("run_status", { run_id: prior.run_id }),
+          };
   }
   call<T = Record<string, unknown>>(
     method: string,

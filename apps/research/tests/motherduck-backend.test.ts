@@ -4015,3 +4015,428 @@ test("DeepSeek fetch-only admission rejects an unfundable job before queuing and
     await h.close();
   }
 });
+
+function preparationFixture(requestId = randomUUID()) {
+  const args = {
+    request_id: requestId,
+    query: "SELECT * FROM input.t",
+    profile: "fixture",
+    inputs: {
+      t: { result_id: "wq_input", view: "effective", amendment_revision: 1 },
+    },
+  };
+  const imports = {
+    t: {
+      snapshot_id: "saved-input",
+      amendment_revision: 1,
+      payload: {
+        columns: [
+          {
+            key: "value",
+            label: "Value",
+            logical_type: "BIGINT",
+            nullable: false,
+          },
+        ],
+        rows: [{ value: "9007199254740993" }],
+        row_ids: ["row_0"],
+        data_classification: "synthetic_fixture",
+        parents: [
+          { result_id: "wq_input", view: "original", amendment_revision: null },
+        ],
+        provenance: {
+          materialization_contract: "sourcesql.app-effective.v1",
+          snapshot_id: "saved-input",
+          view: "effective",
+          amendment_revision: 1,
+          dependencies: ["wq_input"],
+        },
+      },
+    },
+  };
+  return { args, imports };
+}
+async function preparationRows(engine: MotherDuckEngine) {
+  return engine.transaction(
+    false,
+    async (client) =>
+      (
+        await client.query(
+          `SELECT CAST(id AS VARCHAR) AS id,operation,status FROM ${engine.table("jobs")} ORDER BY created_at,id`,
+        )
+      ).rows,
+  );
+}
+test("input preparation reserves exact jobs before dispatch and protects the outer UUID", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture();
+    const first = await engine.prepareQuery("query", args, imports);
+    assert.equal(first.status, "queued");
+    assert.equal(first.operation, "import_table");
+    const again = await h.engine().prepareQuery("query", args, imports);
+    assert.equal(again.job_id, first.job_id);
+    assert.equal((await preparationRows(engine)).length, 1);
+    await assert.rejects(
+      engine.enqueue(args),
+      /preparation changed|compatible binding/,
+    );
+    await assert.rejects(
+      engine.prepareQuery("explain", args, imports),
+      /preparation changed|compatible binding/,
+    );
+    await assert.rejects(
+      engine.prepareQuery(
+        "query",
+        { ...args, query: "SELECT 2 AS value" },
+        imports,
+      ),
+      /preparation changed|compatible binding/,
+    );
+    assert.equal((await preparationRows(engine)).length, 1);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+test("changed pending context and legacy outer requests refuse before replacement imports", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture();
+    await engine.prepareQuery("query", args, imports);
+    const changed = structuredClone(imports);
+    changed.t.payload.rows[0].value = "123";
+    await assert.rejects(
+      engine.prepareQuery("query", args, changed),
+      /preparation changed|compatible binding/,
+    );
+    const legacy = preparationFixture();
+    await engine.enqueue(legacy.args);
+    const before = (await preparationRows(engine)).length;
+    await assert.rejects(
+      engine.lookupPreparedQuery("query", legacy.args),
+      /preparation changed|compatible binding/,
+    );
+    await assert.rejects(
+      engine.prepareQuery("query", legacy.args, legacy.imports),
+      /preparation changed|compatible binding/,
+    );
+    assert.equal((await preparationRows(engine)).length, before);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+test("prepared completion recovers the downstream job without rematerializing and reauthorizes inputs", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture(),
+      first = await engine.prepareQuery("query", args, imports);
+    await publish(engine, "wq_promoted", {
+      jobId: first.job_id,
+      parents: [{ result_id: "wq_input" }],
+    });
+    const final = await engine.prepareQuery("query", args, imports);
+    assert.equal(final.operation, "query");
+    assert.equal(final.request_id, args.request_id);
+    assert.equal((await preparationRows(engine)).length, 2);
+    const recovered = await h
+      .engine()
+      .lookupPreparedQuery("query", args, imports);
+    assert.equal(recovered!.job_id, final.job_id);
+    const changed = structuredClone(imports);
+    changed.t.payload.rows[0].value = "changed context";
+    await assert.rejects(
+      h
+        .engine("owner-a", { allowSubmission: true })
+        .lookupPreparedQuery("query", args, changed),
+      /preparation changed|compatible binding/,
+    );
+    assert.equal(h.submissions, 0);
+    assert.equal((await preparationRows(engine)).length, 2);
+    await engine.transaction(true, async (client) => {
+      await client.query(
+        `UPDATE ${engine.table("results")} SET revoked=1 WHERE id='wq_input'`,
+      );
+    });
+    await assert.rejects(
+      engine.prepareQuery("query", args, imports),
+      /unavailable/,
+    );
+    await assert.rejects(
+      h.engine("owner-a", { allowSubmission: true }).startJob(final.job_id),
+      /unavailable/,
+    );
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+test("multiple aliases reserve atomically and rollback the complete import set on binding failure", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture();
+    const manyArgs = {
+      ...args,
+      inputs: { ...args.inputs, second: args.inputs.t },
+    };
+    const second = structuredClone(imports.t);
+    second.payload.rows[0].value = "456";
+    const many = { ...imports, second };
+    const oldClient = h.client.bind(h);
+    let fail = true;
+    h.client = (namespace, schema) => {
+      const client = oldClient(namespace, schema),
+        query = client.query;
+      client.query = async (sql, values) => {
+        if (
+          fail &&
+          sql.startsWith("INSERT INTO") &&
+          sql.includes("input_preparations")
+        )
+          throw Error("Synthetic pre-commit failure");
+        return query(sql, values);
+      };
+      return client;
+    };
+    await assert.rejects(engine.prepareQuery("query", manyArgs, many));
+    assert.deepEqual(await preparationRows(engine), []);
+    fail = false;
+    const pending = await engine.prepareQuery("query", manyArgs, many);
+    assert.equal(pending.operation, "import_table");
+    assert.equal((await preparationRows(engine)).length, 2);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+test("lost preparation commit acknowledgement recovers the same bound jobs after restart", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture(),
+      oldClient = h.client.bind(h);
+    let inject = true;
+    h.client = (namespace, schema) => {
+      const client = oldClient(namespace, schema),
+        query = client.query;
+      client.query = async (sql, values) => {
+        const result = await query(sql, values);
+        if (
+          inject &&
+          sql.startsWith("INSERT INTO") &&
+          sql.includes("input_preparations")
+        ) {
+          inject = false;
+          h.loseCommitResponse = true;
+        }
+        return result;
+      };
+      return client;
+    };
+    await assert.rejects(engine.prepareQuery("query", args, imports));
+    const saved = await preparationRows(engine);
+    assert.equal(saved.length, 1);
+    const recovered = await h.engine().prepareQuery("query", args, imports);
+    assert.equal(recovered.job_id, saved[0].id);
+    assert.equal((await preparationRows(engine)).length, 1);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("concurrent prepared claims converge on one owner identity and uncertain imports are never replaced", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine("owner-a", { allowSubmission: true });
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture();
+    h.loseSubmissionResponse = true;
+    const attempts = await Promise.allSettled([
+      engine.prepareQuery("query", args, imports),
+      h
+        .engine("owner-a", { allowSubmission: true })
+        .prepareQuery("query", args, imports),
+    ]);
+    assert.ok(attempts.some((item) => item.status === "fulfilled"));
+    const saved = await preparationRows(engine);
+    assert.equal(saved.length, 1);
+    assert.equal(h.submissions, 1);
+    const replay = await h
+      .engine("owner-a", { allowSubmission: true })
+      .prepareQuery("query", args, imports);
+    assert.equal(replay.job_id, saved[0].id);
+    assert.equal(replay.status, "submission_unknown");
+    assert.equal(h.submissions, 1);
+    const other = h.engine("owner-b");
+    await other.initialize();
+    assert.equal(await other.lookupPreparedQuery("query", args), undefined);
+  } finally {
+    await h.close();
+  }
+});
+test("preparation queue exhaustion rolls back every newly reserved alias and binding", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    await engine.transaction(true, async (client) => {
+      await client.query(
+        `INSERT INTO ${engine.table("jobs")}(id,request_id,operation,request_hash,request_json,status,created_at,updated_at,flight_id,max_runtime_sec) SELECT uuid(),uuid(),'query','synthetic','{}','queued','t','t',$1::UUID,120 FROM range(99)`,
+        [flightId],
+      );
+    });
+    const { args, imports } = preparationFixture(),
+      second = structuredClone(imports.t);
+    second.payload.rows[0].value = "456";
+    await assert.rejects(
+      engine.prepareQuery(
+        "query",
+        { ...args, inputs: { ...args.inputs, second: args.inputs.t } },
+        { ...imports, second },
+      ),
+      /queue allowance/,
+    );
+    assert.equal((await preparationRows(engine)).length, 99);
+    const bound = await engine.transaction(
+      false,
+      async (client) =>
+        (
+          await client.query(
+            `SELECT count(*)::INTEGER AS count FROM ${engine.table("input_preparations")}`,
+          )
+        ).rows[0].count,
+    );
+    assert.equal(bound, 0);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("prepared imports advance every distinct pending dependency with one transaction allowance read", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture();
+    const manyArgs = {
+      ...args,
+      inputs: {
+        t: args.inputs.t,
+        second: args.inputs.t,
+        shared: args.inputs.t,
+      },
+    };
+    const second = structuredClone(imports.t);
+    second.payload.rows[0].value = "456";
+    const many = { ...imports, second, shared: imports.t };
+    let totals = 0;
+    const oldClient = h.client.bind(h);
+    h.client = (namespace, schema) => {
+      const client = oldClient(namespace, schema),
+        query = client.query;
+      client.query = async (sql, values) => {
+        if (sql.includes("sum(octet_length(encode(request_json)))")) totals++;
+        return query(sql, values);
+      };
+      return client;
+    };
+    const advanced: string[] = [];
+    // Control remote observation only; reservation and manifest SQL stay native.
+    const dispatch = engine as unknown as {
+      dispatchReserved(id: string, operation: string): Promise<Row>;
+    };
+    dispatch.dispatchReserved = async (job_id, operation) => {
+      advanced.push(job_id);
+      return { job_id, operation, pending: true, status: "queued" };
+    };
+    const pending = await engine.prepareQuery("query", manyArgs, many);
+    assert.equal(pending.operation, "import_table");
+    assert.equal(new Set(advanced).size, 2);
+    assert.equal(
+      advanced.length,
+      2,
+      "shared aliases must not advance a job twice",
+    );
+    assert.equal(
+      totals,
+      1,
+      "all aliases and the preparation share one retained-byte snapshot",
+    );
+    assert.equal((await preparationRows(engine)).length, 2);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("preparation byte refusal rolls back all import reservations and the binding", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture();
+    let inserts = 0;
+    const requestBytes = Buffer.byteLength(JSON.stringify(imports.t.payload));
+    const oldClient = h.client.bind(h);
+    h.client = (namespace, schema) => {
+      const client = oldClient(namespace, schema),
+        query = client.query;
+      client.query = async (sql, values) => {
+        if (sql.startsWith("INSERT INTO") && sql.includes('"jobs"')) inserts++;
+        if (
+          sql.startsWith("SELECT (SELECT count(*)") &&
+          sql.includes("AS bytes")
+        )
+          return {
+            rows: [{ queued: 0, bytes: 100 * 1024 * 1024 - requestBytes }],
+          };
+        return query(sql, values);
+      };
+      return client;
+    };
+    await assert.rejects(
+      engine.prepareQuery("query", args, imports),
+      /allowance exhausted/,
+    );
+    assert.equal(
+      inserts,
+      1,
+      "the payload fits; binding bytes must refuse the atomic batch",
+    );
+    assert.deepEqual(await preparationRows(engine), []);
+    const bindings = await engine.transaction(
+      false,
+      async (c) =>
+        (
+          await c.query(
+            `SELECT count(*) AS count FROM ${engine.table("input_preparations")}`,
+          )
+        ).rows[0].count,
+    );
+    assert.equal(Number(bindings), 0);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
