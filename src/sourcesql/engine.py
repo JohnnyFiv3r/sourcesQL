@@ -33,6 +33,25 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def profile_revision(profile: dict[str, Any]) -> str:
+    """Keep functional profile identity stable across runtime credential rotation.
+
+    This is the existing query fingerprint recipe, shared with read-only replay
+    comparison so changing one path cannot strand otherwise compatible requests.
+    Keep its historical exclusions unchanged when moving the implementation.
+    """
+    return digest(
+        {
+            key: value
+            for key, value in profile.items()
+            if not any(
+                excluded in key.lower()
+                for excluded in ("key", "token", "client", "model_adapter", "embedding_adapter")
+            )
+        }
+    )
+
+
 def strict_json(value: str | bytes) -> Any:
     def pairs(items):
         result = {}
@@ -662,16 +681,7 @@ class Engine:
                     "Existing request has different captured inputs; inspect its exact run",
                 )
             profile = self.profiles.get(expected.get("profile", "fixture"), {})
-            revision = digest(
-                {
-                    k: v
-                    for k, v in profile.items()
-                    if not any(
-                        x in k.lower()
-                        for x in ["key", "token", "client", "model_adapter", "embedding_adapter"]
-                    )
-                }
-            )
+            revision = profile_revision(profile)
             if receipt.get("profile_revision") != revision:
                 raise SourcesQLError(
                     "idempotency_conflict",
@@ -749,16 +759,7 @@ class Engine:
         pinned = {
             **request,
             "request_id": request_id,
-            "profile_revision": digest(
-                {
-                    k: v
-                    for k, v in profile.items()
-                    if not any(
-                        x in k.lower()
-                        for x in ["key", "token", "client", "model_adapter", "embedding_adapter"]
-                    )
-                }
-            ),
+            "profile_revision": profile_revision(profile),
             "input_pins": parents,
         }
         if continuation and continuation.get("profile_revision") != pinned["profile_revision"]:

@@ -332,10 +332,12 @@ export class MotherDuckEngine implements ResearchEngine {
       }
       for (const migration of tableMigrations)
         await client.query(
-          migration.replace(
-            /^ALTER TABLE jobs /,
-            `ALTER TABLE ${this.table("jobs")} `,
-          ),
+          migration
+            .replace(/^ALTER TABLE jobs /, `ALTER TABLE ${this.table("jobs")} `)
+            .replace(
+              /^(CREATE INDEX IF NOT EXISTS runs_request_uuid ON )runs\(/,
+              `$1${this.table("runs")}(`,
+            ),
         );
       await client.query(
         `INSERT OR IGNORE INTO ${this.table("control")} VALUES(1,$1,0)`,
@@ -1028,9 +1030,27 @@ export class MotherDuckEngine implements ResearchEngine {
       "Input preparation changed or has no compatible binding; inspect the saved exact handles before creating new work",
     );
   }
+  private materializationManifest(
+    selected: {
+      alias: string;
+      snapshot_id: string;
+      amendment_revision: number;
+      input: { hash: string };
+    }[],
+  ) {
+    return selected.map(
+      ({ alias, snapshot_id, amendment_revision, input }) => ({
+        alias,
+        snapshot_id,
+        amendment_revision,
+        request_hash: input.hash,
+      }),
+    );
+  }
   async lookupPreparedQuery(
     operation: "query" | "explain",
     args: Row,
+    imports?: Record<string, EffectiveMaterialization>,
   ): Promise<Row | undefined> {
     const original = this.request(args, operation);
     const prior = await this.transaction(false, async (client) => {
@@ -1051,6 +1071,23 @@ export class MotherDuckEngine implements ResearchEngine {
         preparation.recipe !== MATERIALIZATION_CONTRACT
       )
         this.preparationConflict();
+      if (job && imports) {
+        const captured = this.materializationManifest(
+          Object.keys(imports)
+            .sort()
+            .map((alias) => ({
+              alias,
+              snapshot_id: imports[alias].snapshot_id,
+              amendment_revision: imports[alias].amendment_revision,
+              input: this.request(imports[alias].payload, "import_table"),
+            })),
+        );
+        const saved = JSON.parse(preparation.manifest_json) as Row[];
+        if (
+          stable(saved.map(({ job_id, ...item }) => item)) !== stable(captured)
+        )
+          this.preparationConflict();
+      }
       return job?.id as string | undefined;
     });
     return prior ? this.dispatchReserved(prior, operation) : undefined;
@@ -1113,14 +1150,7 @@ export class MotherDuckEngine implements ResearchEngine {
         )
       ).rows[0];
       if (!prior && outer) this.preparationConflict();
-      const captured = selected.map(
-        ({ alias, snapshot_id, amendment_revision, input }) => ({
-          alias,
-          snapshot_id,
-          amendment_revision,
-          request_hash: input.hash,
-        }),
-      );
+      const captured = this.materializationManifest(selected);
       if (prior) {
         if (
           prior.operation !== operation ||
@@ -1149,36 +1179,19 @@ export class MotherDuckEngine implements ResearchEngine {
         return saved;
       }
       const saved: Row[] = [];
+      const allowance = await this.reservationAllowance(client);
       for (let index = 0; index < selected.length; index++) {
         const job_id = await this.reserveJob(
           client,
           selected[index].input,
           "import_table",
+          undefined,
+          allowance,
         );
         saved.push({ ...captured[index], job_id });
       }
       const json = stable(saved);
-      const bytes = (
-        await client.query(
-          `SELECT coalesce(sum(octet_length(encode(request_json))),0)::DOUBLE AS bytes FROM ${this.table("jobs")}`,
-        )
-      ).rows[0].bytes;
-      const preparationBytes = (
-        await client.query(
-          `SELECT coalesce(sum(octet_length(encode(manifest_json))+256),0)::DOUBLE AS bytes FROM ${this.table("input_preparations")}`,
-        )
-      ).rows[0].bytes;
-      if (
-        Number(bytes) +
-          Number(preparationBytes) +
-          Buffer.byteLength(json) +
-          256 >
-        100 * 1024 * 1024
-      )
-        throw new BackendError(
-          "budget_exhausted",
-          "Retained preparation allowance exhausted",
-        );
+      this.checkRetainedAllowance(allowance, Buffer.byteLength(json) + 256);
       await client.query(
         `INSERT INTO ${this.table("input_preparations")}(request_id,operation,original_hash,recipe,manifest_json,created_at) VALUES($1::UUID,$2,$3,$4,$5,$6)`,
         [
@@ -1193,15 +1206,26 @@ export class MotherDuckEngine implements ResearchEngine {
       return saved;
     });
     const inputs = { ...original.request.inputs };
+    const advanced = new Map<string, Row>();
+    let pending: Row | undefined;
     for (const item of manifest) {
-      const imported = await this.dispatchReserved(item.job_id, "import_table");
-      if (imported.job_id || imported.pending) return imported;
+      let imported = advanced.get(item.job_id);
+      if (!imported) {
+        imported = await this.dispatchReserved(item.job_id, "import_table");
+        advanced.set(item.job_id, imported);
+      }
+      if (imported.job_id || imported.pending) {
+        pending ??= imported;
+        continue;
+      }
       inputs[item.alias] = {
         result_id: imported.result_id,
         view: "effective",
         amendment_revision: item.amendment_revision,
       };
     }
+    // Advance every independent dependency without widening Flight capacity.
+    if (pending) return pending;
     const final = this.request({ ...original.request, inputs }, operation);
     const jobId = await this.transaction(true, async (client) => {
       // Recheck exact completed mappings inside the same owner-serialized commit.
@@ -1236,11 +1260,32 @@ export class MotherDuckEngine implements ResearchEngine {
     for (const result_id of new Set(ids))
       await this.readResult({ result_id, limit: 0 });
   }
+  private async reservationAllowance(client: SqlConnection) {
+    const row = (
+      await client.query(
+        `SELECT (SELECT count(*) FROM ${this.table("jobs")} WHERE status='queued') AS queued,
+        (SELECT coalesce(sum(octet_length(encode(request_json))),0) FROM ${this.table("jobs")}) +
+        (SELECT coalesce(sum(octet_length(encode(manifest_json))+256),0) FROM ${this.table("input_preparations")}) AS bytes`,
+      )
+    ).rows[0];
+    return { queued: Number(row.queued), bytes: Number(row.bytes) };
+  }
+  private checkRetainedAllowance(
+    allowance: { bytes: number },
+    additionalBytes: number,
+  ) {
+    if (allowance.bytes + additionalBytes > 100 * 1024 * 1024)
+      throw new BackendError(
+        "budget_exhausted",
+        "Retained job payload allowance exhausted",
+      );
+  }
   private async reserveJob(
     client: SqlConnection,
     input: ReturnType<MotherDuckEngine["request"]>,
     operation: string,
     proof?: { originalHash: string; manifestJson: string },
+    allowance?: { queued: number; bytes: number },
   ): Promise<string> {
     const prepared = await this.preparation(client, input.requestId);
     if (
@@ -1266,36 +1311,15 @@ export class MotherDuckEngine implements ResearchEngine {
         );
       return prior.id;
     }
-    const queued = (
-      await client.query(
-        `SELECT count(*)::INTEGER AS count FROM ${this.table("jobs")} WHERE status='queued'`,
-      )
-    ).rows[0];
-    if (queued.count >= 100)
+    allowance ??= await this.reservationAllowance(client);
+    if (allowance.queued >= 100)
       throw new BackendError(
         "budget_exhausted",
         "Job queue allowance exhausted",
       );
-    const preparationBytes = (
-      await client.query(
-        `SELECT coalesce(sum(octet_length(encode(manifest_json))+256),0)::DOUBLE AS bytes FROM ${this.table("input_preparations")}`,
-      )
-    ).rows[0].bytes;
-    const retained = (
-      await client.query(
-        `SELECT coalesce(sum(octet_length(encode(request_json))),0)::DOUBLE AS bytes FROM ${this.table("jobs")}`,
-      )
-    ).rows[0];
-    if (
-      Number(retained.bytes) +
-        Number(preparationBytes) +
-        Buffer.byteLength(stable(input.request)) >
-      100 * 1024 * 1024
-    )
-      throw new BackendError(
-        "budget_exhausted",
-        "Retained job payload allowance exhausted",
-      );
+    const requestJson = stable(input.request);
+    const requestBytes = Buffer.byteLength(requestJson);
+    this.checkRetainedAllowance(allowance, requestBytes);
     const id = randomUUID(),
       time = stamp();
     await client.query(
@@ -1306,7 +1330,7 @@ export class MotherDuckEngine implements ResearchEngine {
         input.requestId,
         operation,
         input.hash,
-        stable(input.request),
+        requestJson,
         time,
         this.options.flightId,
         this.maxRuntime,
@@ -1317,6 +1341,8 @@ export class MotherDuckEngine implements ResearchEngine {
           : null,
       ],
     );
+    allowance.queued++;
+    allowance.bytes += requestBytes;
     return id;
   }
   async enqueue(params: Row, operation = "query"): Promise<Row> {

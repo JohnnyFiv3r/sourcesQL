@@ -1385,12 +1385,15 @@ export class ResearchStore {
     }
     return this.serial(async () => {
       const state = await this.read();
-      const previousState = canonicalJson(state);
+      let changed = false;
       for (const snapshot of bundle.state.snapshots) {
         const existing = state.snapshots.find((s) => s.id === snapshot.id);
         if (existing && canonicalJson(existing) !== canonicalJson(snapshot))
           throw new Error("Bundle snapshot collision");
-        if (!existing) state.snapshots.push(snapshot);
+        if (!existing) {
+          state.snapshots.push(snapshot);
+          changed = true;
+        }
       }
       for (const amendment of bundle.state.amendments) {
         const existing = state.amendments.find(
@@ -1398,13 +1401,19 @@ export class ResearchStore {
         );
         if (existing && canonicalJson(existing) !== canonicalJson(amendment))
           throw new Error("Bundle amendment collision");
-        if (!existing) state.amendments.push(amendment);
+        if (!existing) {
+          state.amendments.push(amendment);
+          changed = true;
+        }
       }
       for (const update of bundle.state.updates ?? []) {
         const existing = state.updates?.find((entry) => entry.id === update.id);
         if (existing && canonicalJson(existing) !== canonicalJson(update))
           throw new Error("Bundle update identity collision");
-        if (!existing) (state.updates ??= []).push(update);
+        if (!existing) {
+          (state.updates ??= []).push(update);
+          changed = true;
+        }
       }
       for (const saved of bundle.state.checkpoints ?? []) {
         const existing = state.checkpoints?.find(
@@ -1415,17 +1424,22 @@ export class ResearchStore {
           canonicalJson(existing.checkpoint) !== canonicalJson(saved.checkpoint)
         )
           throw new Error("Bundle checkpoint collision");
-        if (!existing)
+        if (!existing) {
           (state.checkpoints ??= []).push({
             checkpoint: validateCheckpoint(saved.checkpoint),
             imported: true,
           });
+          changed = true;
+        }
       }
       for (const request of bundle.state.requests ?? []) {
         const existing = state.requests?.find((r) => r.id === request.id);
         if (existing && canonicalJson(existing) !== canonicalJson(request))
           throw new Error("Bundle request collision");
-        if (!existing) (state.requests ??= []).push(request);
+        if (!existing) {
+          (state.requests ??= []).push(request);
+          changed = true;
+        }
       }
       for (const [key, value] of Object.entries(bundle.state.titles ?? {})) {
         if (state.titles?.[key] && state.titles[key] !== value)
@@ -1433,14 +1447,19 @@ export class ResearchStore {
         if (!state.snapshots.some((s) => s.id === key))
           throw new Error("Bundle title missing snapshot");
       }
-      state.titles = { ...state.titles, ...bundle.state.titles };
-      state.archivedSnapshots = [
-        ...(state.archivedSnapshots ?? []),
-        ...(bundle.state.archivedSnapshots ?? []).filter(
-          (a) => !archiveRecord(state, a.snapshotId),
-        ),
-      ];
-      if (canonicalJson(state) !== previousState) await this.write(state);
+      for (const [key, value] of Object.entries(bundle.state.titles ?? {})) {
+        if (state.titles?.[key] !== value) {
+          (state.titles ??= {})[key] = value;
+          changed = true;
+        }
+      }
+      for (const archived of bundle.state.archivedSnapshots ?? []) {
+        if (!archiveRecord(state, archived.snapshotId)) {
+          (state.archivedSnapshots ??= []).push(archived);
+          changed = true;
+        }
+      }
+      if (changed) await this.write(state);
       return this.view(state, bundle.snapshotId);
     });
   }
@@ -1634,6 +1653,7 @@ export class ResearchStore {
     selection:
       | { snapshotId: string; expectedRevision: number }
       | { resultId: string; expectedRevision: number },
+    beforeResolve?: (dependencies: ResearchView[]) => Promise<void>,
   ): Promise<MaterializationContext> {
     await this.queue;
     const state = await this.read(false);
@@ -1661,6 +1681,12 @@ export class ResearchStore {
         "App amendment revision changed; reopen research and pin the current revision",
       );
     const selected = this.relatedSnapshots(state, snapshotId);
+    // Check the whole captured closure before loading canonical table rows.
+    // This callback runs outside a writer lock and never rereads app state.
+    const selectedViews = [...selected].map((id) =>
+      id === snapshotId ? captured : this.view(state, id),
+    );
+    await beforeResolve?.(selectedViews);
     await this.resolveSnapshots(state, selected);
     const dependencies = [...selected].map((id) => this.view(state, id));
     return {

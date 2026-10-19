@@ -50,6 +50,7 @@ export interface ResearchEngine {
   lookupPreparedQuery?(
     operation: "query" | "explain",
     args: Record<string, unknown>,
+    imports?: Record<string, EffectiveMaterialization>,
   ): Promise<Record<string, unknown> | undefined>;
   prepareQuery?(
     operation: "query" | "explain",

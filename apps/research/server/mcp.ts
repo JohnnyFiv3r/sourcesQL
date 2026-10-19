@@ -2020,6 +2020,56 @@ export function createServer(
           .describe(SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS.budgets),
       })
       .strict();
+    // App labels do not replace canonical engine authorization/classification.
+    const authorizeResult = async (
+      resultId: string,
+      classifications: Map<string, Snapshot["dataClassification"]>,
+    ) => {
+      if (!classifications.has(resultId)) {
+        const page = await engine.call<EngineResult>("read_result", {
+          result_id: resultId,
+          offset: 0,
+          limit: 1,
+        });
+        if (page.result_id !== resultId)
+          throw new Error("Engine returned a different result identity");
+        const snapshot = resultSnapshotForAccess(page);
+        authorizeSnapshot(snapshot, options.access);
+        classifications.set(resultId, snapshot.dataClassification);
+      }
+    };
+    const authorizedMaterialization = async (
+      selection: Parameters<ResearchStore["materializationContext"]>[0],
+      classifications = new Map<string, Snapshot["dataClassification"]>(),
+    ) => {
+      const context = await store.materializationContext(
+        selection,
+        async (views) => {
+          for (const view of views) authorizeView(view);
+          for (const view of views)
+            if (view.snapshot.dataRef)
+              await authorizeResult(
+                view.snapshot.dataRef.resultId,
+                classifications,
+              );
+        },
+      );
+      const dependencies = context.dependencies.map((view) => {
+        authorizeView(view);
+        const canonical =
+          view.snapshot.dataRef &&
+          classifications.get(view.snapshot.dataRef.resultId);
+        return canonical?.startsWith("private_")
+          ? { ...view, dataClassification: "private_derived" as const }
+          : view;
+      });
+      return {
+        root: dependencies.find(
+          (view) => view.snapshot.id === context.root.snapshot.id,
+        )!,
+        dependencies,
+      };
+    };
     const executeQueryOperation = async (
       method: "query" | "explain",
       args: z.infer<typeof querySchema>,
@@ -2044,12 +2094,7 @@ export function createServer(
       const effective = Object.values(args.inputs).some(
         (pin) => pin.view === "effective",
       );
-      if (effective && engine.lookupPreparedQuery) {
-        const prior = await engine.lookupPreparedQuery(method, args);
-        if (prior) return jobResult(prior);
-      }
-      if (effective && method === "query")
-        await engine.guardLegacyRequest?.(args);
+      const classifications = new Map<string, Snapshot["dataClassification"]>();
       const inputs: Record<string, unknown> = {};
       const imports: Record<
         string,
@@ -2057,20 +2102,17 @@ export function createServer(
       > = {};
       for (const [alias, pin] of Object.entries(args.inputs)) {
         if (pin.view !== "effective") {
-          const original = await engine.call<EngineResult>("read_result", {
-            result_id: pin.result_id,
-            offset: 0,
-            limit: 1,
-          });
-          authorizeSnapshot(resultSnapshotForAccess(original), options.access);
+          await authorizeResult(pin.result_id, classifications);
           inputs[alias] = pin;
           continue;
         }
-        const context = await store.materializationContext({
-          resultId: pin.result_id,
-          expectedRevision: pin.amendment_revision!,
-        });
-        for (const view of context.dependencies) authorizeView(view);
+        const context = await authorizedMaterialization(
+          {
+            resultId: pin.result_id,
+            expectedRevision: pin.amendment_revision!,
+          },
+          classifications,
+        );
         imports[alias] = {
           snapshot_id: context.root.snapshot.id,
           amendment_revision: context.root.revision,
@@ -2081,6 +2123,12 @@ export function createServer(
               : "public_web",
           ),
         };
+      }
+      // Every retry crosses current app and canonical access checks before a
+      // saved hosted job can dispatch or return a completed handle.
+      if (effective && engine.lookupPreparedQuery) {
+        const prior = await engine.lookupPreparedQuery(method, args, imports);
+        if (prior) return jobResult(prior);
       }
       if (effective && engine.prepareQuery) {
         const prepared = await engine.prepareQuery(method, args, imports);
@@ -2093,7 +2141,13 @@ export function createServer(
       }
       if (effective && method === "query") {
         const prior = await engine.guardLegacyRequest?.(args, imports);
-        if (prior) return engineResult(prior);
+        if (prior) {
+          if (typeof prior.result_id === "string") {
+            // Replayed rows have the same host disclosure boundary as fresh output.
+            await authorizeResult(prior.result_id, classifications);
+          }
+          return engineResult(prior);
+        }
       }
       for (const [alias, materialization] of Object.entries(imports)) {
         const imported = await engine.call<
@@ -2143,11 +2197,10 @@ export function createServer(
       },
       (input) =>
         safe(async () => {
-          const context = await store.materializationContext({
+          const context = await authorizedMaterialization({
             snapshotId: input.snapshot_id,
             expectedRevision: input.expected_revision,
           });
-          for (const view of context.dependencies) authorizeView(view);
           const result = await engine.call<
             EngineResult & Record<string, unknown>
           >(

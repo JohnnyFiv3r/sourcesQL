@@ -12,6 +12,7 @@ import {
   measureWorkspaceBoundaries,
   workspaceLimits,
 } from "./workspace-measurement.js";
+import { workspaceStorageDecision } from "./workspace-report.js";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const output = resolve(
@@ -29,6 +30,7 @@ const measuredSourcePaths = [
   "apps/research/src/typed-values.ts",
   "apps/research/scripts/workspace-measurement.ts",
   "apps/research/scripts/measure-workspace.mts",
+  "apps/research/scripts/workspace-report.ts",
   "apps/research/tests/helpers/motherduck-sql-server.py",
 ];
 const sourceFiles = async () =>
@@ -67,7 +69,6 @@ for (const snapshots of [1, 8, 32])
     );
   }
 const boundaries = await measureWorkspaceBoundaries();
-const largest = cases.at(-1)!;
 const report = {
   schemaVersion: 1,
   sourceFilesAtStart,
@@ -116,13 +117,7 @@ const report = {
     "Operation samples start at the supported mutation API. Caller input preparation, separate measurement queries and setup are not included in their wall time.",
     "Source digests are recorded before and after the matrix. Differing digests indicate concurrent checkout edits; this is source-fixture evidence, not a frozen artifact or deployed composition.",
   ],
-  decision: {
-    retainProductionLimits: true,
-    cause: largest.firstRefusal
-      ? "Full-state retained history reaches its published application allowance before this synthetic mutation target."
-      : "Full-state historical bytes grow by approximately one complete state per genuine mutation; the tested matrix remains within its fixed allowance.",
-    next: "Retain current storage for the correction PR. A separately reviewed change should evaluate lossless sharing of immutable canonical payloads: the 32 snapshot retained history is approximately 49 complete current states while amendments add only a small fraction to current-state size. Also evaluate selected-closure mutation resolution (observed resolver calls grow 1/6/30) while preserving contributor authorization. Do not prune history or increase allowances as a substitute. Preserve exact reconstruction, CAS and acknowledgement recovery. Add remote measurements before drawing latency conclusions.",
-  },
+  decision: workspaceStorageDecision(cases),
 };
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, JSON.stringify(report, null, 2) + "\n", {

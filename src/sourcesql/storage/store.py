@@ -20,7 +20,7 @@ class Store(StageJournalMixin):
         self.quota = quota
         with self.db() as db:
             db.executescript(
-                """CREATE TABLE IF NOT EXISTS results(id TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, receipt TEXT NOT NULL);"""
+                """CREATE TABLE IF NOT EXISTS results(id TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, receipt TEXT NOT NULL);CREATE INDEX IF NOT EXISTS runs_request_uuid ON runs(lower(request_id));"""
             )
         self.initialize_stage_journal()
 
@@ -37,7 +37,7 @@ class Store(StageJournalMixin):
             db.close()
 
     def lookup_request(self, request_id: str) -> dict | None:
-        """Read an owner-local request identity without admitting or dispatching work."""
+        """Read through the case-folded index, retaining ambiguous legacy UUID refusal."""
         with self.db() as db:
             rows = db.execute(
                 "SELECT receipt FROM runs WHERE lower(request_id)=? LIMIT 2", (request_id.lower(),)

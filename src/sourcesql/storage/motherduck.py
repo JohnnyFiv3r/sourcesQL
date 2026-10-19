@@ -40,6 +40,7 @@ TABLES = (
 
 
 MIGRATIONS = (
+    "CREATE INDEX IF NOT EXISTS runs_request_uuid ON runs(lower(request_id))",
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS provider_policy_sha256 VARCHAR",
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS provider_cost_reserved_microusd BIGINT DEFAULT 0",
 )

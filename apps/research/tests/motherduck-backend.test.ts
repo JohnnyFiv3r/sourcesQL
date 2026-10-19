@@ -4149,8 +4149,19 @@ test("prepared completion recovers the downstream job without rematerializing an
     assert.equal(final.operation, "query");
     assert.equal(final.request_id, args.request_id);
     assert.equal((await preparationRows(engine)).length, 2);
-    const recovered = await h.engine().lookupPreparedQuery("query", args);
+    const recovered = await h
+      .engine()
+      .lookupPreparedQuery("query", args, imports);
     assert.equal(recovered!.job_id, final.job_id);
+    const changed = structuredClone(imports);
+    changed.t.payload.rows[0].value = "changed context";
+    await assert.rejects(
+      h
+        .engine("owner-a", { allowSubmission: true })
+        .lookupPreparedQuery("query", args, changed),
+      /preparation changed|compatible binding/,
+    );
+    assert.equal(h.submissions, 0);
     assert.equal((await preparationRows(engine)).length, 2);
     await engine.transaction(true, async (client) => {
       await client.query(
@@ -4314,6 +4325,116 @@ test("preparation queue exhaustion rolls back every newly reserved alias and bin
         ).rows[0].count,
     );
     assert.equal(bound, 0);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("prepared imports advance every distinct pending dependency with one transaction allowance read", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture();
+    const manyArgs = {
+      ...args,
+      inputs: {
+        t: args.inputs.t,
+        second: args.inputs.t,
+        shared: args.inputs.t,
+      },
+    };
+    const second = structuredClone(imports.t);
+    second.payload.rows[0].value = "456";
+    const many = { ...imports, second, shared: imports.t };
+    let totals = 0;
+    const oldClient = h.client.bind(h);
+    h.client = (namespace, schema) => {
+      const client = oldClient(namespace, schema),
+        query = client.query;
+      client.query = async (sql, values) => {
+        if (sql.includes("sum(octet_length(encode(request_json)))")) totals++;
+        return query(sql, values);
+      };
+      return client;
+    };
+    const advanced: string[] = [];
+    // Control remote observation only; reservation and manifest SQL stay native.
+    const dispatch = engine as unknown as {
+      dispatchReserved(id: string, operation: string): Promise<Row>;
+    };
+    dispatch.dispatchReserved = async (job_id, operation) => {
+      advanced.push(job_id);
+      return { job_id, operation, pending: true, status: "queued" };
+    };
+    const pending = await engine.prepareQuery("query", manyArgs, many);
+    assert.equal(pending.operation, "import_table");
+    assert.equal(new Set(advanced).size, 2);
+    assert.equal(
+      advanced.length,
+      2,
+      "shared aliases must not advance a job twice",
+    );
+    assert.equal(
+      totals,
+      1,
+      "all aliases and the preparation share one retained-byte snapshot",
+    );
+    assert.equal((await preparationRows(engine)).length, 2);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("preparation byte refusal rolls back all import reservations and the binding", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    await publish(engine, "wq_input");
+    const { args, imports } = preparationFixture();
+    let inserts = 0;
+    const requestBytes = Buffer.byteLength(JSON.stringify(imports.t.payload));
+    const oldClient = h.client.bind(h);
+    h.client = (namespace, schema) => {
+      const client = oldClient(namespace, schema),
+        query = client.query;
+      client.query = async (sql, values) => {
+        if (sql.startsWith("INSERT INTO") && sql.includes('"jobs"')) inserts++;
+        if (
+          sql.startsWith("SELECT (SELECT count(*)") &&
+          sql.includes("AS bytes")
+        )
+          return {
+            rows: [{ queued: 0, bytes: 100 * 1024 * 1024 - requestBytes }],
+          };
+        return query(sql, values);
+      };
+      return client;
+    };
+    await assert.rejects(
+      engine.prepareQuery("query", args, imports),
+      /allowance exhausted/,
+    );
+    assert.equal(
+      inserts,
+      1,
+      "the payload fits; binding bytes must refuse the atomic batch",
+    );
+    assert.deepEqual(await preparationRows(engine), []);
+    const bindings = await engine.transaction(
+      false,
+      async (c) =>
+        (
+          await c.query(
+            `SELECT count(*) AS count FROM ${engine.table("input_preparations")}`,
+          )
+        ).rows[0].count,
+    );
+    assert.equal(Number(bindings), 0);
     assert.equal(h.submissions, 0);
   } finally {
     await h.close();
