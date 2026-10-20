@@ -4045,7 +4045,7 @@ function preparationFixture(requestId = randomUUID()) {
           { result_id: "wq_input", view: "original", amendment_revision: null },
         ],
         provenance: {
-          materialization_contract: "sourcesql.app-effective.v1",
+          materialization_contract: "sourcesql.app-effective.v2",
           snapshot_id: "saved-input",
           view: "effective",
           amendment_revision: 1,

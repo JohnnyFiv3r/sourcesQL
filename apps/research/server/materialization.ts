@@ -5,7 +5,7 @@ import {
   type Snapshot,
 } from "../src/schema.js";
 
-export const MATERIALIZATION_CONTRACT = "sourcesql.app-effective.v1";
+export const MATERIALIZATION_CONTRACT = "sourcesql.app-effective.v2";
 
 /** A selected full table and its authorized closure, captured from one app state. */
 export type MaterializationContext = {
@@ -23,6 +23,13 @@ export type MaterializationPayload = {
   rows: Record<string, CellValue>[];
   row_ids: string[];
   data_classification: NonNullable<Snapshot["dataClassification"]>;
+  cell_origins?: {
+    row_id: string;
+    column_key: string;
+    result_id: string;
+    source_row_id: string;
+    source_column_key: string;
+  }[];
   parents: { result_id: string; view: "original"; amendment_revision: null }[];
   provenance: {
     materialization_contract: typeof MATERIALIZATION_CONTRACT;
@@ -105,7 +112,39 @@ export function buildMaterializationPayload(
       ]),
     ),
   );
+  const origins: NonNullable<MaterializationPayload["cell_origins"]> = [];
+  const bySnapshot = new Map(views.map((view) => [view.snapshot.id, view]));
+  for (const row of root.snapshot.rows) {
+    for (const column of root.snapshot.columns) {
+      const amendment = root.amendments.findLast(
+        (entry) => entry.row_id === row.id && entry.field === column.key,
+      );
+      // A manual edit is a user decision, never a source quotation. Accepted
+      // refresh values can use the exact recorded source snapshot instead.
+      if (amendment && !amendment.sourceSnapshotId) continue;
+      const contributor = amendment?.sourceSnapshotId
+        ? bySnapshot.get(amendment.sourceSnapshotId)
+        : root;
+      const original = contributor?.snapshot.rows.find(
+        (item) => item.id === row.id,
+      );
+      if (
+        !contributor?.snapshot.dataRef ||
+        !original?.evidence[column.key]?.length ||
+        !original.cellSources?.[column.key]?.length
+      )
+        continue;
+      origins.push({
+        row_id: row.id,
+        column_key: column.key,
+        result_id: contributor.snapshot.dataRef.resultId,
+        source_row_id: row.id,
+        source_column_key: column.key,
+      });
+    }
+  }
   return {
+    ...(origins.length ? { cell_origins: origins } : {}),
     columns: root.snapshot.columns.map((column) => ({
       key: column.key,
       label: column.label,

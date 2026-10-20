@@ -17,7 +17,7 @@ from sourcesql.engine import Engine
 from sourcesql.storage.motherduck import MotherDuckStore
 from test_engine_boundaries import reference_worker
 
-CONTRACT = "sourcesql.app-effective.v1"
+CONTRACT = "sourcesql.app-effective.v2"
 COLUMNS = [
     {"key": "entity", "logical_type": "VARCHAR", "nullable": False},
     {"key": "count", "logical_type": "BIGINT", "nullable": False},
@@ -76,7 +76,7 @@ def pin(result, *, effective=False):
     }
 
 
-def graph(engine, *, private_refresh=False, current_recipe=True, request_id=None):
+def graph(engine, *, private_refresh=False, current_recipe=True, request_id=None, recipe=CONTRACT):
     baseline = engine.import_table(
         columns=deepcopy(COLUMNS),
         rows=[deepcopy(ORIGINAL_ROW)],
@@ -97,7 +97,7 @@ def graph(engine, *, private_refresh=False, current_recipe=True, request_id=None
         "dependencies": parents,
     }
     if current_recipe:
-        provenance["materialization_contract"] = CONTRACT
+        provenance["materialization_contract"] = recipe
     promoted = engine.import_table(
         columns=deepcopy(COLUMNS),
         rows=[deepcopy(CORRECTED_ROW)],
@@ -454,5 +454,25 @@ def test_request_lookup_refuses_ambiguous_legacy_uuid_case_rows_instead_of_picki
         with pytest.raises(SourcesQLError) as error:
             engine.lookup_request(supplied)
         assert error.value.code == "idempotency_conflict"
+    assert durable_state(engine) == before
+    assert len(calls) == dispatched
+
+
+def test_v1_effective_recipe_remains_inspectable_but_cannot_reprepare_after_upgrade(make_engine):
+    engine, calls = make_engine()
+    baseline, _, promoted, completed, request = graph(engine, recipe="sourcesql.app-effective.v1")
+    before = durable_state(engine)
+    dispatched = len(calls)
+    saved = engine.lookup_request(request["request_id"])
+    assert saved["found"] and not saved["current_recipe"]
+    assert saved["run_id"] == completed["run_id"]
+    materializations, original_inputs = captured_materialization(baseline, promoted)
+    with pytest.raises(SourcesQLError) as error:
+        engine.lookup_request(
+            request["request_id"],
+            expected_request={**request, "inputs": original_inputs},
+            materializations=materializations,
+        )
+    assert error.value.code == "idempotency_conflict"
     assert durable_state(engine) == before
     assert len(calls) == dispatched

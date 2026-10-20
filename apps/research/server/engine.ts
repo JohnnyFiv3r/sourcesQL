@@ -395,14 +395,21 @@ export function resultSnapshot(
         ]);
         if (seenSupport.has(supportIdentity)) continue;
         seenSupport.add(supportIdentity);
-        (evidence[field] ??= []).push(span.quote);
+        // Display a bounded preview; complete canonical evidence remains in
+        // sourcesql_inspect_evidence and exports.
+        const quotes = (evidence[field] ??= []);
+        if (quotes.length < 12) quotes.push(span.quote);
         // Only canonical source-version references establish citation links.
         // An output URL or an input-set reference cannot prove this cell.
         const url = sources.get(sourceVersionId)?.url;
         if (typeof url === "string" && webUrl.safeParse(url).success) {
           urls.add(url);
-          if (!(cellSources[field] ?? []).some((source) => source.url === url))
-            (cellSources[field] ??= []).push({ url });
+          const fieldSources = (cellSources[field] ??= []);
+          if (
+            fieldSources.length < 12 &&
+            !fieldSources.some((source) => source.url === url)
+          )
+            fieldSources.push({ url });
         }
       }
     }

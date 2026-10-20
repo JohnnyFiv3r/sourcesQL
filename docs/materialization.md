@@ -1,10 +1,10 @@
 # Effective saved tables as engine inputs
 
-Query, explain and explicit `sourcesql_materialize_research` share one materialization contract, `sourcesql.app-effective.v1`. Selection captures the root, amendment revision and complete related dependency closure from one app-state read. Only that closure is resolved and authorized. A filesystem writer lock or database transaction is never held across canonical resolution or a Flight.
+Query, explain and explicit `sourcesql_materialize_research` share one materialization contract, `sourcesql.app-effective.v2`. Selection captures the root, amendment revision and complete related dependency closure from one app-state read. Only that closure is resolved and authorized. A filesystem writer lock or database transaction is never held across canonical resolution or a Flight.
 
 The imported table preserves full row/column order, row IDs, declared types/nullability and exact effective values, including explicit null amendments. Existing primitive fallback inference applies only to undeclared columns. It does not serialize arbitrary objects or make unsupported Python representations valid. A private contributor anywhere in the captured closure makes the promotion private-derived. Provider disclosure still requires the existing grants.
 
-Canonical engine parents are sorted unique `dataRef.resultId` values, with original/null pins. The app amendment revision belongs in provenance and in subsequent effective bindings. Descriptive origin IDs are not verified engine parents. Implicit selection requires a unique active canonical dataRef; inline successors remain supported by explicit materialization and subsequent original/null bindings. Imports retain input-set lineage and values-only replay; they do not create quotation evidence for edited values.
+Canonical engine parents are sorted unique `dataRef.resultId` values, with original/null pins. The app amendment revision belongs in provenance and in subsequent effective bindings. Descriptive origin IDs are not verified engine parents. Implicit selection requires a unique active canonical dataRef; inline successors remain supported by explicit materialization and subsequent original/null bindings. Imports retain input-set dependency lineage and values-only replay. The v2 recipe also carries previously validated cell evidence for explicitly identified unchanged cells; edited values do not gain quotation evidence.
 
 ## Hosted preparation and replay
 
@@ -50,3 +50,22 @@ The local workspace harness is `apps/research/scripts/measure-workspace.mts`; us
 See [qualification scripts](../scripts/qualification.md) for explicit remote effects and reviewed execution plans. No source-only pass establishes deployed rendering or billed provider behavior.
 
 Known inherited limitation: some DECIMAL inputs exceeding Python's default decimal context precision remain refused by existing type validation. This correction preserves wire values and refusals; it does not qualify a wider arithmetic range.
+
+
+## Citation-preserving v2 cutover
+
+The v2 recipe adds explicit canonical cell origins when a saved cell already has
+quoted evidence. Python checks the selected parent, row and column identities,
+logical type and exact typed value before copying validated evidence. Accepted
+refresh cells name their recorded source snapshot; manual amendments never gain
+source citations. Parent authorization and private classification still apply to
+the complete dependency closure. A display URL or an equal value in another row
+cannot establish a cell origin.
+
+This changes deterministic materialization identities. Existing v1 imports and
+query jobs remain inspectable under their exact IDs. Replaying a v1 outer UUID
+through the new recipe stops with an inspection-required conflict before new
+imports or dispatch; do not invent replacement UUIDs for unsettled operations.
+Use the legacy preparation inventory/settlement procedure above before upgrading.
+New v2 requests retain the existing atomic preparation and retry guarantees.
+Old immutable results and previously exported bundles are not rewritten.

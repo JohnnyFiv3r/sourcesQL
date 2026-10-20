@@ -32,7 +32,7 @@ def test_query_and_guarded_lookup_share_profile_revision_recipe(tmp_path, monkey
         columns=[{"key": "value", "logical_type": "VARCHAR"}],
         rows=[{"value": "retained"}],
         provenance={
-            "materialization_contract": "sourcesql.app-effective.v1",
+            "materialization_contract": "sourcesql.app-effective.v2",
             "amendment_revision": 1,
         },
         data_classification="public_web",
@@ -41,7 +41,7 @@ def test_query_and_guarded_lookup_share_profile_revision_recipe(tmp_path, monkey
         "columns": [{"key": "value", "logical_type": "VARCHAR"}],
         "rows": [{"value": "retained"}],
         "provenance": {
-            "materialization_contract": "sourcesql.app-effective.v1",
+            "materialization_contract": "sourcesql.app-effective.v2",
             "amendment_revision": 1,
         },
         "data_classification": "public_web",
@@ -93,7 +93,7 @@ def test_guarded_lookup_accepts_credential_rotation_but_refuses_changed_operator
         "rows": [{"value": "retained"}],
         "data_classification": "public_web",
         "provenance": {
-            "materialization_contract": "sourcesql.app-effective.v1",
+            "materialization_contract": "sourcesql.app-effective.v2",
             "amendment_revision": 1,
         },
     }

@@ -898,6 +898,7 @@ export class MotherDuckEngine implements ResearchEngine {
         "continuation_of",
         "research_requirements",
         "answer_intent",
+        "citations",
       ]);
       if (
         Object.keys(params).some((key) => !allowed.has(key)) ||
@@ -1875,6 +1876,12 @@ export class MotherDuckEngine implements ResearchEngine {
           this.options.engineVersion === "0.2.3"
             ? ["original", "effective", "sources"]
             : ["original", "effective"],
+        curated_citations: {
+          contract: "sourcesql.curated-citation.v1",
+          quote_offset_unit: "unicode_code_points",
+          advisory: true,
+          factual_truth_verified: false,
+        },
         semantic_limits: { extract_all_max_items_per_call: 8 },
         default_profile: "fixture",
         recommended_research_profile: this.options.exa
