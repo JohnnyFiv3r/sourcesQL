@@ -69,3 +69,22 @@ imports or dispatch; do not invent replacement UUIDs for unsettled operations.
 Use the legacy preparation inventory/settlement procedure above before upgrading.
 New v2 requests retain the existing atomic preparation and retry guarantees.
 Old immutable results and previously exported bundles are not rewritten.
+
+## Citation feature compatibility
+
+Citation-aware promotion requires the worker's explicit
+`sourcesql.app-effective.v2` feature contract. Curated citations require
+`sourcesql.curated-citation.v1`. A package version alone does not establish
+support: gateway capabilities inspect the actual source/requirements-pinned
+Flight declaration, and local adapters inspect the engine's feature map. Missing
+or mismatched contracts refuse affected work before new job reservation; queued
+jobs recheck before dispatch. Unrelated requests without those features keep
+their existing behavior. Deploy matching gateway/worker artifacts before using
+these additions; this change does not update a deployed worker automatically.
+
+New promotions encode unchanged cited-cell origins as `indexed-cells.v1` triples
+of row, column and sorted-parent indexes. Python expands them through the same
+validated named-origin contract, preserving canonical identity and evidence
+checks. The legacy named representation remains accepted. Compact transport does
+not widen job/table limits, disclosure grants, or change pending preparations;
+changed captured payloads still conflict rather than replacing work.

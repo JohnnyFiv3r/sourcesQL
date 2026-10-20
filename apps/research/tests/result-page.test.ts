@@ -184,7 +184,15 @@ test("a single oversized row reports its exact index and remains recoverable as 
   const page = resultRowPage(result, { offset: 205, limit: 1, maxBytes: 8192 });
   assert.deepEqual(page.rows, []);
   assert.deepEqual(page.row_ids, []);
-  assert.equal(page.next_offset, 205);
+  assert.equal(page.next_offset, null);
+  assert.equal((page.row_page as Row).complete, false);
+  assert.deepEqual((page.row_page as Row).chunk_required, {
+    tool: "sourcesql_inspect_evidence",
+    collection: "rows",
+    record_index: 205,
+    chunk_offset: 0,
+    next_offset_after_chunk: null,
+  });
   assert.equal((page.row_page as Row).oversized_record_index, 205);
   assert.deepEqual(assemble(result, "rows", 205), result.rows[0]);
 });
@@ -281,7 +289,17 @@ test("oversized source and evidence records expose stable retained-array indexes
   assert.deepEqual(page.evidence, []);
   assert.equal((page.source_page as Row).oversized_record_index, 0);
   assert.equal((page.evidence_page as Row).oversized_record_index, 1);
-  assert.equal((page.source_page as Row).next_offset, 0);
+  assert.equal((page.source_page as Row).next_offset, null);
+  assert.equal((page.evidence_page as Row).next_offset, null);
+  assert.equal((page.source_page as Row).complete, false);
+  assert.equal((page.evidence_page as Row).complete, false);
+  assert.deepEqual((page.evidence_page as Row).chunk_required, {
+    tool: "sourcesql_inspect_evidence",
+    collection: "evidence",
+    record_index: 1,
+    chunk_offset: 0,
+    next_offset_after_chunk: null,
+  });
   assert.deepEqual(
     assemble(result, "source_versions", 0),
     result.source_versions[0],
@@ -481,4 +499,135 @@ test("engine quality gap compaction preserves canonical snake_case counts", () =
   );
   assert.equal(quality.gaps_total, 256);
   assert.equal(Object.hasOwn(quality, "gapsOmitted"), false);
+});
+
+test("oversized records require explicit chunk completion before the next logical record", () => {
+  const result = fixture();
+  result.source_versions = [
+    { source_version_id: "large", content: "x".repeat(20000) },
+    { source_version_id: "small", content: "brief" },
+  ];
+  const first = resultEvidencePage(result, { maxBytes: 8192 });
+  const sourcePage = first.source_page as Row;
+  assert.deepEqual(first.source_versions, []);
+  assert.equal(sourcePage.next_offset, null);
+  assert.equal(sourcePage.complete, false);
+  assert.deepEqual(sourcePage.chunk_required, {
+    tool: "sourcesql_inspect_evidence",
+    collection: "source_versions",
+    record_index: 0,
+    chunk_offset: 0,
+    next_offset_after_chunk: 1,
+  });
+  assert.deepEqual(
+    assemble(result, "source_versions", 0),
+    result.source_versions[0],
+  );
+  const next = resultEvidencePage(result, { source_offset: 1, maxBytes: 8192 });
+  assert.deepEqual(next.source_versions, [result.source_versions[1]]);
+  assert.equal((next.source_page as Row).next_offset, null);
+  assert.equal(Object.hasOwn(next.source_page as Row, "chunk_required"), false);
+});
+
+test("public result pages retain existing provenance and diagnostic fields when they fit", () => {
+  const result = {
+    ...fixture(),
+    provenance: {
+      materialization_contract: "sourcesql.app-effective.v2",
+      snapshot_id: "saved_view",
+      amendment_revision: 7,
+    },
+    research_requirements: { minimum_rows: 1, required_columns: ["count"] },
+    source_bindings: [{ alias: "sources", result_id: "wq_parent" }],
+    cell_diagnostics: [
+      { row_id: "row_precise", column_key: "unknown", status: "unknown" },
+    ],
+    created_at: "2026-10-19T10:01:00Z",
+    profile_revision: "profile_7",
+    query_sha256: "b".repeat(64),
+  };
+  for (const page of [resultRowPage(result), resultEvidencePage(result)]) {
+    for (const key of [
+      "provenance",
+      "research_requirements",
+      "source_bindings",
+      "cell_diagnostics",
+      "created_at",
+      "profile_revision",
+      "query_sha256",
+    ] as const)
+      assert.deepEqual(page[key], result[key], key);
+  }
+});
+
+test("oversized public metadata has explicit retained-export retrieval without blocking row progress", () => {
+  const result = {
+    ...fixture(),
+    provenance: { detail: "x".repeat(20000) },
+    research_requirements: { detail: "x".repeat(20000) },
+    source_bindings: [{ detail: "x".repeat(20000) }],
+    cell_diagnostics: [{ row_id: "row_precise", detail: "x".repeat(20000) }],
+    created_at: "2026-10-19T10:01:00Z",
+    profile_revision: "profile_7",
+    query_sha256: "b".repeat(64),
+  };
+  const before = structuredClone(result);
+  const page = resultRowPage(result, { maxBytes: 8192 });
+  assert.deepEqual(page.rows, result.rows);
+  assert.equal(page.next_offset, null);
+  assert.ok(size(page) <= 8192);
+  const omitted = (page.metadata_omitted as Row[]).map((entry) => entry.field);
+  for (const key of [
+    "provenance",
+    "research_requirements",
+    "source_bindings",
+    "cell_diagnostics",
+  ]) {
+    assert.equal(Object.hasOwn(page, key), false, key);
+    assert.ok(omitted.includes(key), key);
+  }
+  assert.match(String((page.metadata_inspection as Row).note), /export/);
+  for (const key of ["created_at", "profile_revision", "query_sha256"] as const)
+    assert.equal(page[key], result[key]);
+  assert.deepEqual(result, before);
+});
+
+test("filtered evidence resumes after an oversized record using its page offset and exact retained index", () => {
+  const result = fixture();
+  result.source_versions = [];
+  result.evidence = [
+    { row_id: "unrelated", evidence_id: "excluded_0" },
+    { row_id: "row_precise", evidence_id: "readable" },
+    { row_id: "unrelated", evidence_id: "excluded_1" },
+    {
+      row_id: "row_precise",
+      evidence_id: "large",
+      support: [{ quote: "x".repeat(20000) }],
+    },
+    { evidence_id: "lineage", lineage_level: "input_set" },
+  ];
+  const page = resultEvidencePage(result, {
+    evidence_offset: 1,
+    maxBytes: 8192,
+  });
+  const cursor = page.evidence_page as Row;
+  assert.deepEqual(page.evidence, []);
+  assert.equal(cursor.offset, 1);
+  assert.equal(cursor.total, 3);
+  assert.equal(cursor.next_offset, null);
+  assert.equal(cursor.complete, false);
+  assert.deepEqual(cursor.chunk_required, {
+    tool: "sourcesql_inspect_evidence",
+    collection: "evidence",
+    record_index: 3,
+    chunk_offset: 0,
+    next_offset_after_chunk: 2,
+  });
+  assert.deepEqual(assemble(result, "evidence", 3), result.evidence[3]);
+  const next = resultEvidencePage(result, {
+    evidence_offset: 2,
+    maxBytes: 8192,
+  });
+  assert.deepEqual(next.evidence, [result.evidence[4]]);
+  assert.equal((next.evidence_page as Row).next_offset, null);
 });

@@ -78,6 +78,8 @@ class Transaction:
 
 
 class MotherDuckStore(Store):
+    inspection_dialect = "duckdb"
+
     def __init__(
         self,
         database: str,

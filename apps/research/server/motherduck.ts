@@ -1,3 +1,16 @@
+import {
+  readInspectionRecords,
+  readInspectionChunk,
+  type InspectionCollection,
+} from "./inspection-records.js";
+import { readInspectionMetadata } from "./inspection-metadata.js";
+import { curatedCitationsSchema } from "./citation-contract.js";
+import {
+  CURATED_CITATION_CONTRACT,
+  MATERIALIZATION_CONTRACT as CELL_ORIGINS_CONTRACT,
+  CELL_ORIGINS_ENCODING,
+  WORKER_FEATURE_CONTRACTS,
+} from "./feature-contracts.js";
 /** Native Postgres gateway: durable owner storage, on-demand Flight jobs, no Python bridge. */
 import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolConfig } from "pg";
@@ -357,6 +370,7 @@ export class MotherDuckEngine implements ResearchEngine {
     id: string,
     seen = new Set<string>(),
     cache = new Map<string, Row>(),
+    inspection = false,
   ): Promise<Row> {
     identity(id, resultPattern);
     if (seen.has(id) || seen.size >= 64)
@@ -374,7 +388,12 @@ export class MotherDuckEngine implements ResearchEngine {
     const next = new Set(seen).add(id);
     const row = (
       await client.query(
-        `SELECT hash,metadata,revoked,payload,wire_payload,wire_hash FROM ${this.table("results")} WHERE id=$1`,
+        inspection
+          ? `SELECT hash,revoked,wire_hash,sha256(payload)=hash AS payload_valid,sha256(wire_payload)=wire_hash AS wire_valid,
+          json_array_length(wire_payload,'$.rows') AS retained_row_count,
+          CAST(json_object(${["result_id", "run_id", "content_sha256", "data_classification", "row_count", "columns", "row_ids", "parents"].map((key) => `'${key}',json_extract(metadata,'$.${key}')`).join(",")}) AS VARCHAR) AS metadata
+          FROM ${this.table("results")} WHERE id=$1`
+          : `SELECT hash,metadata,revoked,payload,wire_payload,wire_hash FROM ${this.table("results")} WHERE id=$1`,
         [id],
       )
     ).rows[0];
@@ -384,8 +403,10 @@ export class MotherDuckEngine implements ResearchEngine {
         "Result or dependency unavailable",
       );
     if (
-      digest(row.payload) !== row.hash ||
-      digest(row.wire_payload) !== row.wire_hash
+      inspection
+        ? row.payload_valid !== true || row.wire_valid !== true
+        : digest(row.payload) !== row.hash ||
+          digest(row.wire_payload) !== row.wire_hash
     )
       throw new BackendError(
         "evidence_invalid",
@@ -416,6 +437,7 @@ export class MotherDuckEngine implements ResearchEngine {
         parent.result_id,
         next,
         cache,
+        inspection,
       );
       if (parent.content_sha256 && parent.content_sha256 !== ancestor.hash)
         throw new BackendError(
@@ -431,6 +453,207 @@ export class MotherDuckEngine implements ResearchEngine {
     const authorized = { ...row, parsed: metadata };
     cache.set(id, authorized);
     return authorized;
+  }
+  /** Project bounded records in the database after fresh closure authorization. */
+  async inspectResult(params: Row): Promise<Row> {
+    const id = identity(params.result_id, resultPattern);
+    const offset = bounded(params.offset ?? 0, 0, 1000000);
+    const limit = bounded(params.limit ?? 20, 1, 100);
+    const budget = bounded(params.max_bytes ?? 512 * 1024, 4096, 512 * 1024);
+    const collections = [
+      "rows",
+      "evidence",
+      "source_versions",
+      "cell_diagnostics",
+    ];
+    if (
+      params.collection !== undefined &&
+      (!collections.includes(params.collection) ||
+        params.record_index === undefined)
+    )
+      throw new BackendError(
+        "invalid_request",
+        "Invalid inspection collection or index",
+      );
+    if (
+      params.collection === undefined &&
+      [params.record_index, params.chunk_offset, params.chunk_limit].some(
+        (value) => value !== undefined,
+      )
+    )
+      throw new BackendError(
+        "invalid_request",
+        "Collection is required for chunk inspection",
+      );
+    return this.transaction(false, async (client) => {
+      const retained = await this.resultRecord(
+        client,
+        id,
+        new Set(),
+        new Map(),
+        true,
+      );
+      const authority = retained.parsed;
+      if (
+        !Array.isArray(authority.columns) ||
+        !Array.isArray(authority.row_ids) ||
+        Number(retained.retained_row_count) !== authority.row_count ||
+        authority.row_ids.length !== authority.row_count
+      )
+        throw new BackendError(
+          "evidence_invalid",
+          "Retained result shape mismatch",
+        );
+      if (params.collection !== undefined) {
+        const chunk = await readInspectionChunk(
+          client,
+          this.table("results"),
+          id,
+          {
+            collection: params.collection as InspectionCollection,
+            record_index: bounded(params.record_index, 0, 1000000),
+            chunk_offset: params.chunk_offset,
+            chunk_limit: params.chunk_limit,
+            maxBytes: budget,
+          },
+        );
+        return {
+          ...authority,
+          ...chunk,
+          inspection_contract: WORKER_FEATURE_CONTRACTS.result_inspection,
+        };
+      }
+      const extra = await readInspectionMetadata(
+        client,
+        this.table("results"),
+        id,
+        Math.max(4096, Math.floor(budget / 3)),
+      );
+      const output: Row = {
+        ...extra.metadata,
+        ...authority,
+        inspection_contract: WORKER_FEATURE_CONTRACTS.result_inspection,
+        row_ids: authority.row_ids.slice(offset, offset + limit),
+        offset,
+        next_offset:
+          offset + limit < authority.row_count ? offset + limit : null,
+        evidence: [],
+        source_versions: [],
+      };
+      if (authority.run_id) {
+        const receiptExpression = `json_merge_patch(CAST(receipt AS JSON),'${'{"resume_request":null}'}')`;
+        const descriptor = (
+          await client.query(
+            `SELECT octet_length(encode(CAST(${receiptExpression} AS VARCHAR))) AS bytes FROM ${this.table("runs")} WHERE id=$1`,
+            [authority.run_id],
+          )
+        ).rows[0];
+        if (!descriptor)
+          throw new BackendError(
+            "evidence_invalid",
+            "Retained receipt unavailable",
+          );
+        if (Number(descriptor.bytes) <= Math.floor(budget / 12)) {
+          const row = (
+            await client.query(
+              `SELECT CAST(${receiptExpression} AS VARCHAR) AS receipt FROM ${this.table("runs")} WHERE id=$1`,
+              [authority.run_id],
+            )
+          ).rows[0];
+          output.latest_receipt = JSON.parse(row.receipt);
+        } else
+          extra.omissions.push({
+            field: "latest_receipt",
+            bytes: Number(descriptor.bytes),
+          });
+      }
+      if (extra.omissions.length) output.metadata_omitted = extra.omissions;
+      if (params.mode === "rows") {
+        const records = await readInspectionRecords(
+          client,
+          this.table("results"),
+          id,
+          {
+            collection: "rows",
+            offset,
+            limit,
+            maxBytes: Math.max(4096, Math.floor(budget / 2)),
+          },
+        );
+        const columns =
+          params.columns === undefined
+            ? authority.columns
+            : authority.columns.filter((column: Row) =>
+                params.columns.includes(column.key),
+              );
+        if (
+          params.columns !== undefined &&
+          (!Array.isArray(params.columns) ||
+            columns.length !== params.columns.length)
+        )
+          throw new BackendError(
+            "invalid_request",
+            "Unknown selected result column",
+          );
+        output.columns = columns;
+        output.rows = records.values.map((row) =>
+          Object.fromEntries(
+            columns.map((column: Row) => [column.key, row[column.key]]),
+          ),
+        );
+        output.row_ids = records.indexes.map(
+          (index) => authority.row_ids[index],
+        );
+        output.row_page = records.page;
+        output.next_offset = records.page.next_offset;
+        for (const [name, collection] of [
+          ["evidence_page", "evidence"],
+          ["source_page", "source_versions"],
+        ] as const) {
+          const page = await readInspectionRecords(
+            client,
+            this.table("results"),
+            id,
+            { collection, offset: 0, limit: 0, maxBytes: 4096 },
+          );
+          output[name] = page.page;
+        }
+      } else {
+        for (const [name, collection, recordOffset, recordLimit] of [
+          [
+            "evidence_page",
+            "evidence",
+            params.evidence_offset ?? 0,
+            params.evidence_limit ?? 100,
+          ],
+          [
+            "source_page",
+            "source_versions",
+            params.source_offset ?? 0,
+            params.source_limit ?? 100,
+          ],
+          ["diagnostic_page", "cell_diagnostics", 0, 256],
+        ] as const) {
+          const page = await readInspectionRecords(
+            client,
+            this.table("results"),
+            id,
+            {
+              collection,
+              offset: bounded(recordOffset, 0, 1000000),
+              limit: bounded(recordLimit, 0, 1000),
+              rowIds: output.row_ids,
+              maxBytes: Math.max(4096, Math.floor(budget / 5)),
+            },
+          );
+          output[collection] = page.values;
+          output[name] = page.page;
+        }
+        output.cell_diagnostics_omitted =
+          output.diagnostic_page.total - output.cell_diagnostics.length;
+      }
+      return output;
+    });
   }
   async readResult(params: Row): Promise<EngineResult> {
     const id = identity(params.result_id, resultPattern);
@@ -879,11 +1102,81 @@ export class MotherDuckEngine implements ResearchEngine {
     };
   }
 
+  /** Read the actual fingerprint-pinned worker declaration; package versions alone
+   * cannot distinguish unpublished feature additions within the same release. */
+  private async workerFeatures(): Promise<Record<string, string>> {
+    if (
+      !this.options.sourceSha256 ||
+      !this.options.requirementsSha256 ||
+      this.options.engineVersion === "0.2.2"
+    )
+      return {};
+    return this.connection(async (client) => {
+      const summary = (
+        await client.query(
+          `SELECT current_version,schedule_cron FROM md_get_flight(flight_id := '${this.options.flightId}'::UUID)`,
+        )
+      ).rows[0];
+      if (!summary || summary.schedule_cron) return {};
+      const version = bounded(Number(summary.current_version), 1, 4294967295);
+      const detail = (
+        await client.query(`SELECT sha256(source_code) AS source_hash,sha256(requirements_txt) AS requirements_hash,
+        split_part(split_part(source_code, chr(10) || 'SOURCESQL_CONTRACTS_JSON = ', 2), chr(10), 1) AS contracts_literal
+        FROM md_get_flight_version(flight_id := '${this.options.flightId}'::UUID,version_number := ${version}::UINTEGER)`)
+      ).rows[0];
+      if (
+        !detail ||
+        detail.source_hash !== this.options.sourceSha256 ||
+        detail.requirements_hash !== this.options.requirementsSha256 ||
+        !detail.contracts_literal
+      )
+        return {};
+      let declared: Record<string, unknown>;
+      try {
+        declared = JSON.parse(JSON.parse(detail.contracts_literal));
+      } catch {
+        return {};
+      }
+      if (!declared || typeof declared !== "object" || Array.isArray(declared))
+        return {};
+      return Object.fromEntries(
+        Object.entries(WORKER_FEATURE_CONTRACTS).filter(
+          ([name, contract]) => declared[name] === contract,
+        ),
+      );
+    });
+  }
+  private async requireRequestFeatures(request: Row): Promise<void> {
+    const required: [string, string][] = [];
+    if (request.citations?.length)
+      required.push(["curated_citations", CURATED_CITATION_CONTRACT]);
+    const origins = request.cell_origins;
+    if (Array.isArray(origins) ? origins.length : origins?.cells?.length) {
+      required.push(["materialized_cell_origins", CELL_ORIGINS_CONTRACT]);
+      if (!Array.isArray(origins))
+        required.push(["cell_origins_encoding", CELL_ORIGINS_ENCODING]);
+    }
+    if (!required.length) return;
+    const features = await this.workerFeatures();
+    if (required.some(([name, contract]) => features[name] !== contract))
+      throw new BackendError(
+        "unsupported_capability",
+        "The configured worker does not advertise the required citation/materialization contract; update the source-matched worker before retrying. No job was reserved or dispatched by this check.",
+      );
+  }
   private request(
     params: Row,
     operation: string,
   ): { request: Row; requestId: string; hash: string } {
     let request: Row;
+    if (
+      params.citations !== undefined &&
+      !curatedCitationsSchema.safeParse(params.citations).success
+    )
+      throw new BackendError(
+        "invalid_request",
+        "Invalid curated citation contract",
+      );
     if (operation === "query" || operation === "explain") {
       const allowed = new Set([
         "query",
@@ -1100,6 +1393,7 @@ export class MotherDuckEngine implements ResearchEngine {
     imports: Record<string, EffectiveMaterialization>,
   ): Promise<Row> {
     const original = this.request(args, operation);
+    await this.requireRequestFeatures(original.request);
     const aliases = Object.keys(imports).sort();
     if (!aliases.length)
       throw new BackendError(
@@ -1140,8 +1434,10 @@ export class MotherDuckEngine implements ResearchEngine {
         "invalid_request",
         "Incomplete effective input preparation",
       );
-    for (const item of selected)
+    for (const item of selected) {
+      await this.requireRequestFeatures(item.input.request);
       await this.authorizeRequestInputs(item.input.request, "import_table");
+    }
     const manifest = await this.transaction(true, async (client) => {
       const prior = await this.preparation(client, original.requestId);
       const outer = (
@@ -1348,6 +1644,7 @@ export class MotherDuckEngine implements ResearchEngine {
   }
   async enqueue(params: Row, operation = "query"): Promise<Row> {
     const input = this.request(params, operation);
+    await this.requireRequestFeatures(input.request);
     const jobId = await this.transaction(true, (client) =>
       this.reserveJob(client, input, operation),
     );
@@ -1428,6 +1725,7 @@ export class MotherDuckEngine implements ResearchEngine {
         await this.authorizeCompletedJob(candidate);
       return candidate;
     }
+    await this.requireRequestFeatures(JSON.parse(candidate.request_json));
     await this.authorizeRequestInputs(
       JSON.parse(candidate.request_json),
       candidate.operation,
@@ -1854,7 +2152,8 @@ export class MotherDuckEngine implements ResearchEngine {
   }
   async call<T = Row>(method: string, params: Row = {}): Promise<T> {
     let result: unknown;
-    if (method === "capabilities")
+    if (method === "capabilities") {
+      const featureContracts = await this.workerFeatures();
       result = {
         engine_version: this.options.engineVersion ?? null,
         engine_version_source: this.options.engineVersion
@@ -1876,12 +2175,17 @@ export class MotherDuckEngine implements ResearchEngine {
           this.options.engineVersion === "0.2.3"
             ? ["original", "effective", "sources"]
             : ["original", "effective"],
-        curated_citations: {
-          contract: "sourcesql.curated-citation.v1",
-          quote_offset_unit: "unicode_code_points",
-          advisory: true,
-          factual_truth_verified: false,
-        },
+        worker_feature_contracts: featureContracts,
+        ...(featureContracts.curated_citations === CURATED_CITATION_CONTRACT
+          ? {
+              curated_citations: {
+                contract: CURATED_CITATION_CONTRACT,
+                quote_offset_unit: "unicode_code_points",
+                advisory: true,
+                factual_truth_verified: false,
+              },
+            }
+          : {}),
         semantic_limits: { extract_all_max_items_per_call: 8 },
         default_profile: "fixture",
         recommended_research_profile: this.options.exa
@@ -2043,7 +2347,7 @@ export class MotherDuckEngine implements ResearchEngine {
           "Usage reports cover sourcesQL activity, not provider account-wide balances or final bills",
         ],
       };
-    else if (method === "query" || method === "explain")
+    } else if (method === "query" || method === "explain")
       result = await this.enqueue(params, method);
     else if (method === "resume_run") {
       if (
@@ -2091,7 +2395,9 @@ export class MotherDuckEngine implements ResearchEngine {
         );
       });
       result = { dismissed: true };
-    } else if (method === "read_result") result = await this.readResult(params);
+    } else if (method === "inspect_result")
+      result = await this.inspectResult(params);
+    else if (method === "read_result") result = await this.readResult(params);
     else if (method === "job_status")
       result = await this.jobStatus(params.job_id);
     else if (method === "cancel_job")

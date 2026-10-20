@@ -2,16 +2,57 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 import copy
 import re
 
 from sourcesql.contracts import SourcesQLError, canonical, digest
-from sourcesql.execution.evidence import checked_support, retained_sources
+from sourcesql.feature_contracts import CELL_ORIGINS_ENCODING
+from sourcesql.execution.evidence import (
+    SupportValidationContext,
+    checked_support,
+    retained_sources,
+)
 
 
-def validate_cell_origins(value):
+def validate_cell_origins(value, *, columns=None, row_ids=None, parents=None):
     if value is None:
         return []
+    if isinstance(value, dict):
+        if (
+            set(value) != {"encoding", "cells"}
+            or value.get("encoding") != CELL_ORIGINS_ENCODING
+            or not isinstance(value.get("cells"), list)
+            or len(value["cells"]) > 1000 * 128
+            or not isinstance(columns, list)
+            or not isinstance(row_ids, list)
+            or not isinstance(parents, list)
+        ):
+            raise SourcesQLError("invalid_request", "Invalid indexed materialized cell origins")
+        expanded = []
+        for cell in value["cells"]:
+            if (
+                not isinstance(cell, list)
+                or len(cell) != 3
+                or any(type(index) is not int or index < 0 for index in cell)
+                or cell[0] >= len(row_ids)
+                or cell[1] >= len(columns)
+                or cell[2] >= len(parents)
+            ):
+                raise SourcesQLError("invalid_request", "Invalid indexed materialized cell origin")
+            row_id, column, parent = row_ids[cell[0]], columns[cell[1]], parents[cell[2]]
+            if not isinstance(column, dict) or not isinstance(parent, dict):
+                raise SourcesQLError("invalid_request", "Invalid indexed origin context")
+            expanded.append(
+                {
+                    "row_id": row_id,
+                    "column_key": column.get("key"),
+                    "result_id": parent.get("result_id"),
+                    "source_row_id": row_id,
+                    "source_column_key": column.get("key"),
+                }
+            )
+        value = expanded
     fields = {"row_id", "column_key", "result_id", "source_row_id", "source_column_key"}
     # One origin per cell across the existing import-table envelope (1000 x 128).
     # A separate 2048-entry cap would reject otherwise valid cited tables.
@@ -42,6 +83,7 @@ def preserve_cell_evidence(store, table, row_ids, origins, parents, wire_value):
     outputs = {row_id: row for row_id, row in zip(row_ids, table.rows)}
     columns = {column.key: column for column in table.columns}
     loaded = {}
+    validation = SupportValidationContext()
     evidence, sources, seen = [], {}, set()
     for origin in origins:
         rid = origin["result_id"]
@@ -49,13 +91,16 @@ def preserve_cell_evidence(store, table, row_ids, origins, parents, wire_value):
             raise SourcesQLError("unauthorized", "Cell origin must be an authorized import parent")
         if rid not in loaded:
             meta, parent_table = store.read(rid)
+            indexed_evidence = defaultdict(list)
+            for record in meta.get("evidence", []):
+                indexed_evidence[(record.get("row_id"), record.get("column_key"))].append(record)
             loaded[rid] = (
-                meta,
+                indexed_evidence,
                 {row_id: row for row_id, row in zip(meta["row_ids"], parent_table.rows)},
                 {column.key: column for column in parent_table.columns},
                 retained_sources(store, rid),
             )
-        meta, parent_rows, parent_columns, retained = loaded[rid]
+        indexed_evidence, parent_rows, parent_columns, retained = loaded[rid]
         row, source_row = outputs.get(origin["row_id"]), parent_rows.get(origin["source_row_id"])
         key, source_key = origin["column_key"], origin["source_column_key"]
         if (
@@ -71,13 +116,8 @@ def preserve_cell_evidence(store, table, row_ids, origins, parents, wire_value):
             )
         ):
             continue
-        for record in meta.get("evidence", []):
-            if (
-                record.get("row_id") != origin["source_row_id"]
-                or record.get("column_key") != source_key
-            ):
-                continue
-            support = checked_support(record, retained)
+        for record in indexed_evidence.get((origin["source_row_id"], source_key), []):
+            support = checked_support(record, retained, context=validation)
             if not support:
                 continue
             copied = {

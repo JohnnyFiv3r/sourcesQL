@@ -22,6 +22,16 @@ and worker qualification before claiming deployed behavior; historical immutable
 findings are preserved. See [app integration](docs/app-integration.md) and the
 [materialization upgrade procedure](docs/materialization.md).
 
+The review correction checks explicit worker feature declarations against actual
+source/requirements pins before reserving affected jobs. Citation admission is
+shared by MCP and hosted reservation, with Python parity fixtures; rejected
+optional attributions remain separate from missing/extraction gaps. Promotion
+origins use compact indexed transport and one canonical validation recipe.
+Retained-body inspection now projects bounded metadata, records and substrings
+at the storage boundary, preserving public provenance and explicit omission
+feedback. Databases still parse legacy JSON blobs; indexed storage, changed
+budgets and deployment qualification are not implied by these source changes.
+
 ## Unreleased effective-table and recovery correction
 
 Query, explain and explicit materialization now share a coherent app-state

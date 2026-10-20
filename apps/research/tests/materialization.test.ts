@@ -348,15 +348,10 @@ test("quoted unchanged cells retain explicit canonical origins while manual corr
     value: [{ url: "https://source.example/retained" }],
   };
   const original = buildMaterializationPayload(context(root));
-  assert.deepEqual(original.cell_origins, [
-    {
-      row_id: "row_0",
-      column_key: "value",
-      result_id: "wq_cited",
-      source_row_id: "row_0",
-      source_column_key: "value",
-    },
-  ]);
+  assert.deepEqual(original.cell_origins, {
+    encoding: "indexed-cells.v1",
+    cells: [[0, 0, 0]],
+  });
   root.amendments.push({
     snapshot_id: "cited",
     row_id: "row_0",
@@ -401,14 +396,43 @@ test("an accepted refresh citation names its exact recorded canonical source", (
   });
   root.revision = 1;
   const payload = buildMaterializationPayload(context(root, refresh));
-  assert.deepEqual(payload.cell_origins, [
-    {
-      row_id: "row_0",
-      column_key: "value",
-      result_id: "wq_refresh",
-      source_row_id: "row_0",
-      source_column_key: "value",
-    },
-  ]);
+  assert.deepEqual(payload.cell_origins, {
+    encoding: "indexed-cells.v1",
+    cells: [[0, 0, 1]],
+  });
   assert.deepEqual(payload.provenance.dependencies, ["wq_base", "wq_refresh"]);
+});
+
+test("a fully cited 1000 by 128 table fits the hosted request envelope", () => {
+  const columns = Array.from({ length: 128 }, (_, index) => ({
+    key: `field_${index}`,
+    label: `Field ${index}`,
+    logicalType: "VARCHAR",
+    nullable: false,
+  }));
+  const rows = Array.from({ length: 1000 }, (_, index) =>
+    Object.fromEntries(columns.map((column) => [column.key, `Value ${index}`])),
+  );
+  const root = view("large_cited", {
+    resultId: "wq_" + "a".repeat(64),
+    columns,
+    rows,
+  });
+  for (const row of root.snapshot.rows) {
+    row.evidence = Object.fromEntries(
+      columns.map((column) => [column.key, ["Inspected canonical quotation."]]),
+    );
+    row.cellSources = Object.fromEntries(
+      columns.map((column) => [
+        column.key,
+        [{ url: "https://source.example/retained" }],
+      ]),
+    );
+  }
+  const payload = buildMaterializationPayload(context(root));
+  assert.equal(payload.cell_origins?.cells.length, 128000);
+  assert.ok(Buffer.byteLength(JSON.stringify(payload)) < 16 * 1024 * 1024);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(payload.cell_origins)) < 2 * 1024 * 1024,
+  );
 });

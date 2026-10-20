@@ -7,12 +7,13 @@ The caller retains responsibility for parent authorization and classification.
 
 from __future__ import annotations
 
-import hashlib
 import math
 import re
 from typing import Any, NoReturn
 
 from sourcesql.contracts import SourcesQLError, Table, canonical, digest
+from sourcesql.execution.evidence import SupportValidationContext, checked_support
+from sourcesql.feature_contracts import CURATED_CITATION_CONTRACT
 
 MAX_CITATIONS = 2048
 MAX_CITATION_BYTES = 2 * 1024 * 1024
@@ -22,7 +23,6 @@ _ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 _FORBIDDEN_KEYS = {"constructor", "prototype", "__proto__"}
 _FIELDS = {"match", "column_key", "source_version_id", "quote", "start", "end"}
 _REQUIRED = {"match", "column_key", "source_version_id", "quote"}
-_CONTRACT = "sourcesql.curated-citation.v1"
 
 
 def _invalid() -> NoReturn:
@@ -156,8 +156,9 @@ def bind_curated_citations(
 
     A malformed recipe is rejected by validate_citations before dispatch.
     Individual unsupported claims here yield advisory counts and, when a real
-    output cell can be identified, a diagnostic. They do not discard rows or
-    turn an otherwise valid partial result into an execution failure.
+    output cell can be identified, an explicitly advisory diagnostic. This
+    describes a rejected attribution recipe, not the cell's processing state;
+    it neither discards rows nor turns a present required value into a gap.
     """
     if (
         len(table.rows) != len(row_ids)
@@ -171,6 +172,7 @@ def bind_curated_citations(
     diagnostics: dict[str, dict[str, Any]] = {}
     selectors: dict[bytes, list[int]] = {}
     cells: set[tuple[str, str]] = set()
+    support_context = SupportValidationContext()
     counts = {
         "submitted_citations": len(citations),
         "attached_citations": 0,
@@ -184,10 +186,11 @@ def bind_curated_citations(
         if index is None or citation["column_key"] not in columns:
             return
         row_id, key = row_ids[index], citation["column_key"]
-        diagnostic_id = "d_" + digest([_CONTRACT, row_id, citation, reason])[:32]
+        diagnostic_id = "d_" + digest([CURATED_CITATION_CONTRACT, row_id, citation, reason])[:32]
         diagnostics[diagnostic_id] = {
             "diagnostic_id": diagnostic_id,
             "operator": "CURATED_CITATION",
+            "advisory": True,
             "status": status,
             "reason": reason,
             "row_id": row_id,
@@ -224,23 +227,17 @@ def bind_curated_citations(
         if source is None:
             reject(citation, "source_not_retained", index)
             continue
-        if source.get("source_version_id") != source_id:
-            reject(citation, "source_identity_invalid", index)
-            continue
         text = source.get("content")
         if not isinstance(text, str):
             reject(citation, "source_text_unavailable", index)
             continue
-        content_hash = hashlib.sha256(text.encode()).hexdigest()
-        if source.get("content_sha256", content_hash) != content_hash:
+        content_hash = support_context.source_hash(source, expected_id=source_id)
+        if content_hash is None:
             reject(citation, "source_identity_invalid", index)
             continue
         quote = citation["quote"]
         if "start" in citation:
             start, end = citation["start"], citation["end"]
-            if not 0 <= start < end <= len(text) or text[start:end] != quote:
-                reject(citation, "quote_range_mismatch", index)
-                continue
         else:
             start = text.find(quote)
             if start < 0:
@@ -258,9 +255,7 @@ def bind_curated_citations(
             "content_sha256": content_hash,
         }
         row_id = row_ids[index]
-        evidence_id = "e_" + digest([_CONTRACT, row_id, key, source_id, span])[:32]
-        evidence[evidence_id] = {
-            "evidence_id": evidence_id,
+        record = {
             "operator": "CURATED_CITATION",
             "status": "supported_text",
             "attribution_basis": "agent_selected_quote",
@@ -270,6 +265,16 @@ def bind_curated_citations(
             "source_version_id": source_id,
             "support": [span],
         }
+        # Canonical source identity/hash and span validity share the same
+        # validator used when citations are retained through later SQL reuse.
+        support = checked_support(record, sources, context=support_context)
+        if not support:
+            reject(citation, "quote_range_mismatch", index)
+            continue
+        evidence_id = (
+            "e_" + digest([CURATED_CITATION_CONTRACT, row_id, key, source_id, support[0]])[:32]
+        )
+        evidence[evidence_id] = {**record, "evidence_id": evidence_id, "support": support}
         counts["attached_citations"] += 1
         cells.add((row_id, key))
     counts["bound_cells"] = len(cells)

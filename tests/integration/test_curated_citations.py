@@ -10,8 +10,10 @@ import pytest
 
 from sourcesql.contracts import Column, SourcesQLError, Table
 from sourcesql.curation import bind_curated_citations, validate_citations
-from sourcesql.engine import wire_value
+from sourcesql.engine import Engine, wire_value
 from sourcesql.execution.evidence import checked_support
+from sourcesql.execution.worker_process import evaluate
+from sourcesql.research_quality import assess_requirements
 
 QUOTE = "Airtop requires explicit approval for sensitive browser actions."
 SOURCE = {
@@ -322,3 +324,115 @@ def test_nested_wire_selectors_keep_types_and_do_not_resolve_by_url_labels():
         rows,
     )
     assert not evidence and diagnostics[0]["reason"] == "source_not_retained"
+
+
+def _quality_for_citations(citations, *, value="Explicit approval", extra_diagnostics=()):
+    rows = [{"product": "Airtop", "approval_controls": value}]
+    _, diagnostics, counts = bind(citations, rows)
+    table = Table([Column("product"), Column("approval_controls")], rows)
+    quality = assess_requirements(
+        table,
+        ["saved_row_0"],
+        [*diagnostics, *extra_diagnostics],
+        {"key_columns": ["product"], "fields": ["approval_controls"], "minimum_rows": 1},
+    )
+    return quality, diagnostics, counts
+
+
+def test_rejected_citation_is_advisory_with_or_without_a_valid_sibling():
+    typo = {**CITATION, "quote": QUOTE.replace("approval", "apprvoal")}
+    for citations in ([CITATION, typo], [typo]):
+        quality, diagnostics, counts = _quality_for_citations(citations)
+        assert counts["unattached_citations"] == counts["quote_not_found"] == 1
+        assert diagnostics[0]["status"] == "evidence_invalid"
+        assert diagnostics[0]["reason"] == "quote_not_found"
+        assert diagnostics[0]["advisory"] is True
+        assert quality["complete"] is True
+        assert quality["goal_status"] == "requirements_satisfied"
+        assert quality["unresolved_cells"] == quality["gaps_total"] == 0
+
+
+def test_advisory_citation_does_not_hide_a_missing_required_value():
+    quality, diagnostics, counts = _quality_for_citations([CITATION], value=None)
+    assert counts["null_target"] == 1
+    assert diagnostics[0]["advisory"] is True
+    assert diagnostics[0]["status"] == "unknown"
+    assert quality["complete"] is False
+    assert quality["unresolved_cells"] == quality["gaps_total"] == 1
+    assert quality["gaps"][0]["status"] == "uninspected"
+
+
+@pytest.mark.parametrize("advisory", [False, True])
+def test_valid_citation_does_not_hide_a_real_extraction_gap_on_a_populated_cell(advisory):
+    extraction_gap = {
+        "operator": "SEM_EXTRACT",
+        "row_id": "saved_row_0",
+        "column_key": "approval_controls",
+        "status": "not_inspected",
+        "reason": "not_inspected",
+        "advisory": advisory,
+    }
+    quality, diagnostics, counts = _quality_for_citations(
+        [CITATION, {**CITATION, "quote": "A quote typo"}],
+        extra_diagnostics=[extraction_gap],
+    )
+    assert counts["attached_citations"] == 1
+    assert diagnostics[0]["advisory"] is True
+    assert quality["complete"] is False
+    assert quality["unresolved_cells"] == quality["gaps_total"] == 1
+    assert quality["gaps"][0]["status"] == "not_inspected"
+
+
+def test_published_and_reused_research_keeps_rejected_attribution_advisory(tmp_path):
+    def worker(sql, tables, parameters=None, timeout=30):
+        result = evaluate(
+            {
+                "sql": sql,
+                "tables": {alias: table.to_dict() for alias, table in tables.items()},
+                "parameters": parameters or {},
+                "max_rows": 1001,
+            }
+        )
+        return Table(
+            [Column(c["key"], c["logical_type"], c["nullable"]) for c in result["columns"]],
+            result["rows"],
+        )
+
+    engine = Engine(tmp_path, worker=worker)
+    source = engine.query(query="SELECT content FROM WEB_FETCH('https://aurora.example/project')")
+    retained = source["source_versions"][0]
+    valid = {
+        "match": {"product": "Aurora"},
+        "column_key": "claim",
+        "source_version_id": retained["source_version_id"],
+        "quote": retained["content"],
+    }
+    requirements = {"key_columns": ["product"], "fields": ["claim"], "minimum_rows": 1}
+
+    def pin(result):
+        return {"result_id": result["result_id"], "view": "original", "amendment_revision": None}
+
+    published = engine.query(
+        query="SELECT 'Aurora' AS product, 'Agent-interpreted finding' AS claim FROM input.saved LIMIT 1",
+        inputs={"saved": pin(source)},
+        citations=[valid, {**valid, "quote": "A quote typo not present in the source"}],
+        research_requirements=requirements,
+    )
+    reused = engine.query(
+        query="SELECT product, claim FROM input.saved",
+        inputs={"saved": pin(published)},
+        research_requirements=requirements,
+    )
+    for result in (published, reused):
+        assert result["research_quality"]["complete"] is True
+        assert result["research_quality"]["gaps_total"] == 0
+        assert result["receipt"]["goal_status"] == "requirements_satisfied"
+        diagnostics = result["cell_diagnostics"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0]["operator"] == "CURATED_CITATION"
+        assert diagnostics[0]["status"] == "evidence_invalid"
+        assert diagnostics[0]["advisory"] is True
+        assert result["bound_evidence_cells"] == 1
+    assert published["citation_feedback"]["attached_citations"] == 1
+    assert published["citation_feedback"]["unattached_citations"] == 1
+    assert published["receipt"]["counts"] == reused["receipt"]["counts"] == {}

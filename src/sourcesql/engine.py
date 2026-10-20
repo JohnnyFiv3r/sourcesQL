@@ -29,6 +29,11 @@ from sourcesql.query_feedback import build_query_feedback, observe_result
 from sourcesql.execution.worker import run_sql, WorkerSession
 from sourcesql.execution.materialized_evidence import validate_cell_origins, preserve_cell_evidence
 from sourcesql.curation import validate_citations, bind_curated_citations
+from sourcesql.feature_contracts import (
+    CURATED_CITATION_CONTRACT,
+    MATERIALIZATION_CONTRACT,
+    WORKER_FEATURE_CONTRACTS,
+)
 
 
 def now():
@@ -285,8 +290,9 @@ class Engine:
             "sqlglot_version": "30.19.0",
             "operators": sorted(EXTERNAL),
             "input_views": ["original", "effective", "sources"],
+            "worker_feature_contracts": dict(WORKER_FEATURE_CONTRACTS),
             "curated_citations": {
-                "contract": "sourcesql.curated-citation.v1",
+                "contract": CURATED_CITATION_CONTRACT,
                 "quote_offset_unit": "unicode_code_points",
                 "advisory": True,
                 "factual_truth_verified": False,
@@ -655,7 +661,7 @@ class Engine:
             if parent.get("view") == "effective":
                 effective.append(
                     meta.get("provenance", {}).get("materialization_contract")
-                    == "sourcesql.app-effective.v2"
+                    == MATERIALIZATION_CONTRACT
                 )
         result = {
             "found": True,
@@ -1829,6 +1835,9 @@ class Engine:
             if session:
                 session.__exit__(None, None, None)
 
+    def inspect_result(self, **params):
+        return self.store.inspect_result(params, wire_value, self.allow_private)
+
     def read_result(self, result_id, offset=0, limit=100, columns=None):
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
             raise SourcesQLError("invalid_request", "Invalid page bounds", "read")
@@ -1871,7 +1880,9 @@ class Engine:
         parents=None,
         cell_origins=None,
     ):
-        origins = validate_cell_origins(cell_origins)
+        origins = validate_cell_origins(
+            cell_origins, columns=columns, row_ids=row_ids, parents=parents
+        )
         if data_classification not in (
             "public_web",
             "private_local",
@@ -1909,7 +1920,9 @@ class Engine:
         parents=None,
         cell_origins=None,
     ):
-        origins = validate_cell_origins(cell_origins)
+        origins = validate_cell_origins(
+            cell_origins, columns=columns, row_ids=row_ids, parents=parents
+        )
         table, data_classification, provenance, parents, identity = self._normalize_import(
             columns, rows, row_ids, data_classification, provenance, parents, origins
         )

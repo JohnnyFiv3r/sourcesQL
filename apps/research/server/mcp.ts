@@ -1,8 +1,10 @@
+import { curatedCitationsSchema } from "./citation-contract.js";
 import {
   DEFAULT_PUBLIC_RESULT_BYTES,
   resultRowPage,
   resultEvidencePage,
   resultRecordChunk,
+  resultInspectionPage,
 } from "./result-page.js";
 import { buildMaterializationPayload } from "./materialization.js";
 import { authorizeSnapshot, type AccessPolicy } from "./access.js";
@@ -163,7 +165,17 @@ export function createServer(
   };
   const resultSnapshotForAccess = (result: EngineResult) =>
     resultSnapshot(
-      { ...result, rows: [], row_ids: [] },
+      {
+        ...result,
+        receipt: {},
+        evidence: [],
+        source_versions: [],
+        cell_diagnostics: [],
+        research_quality: undefined,
+        query_feedback: undefined,
+        rows: [],
+        row_ids: [],
+      },
       {
         result_id: result.result_id,
         snapshot_id: "access-check",
@@ -1846,11 +1858,21 @@ export function createServer(
           result.query_feedback = checkedFeedback.data;
         else delete result.query_feedback;
       }
+      if (Object.hasOwn(result, "research_quality")) {
+        const checkedQuality = qualitySchema.safeParse(result.research_quality);
+        if (checkedQuality.success)
+          result.research_quality = checkedQuality.data;
+        else delete result.research_quality;
+      }
       return result;
     };
-    const engineResult = (raw: Record<string, unknown>): CallToolResult => {
+    const engineResult = (
+      raw: Record<string, unknown>,
+      paged = false,
+    ): CallToolResult => {
       let result = sanitizedResult(raw);
       if (
+        !paged &&
         Array.isArray(result.rows) &&
         Array.isArray(result.row_ids) &&
         Array.isArray(result.columns) &&
@@ -1901,7 +1923,9 @@ export function createServer(
         "SEM_EXTRACT",
         "SEM_EXTRACT_ALL",
         "SEM_NORM",
+        "CURATED_CITATION",
       ]),
+      advisory: z.boolean().optional(),
       status: diagnosticStatus,
       reason: z.enum([
         "not_stated_in_inspected_evidence",
@@ -1915,6 +1939,16 @@ export function createServer(
         "capacity_limited",
         "resolved",
         "unknown",
+        "row_not_found",
+        "row_ambiguous",
+        "unknown_column",
+        "null_target",
+        "source_not_retained",
+        "source_identity_invalid",
+        "source_text_unavailable",
+        "quote_range_mismatch",
+        "quote_not_found",
+        "quote_ambiguous",
       ]),
       source_version_id: referenceId.nullable().optional(),
       inspected_windows: z
@@ -2004,41 +2038,7 @@ export function createServer(
           .describe(
             "Declare identity and required cells only for columns projected by this query. Use answer_intent for overall requested fields absent from intermediate results. Missing cell values report coverage gaps without rejecting results.",
           ),
-        citations: z
-          .array(
-            z
-              .object({
-                match: z
-                  .record(
-                    key,
-                    z.union([
-                      z.string().max(12000),
-                      z
-                        .number()
-                        .finite()
-                        .refine(
-                          (value) =>
-                            !Number.isInteger(value) ||
-                            Number.isSafeInteger(value),
-                        ),
-                      z.boolean(),
-                      z.null(),
-                    ]),
-                  )
-                  .refine(
-                    (value) =>
-                      Object.keys(value).length > 0 &&
-                      Object.keys(value).length <= 8,
-                  ),
-                column_key: key,
-                source_version_id: id,
-                quote: z.string().min(1).max(12000),
-                start: z.number().int().nonnegative().optional(),
-                end: z.number().int().nonnegative().optional(),
-              })
-              .strict(),
-          )
-          .max(2048)
+        citations: curatedCitationsSchema
           .optional()
           .describe(
             "Attach an agent-selected supporting quotation to a curated output cell. match must identify exactly one output row by exact typed wire values (use strings for BIGINT/DECIMAL). Use a canonical source_version_id retained by this query's authorized inputs, with an exact quote and optional Unicode-code-point start/end offsets. Sources/URLs or matching text alone never establish attribution. Invalid/ambiguous individual citations return advisory citation_feedback without discarding rows; quotations establish textual support, not factual truth. Reuse saved inputs and zero search/model budgets for citation-only repair.",
@@ -2496,9 +2496,27 @@ export function createServer(
       },
       (args) =>
         safe(async () => {
-          const result = await engine.call<EngineResult>("read_result", args);
+          const projected = await engine.inspectResult?.({
+            ...args,
+            mode: "rows",
+            max_bytes: publicPageBytes,
+          });
+          const result = (projected ??
+            (await engine.call<EngineResult>(
+              "read_result",
+              args,
+            ))) as EngineResult & Record<string, unknown>;
           authorizeSnapshot(resultSnapshotForAccess(result), options.access);
-          return engineResult(result as unknown as Record<string, unknown>);
+          return projected
+            ? engineResult(
+                resultInspectionPage(
+                  sanitizedResult(result) as EngineResult &
+                    Record<string, unknown>,
+                  publicPageBytes,
+                ),
+                true,
+              )
+            : engineResult(result);
         }),
     );
     tools.registerTool(
@@ -2516,7 +2534,7 @@ export function createServer(
             source_offset: z.number().int().nonnegative().default(0),
             source_limit: z.number().int().min(0).max(100).default(100),
             collection: z
-              .enum(["rows", "evidence", "source_versions"])
+              .enum(["rows", "evidence", "source_versions", "cell_diagnostics"])
               .optional(),
             record_index: z.number().int().nonnegative().optional(),
             chunk_offset: z.number().int().nonnegative().optional(),
@@ -2531,37 +2549,63 @@ export function createServer(
       },
       (args) =>
         safe(async () => {
-          const result = await engine.call<
-            EngineResult & Record<string, unknown>
-          >("read_result", {
-            result_id: args.result_id,
-            offset:
-              args.collection === "rows"
-                ? (args.record_index ?? args.offset)
-                : args.offset,
-            limit: args.collection === "rows" ? 1 : args.limit,
+          if (args.collection && args.record_index === undefined)
+            throw new Error("record_index is required for chunk inspection");
+          if (
+            !args.collection &&
+            [args.record_index, args.chunk_offset, args.chunk_limit].some(
+              (value) => value !== undefined,
+            )
+          )
+            throw new Error("collection is required for chunk inspection");
+          const projected = await engine.inspectResult?.({
+            ...args,
+            mode: "evidence",
+            max_bytes: publicPageBytes,
           });
+          const result = (projected ??
+            (await engine.call<EngineResult>("read_result", {
+              result_id: args.result_id,
+              offset:
+                args.collection === "rows" ? args.record_index : args.offset,
+              limit: args.collection === "rows" ? 1 : args.limit,
+            }))) as EngineResult & Record<string, unknown>;
           authorizeSnapshot(resultSnapshotForAccess(result), options.access);
-          const sanitized = sanitizedResult(result) as unknown as EngineResult;
+          const sanitized = sanitizedResult(result) as EngineResult &
+            Record<string, unknown>;
           if (args.collection) {
-            if (args.record_index === undefined)
-              throw new Error("record_index is required for chunk inspection");
+            if (projected) {
+              const chunkFields = [
+                "result_id",
+                "content_sha256",
+                "collection",
+                "record_index",
+                "row_id",
+                "encoding",
+                "offset_unit",
+                "chunk_offset",
+                "next_chunk_offset",
+                "total_characters",
+                "json_chunk",
+              ];
+              return engineResult(
+                Object.fromEntries(
+                  chunkFields
+                    .filter((field) => Object.hasOwn(projected, field))
+                    .map((field) => [field, projected[field]]),
+                ),
+                true,
+              );
+            }
             return engineResult(
               resultRecordChunk(sanitized, {
+                ...args,
                 collection: args.collection,
-                record_index: args.record_index,
-                chunk_offset: args.chunk_offset,
-                chunk_limit: args.chunk_limit,
+                record_index: args.record_index!,
                 maxBytes: publicPageBytes,
               }),
             );
           }
-          if (
-            args.record_index !== undefined ||
-            args.chunk_offset !== undefined ||
-            args.chunk_limit !== undefined
-          )
-            throw new Error("collection is required for chunk inspection");
           const quality = qualitySchema.safeParse(result.research_quality);
           const feedback = queryFeedbackSchema.safeParse(result.query_feedback);
           const pageRows = new Set(result.row_ids);
@@ -2578,17 +2622,34 @@ export function createServer(
             const checked = cellDiagnosticSchema.safeParse(entry);
             return checked.success ? [checked.data] : [];
           });
-          return engineResult(
-            resultEvidencePage(
-              {
-                ...sanitized,
-                cell_diagnostics: diagnostics,
-                ...(quality.success ? { research_quality: quality.data } : {}),
-                ...(feedback.success ? { query_feedback: feedback.data } : {}),
-              },
-              { ...args, maxBytes: publicPageBytes },
-            ),
+          if (projected) {
+            const output = {
+              ...sanitized,
+              cell_diagnostics: diagnostics,
+              cell_diagnostics_omitted:
+                Number(result.cell_diagnostics_omitted ?? 0) +
+                rawDiagnostics.length -
+                diagnostics.length,
+            };
+            return engineResult(
+              resultInspectionPage(output, publicPageBytes),
+              true,
+            );
+          }
+          const publicEvidence = resultEvidencePage(
+            {
+              ...sanitized,
+              cell_diagnostics: diagnostics,
+              ...(quality.success ? { research_quality: quality.data } : {}),
+              ...(feedback.success ? { query_feedback: feedback.data } : {}),
+            },
+            { ...args, maxBytes: publicPageBytes },
           );
+          publicEvidence.cell_diagnostics_omitted =
+            Number(publicEvidence.cell_diagnostics_omitted ?? 0) +
+            rawDiagnostics.length -
+            diagnostics.length;
+          return engineResult(publicEvidence);
         }),
     );
     for (const method of ["run_status", "cancel"] as const)

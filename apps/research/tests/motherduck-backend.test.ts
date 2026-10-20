@@ -1,3 +1,4 @@
+import { WORKER_FEATURE_CONTRACTS } from "../server/feature-contracts.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -157,6 +158,7 @@ class Harness {
   flightConfig: Row = {};
   flightSecrets: string[] = [];
   statements: string[] = [];
+  returnedRows: Row[][] = [];
   runAckPatch: Row = {};
   resultLookups = new Map<string, number>();
   loseSubmissionResponse = false;
@@ -227,6 +229,9 @@ class Harness {
               {
                 instance_type: "F4",
                 max_runtime_sec: 120,
+                contracts_literal: JSON.stringify(
+                  JSON.stringify(WORKER_FEATURE_CONTRACTS),
+                ),
                 source_hash: reviewedSourceHash,
                 requirements_hash: reviewedRequirementsHash,
                 secrets_json: JSON.stringify(this.flightSecrets),
@@ -300,6 +305,7 @@ class Harness {
             (this.resultLookups.get(values[0]) ?? 0) + 1,
           );
         const rows = await this.sql.request(connectionId, "query", sql, values);
+        this.returnedRows.push(rows);
         if (sql === "COMMIT" && this.loseCommitResponse) {
           this.loseCommitResponse = false;
           throw Object.assign(new Error("Synthetic lost commit response"), {
@@ -4435,6 +4441,207 @@ test("preparation byte refusal rolls back all import reservations and the bindin
         ).rows[0].count,
     );
     assert.equal(Number(bindings), 0);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("citation features require the actual pinned worker declaration before reservation", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    const citation = {
+      match: { value: 1 },
+      column_key: "value",
+      source_version_id: "src_one",
+      quote: "Exact quotation",
+    };
+    for (const patch of [
+      { contracts_literal: "" },
+      { contracts_literal: JSON.stringify(JSON.stringify({})) },
+      { source_hash: "f".repeat(64) },
+      { requirements_hash: "f".repeat(64) },
+    ]) {
+      h.definitionPatch = patch;
+      const capabilities = await engine.call<Row>("capabilities");
+      assert.equal(capabilities.curated_citations, undefined);
+      await assert.rejects(
+        engine.call("query", { ...query(), citations: [citation] }),
+        (error: any) => error.code === "unsupported_capability",
+      );
+      await assert.rejects(
+        engine.call("import_table", {
+          columns: [{ key: "value", logical_type: "BIGINT" }],
+          rows: [{ value: "1" }],
+          row_ids: ["row_0"],
+          data_classification: "synthetic_fixture",
+          parents: [],
+          cell_origins: { encoding: "indexed-cells.v1", cells: [[0, 0, 0]] },
+        }),
+        (error: any) => error.code === "unsupported_capability",
+      );
+      assert.equal((await preparationRows(engine)).length, 0);
+    }
+    h.definitionPatch = {};
+    const capabilities = await engine.call<Row>("capabilities");
+    assert.deepEqual(
+      capabilities.worker_feature_contracts,
+      WORKER_FEATURE_CONTRACTS,
+    );
+    const job = await engine.call<Row>("query", {
+      ...query(),
+      citations: [citation],
+    });
+    h.definitionPatch = { contracts_literal: "" };
+    await assert.rejects(
+      engine.call("start_job", { job_id: job.job_id }),
+      (error: any) => error.code === "unsupported_capability",
+    );
+    assert.equal(h.submissions, 0);
+    assert.equal((await preparationRows(engine))[0].status, "queued");
+  } finally {
+    await h.close();
+  }
+});
+
+test("malformed hosted citation recipes cannot reserve a job or contact the worker", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    for (const citation of [
+      { quote: " \t" },
+      { quote: "Exact", start: 0 },
+      { quote: "Exact", start: 10, end: 2 },
+      { quote: "Exact", match: { value: "x".repeat(8001) } },
+    ]) {
+      const before = h.statements.length;
+      await assert.rejects(
+        engine.call("query", {
+          ...query(),
+          citations: [
+            {
+              match: { value: 1 },
+              column_key: "value",
+              source_version_id: "src_one",
+              ...citation,
+            },
+          ],
+        }),
+        (error: any) => error.code === "invalid_request",
+      );
+      assert.equal(h.statements.length, before);
+    }
+    assert.equal((await preparationRows(engine)).length, 0);
+    assert.equal(h.submissions, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("native hosted inspection projects retained bodies and reauthorizes every dependency", async () => {
+  const h = await harness();
+  try {
+    const engine = h.engine();
+    await engine.initialize();
+    const parent = await publish(engine, "wq_ancestor");
+    const root = await publish(engine, "wq_inspected", {
+      parents: [
+        {
+          result_id: parent.result_id,
+          content_sha256: parent.content_sha256,
+          view: "original",
+          amendment_revision: null,
+        },
+      ],
+    });
+    const source = {
+      source_version_id: "src_large",
+      content: 'Untrusted "quoted" \n é🦆 '.repeat(20000),
+    };
+    const metadata = {
+      ...root,
+      provenance: { snapshot_id: "saved", amendment_revision: 4 },
+      source_bindings: { src_large: "retained" },
+      research_requirements: { fields: ["value"], key_columns: ["value"] },
+      created_at: "2026-10-19T00:00:00Z",
+      profile_revision: "b".repeat(64),
+      query_sha256: "c".repeat(64),
+      source_versions: [source],
+      evidence: [{ row_id: "row_0", status: "supported_text" }],
+      receipt: {
+        ...root.receipt,
+        resume_request: { private: "CONTROL_NOT_PUBLIC" },
+      },
+    };
+    await engine.transaction(true, (client) =>
+      client.query(
+        `UPDATE ${engine.table("results")} SET metadata=$1 WHERE id=$2`,
+        [JSON.stringify(metadata), root.result_id],
+      ),
+    );
+    h.returnedRows = [];
+    const row = await engine.inspectResult({
+      result_id: root.result_id,
+      mode: "rows",
+      limit: 1,
+    });
+    assert.deepEqual(row.rows, [{ value: "9007199254740993" }]);
+    assert.equal(row.source_page.total, 1);
+    assert.deepEqual(row.source_versions, []);
+    assert.deepEqual(row.provenance, metadata.provenance);
+    assert.equal(row.receipt.resume_request, undefined);
+    assert.ok(row.latest_receipt);
+    const page = await engine.inspectResult({
+      result_id: root.result_id,
+      mode: "evidence",
+      limit: 1,
+      max_bytes: 65536,
+    });
+    assert.equal(page.source_page.next_offset, null);
+    assert.equal(page.source_page.chunk_required.record_index, 0);
+    let encoded = "",
+      offset = 0;
+    do {
+      const chunk = await engine.inspectResult({
+        result_id: root.result_id,
+        collection: "source_versions",
+        record_index: 0,
+        chunk_offset: offset,
+        max_bytes: 65536,
+      });
+      assert.equal(chunk.offset_unit, "unicode_code_points");
+      encoded += chunk.json_chunk;
+      if (chunk.next_chunk_offset === null) break;
+      assert.ok(chunk.next_chunk_offset > offset);
+      offset = chunk.next_chunk_offset;
+    } while (true);
+    assert.deepEqual(JSON.parse(encoded), source);
+    assert.ok(
+      h.returnedRows.every(
+        (rows) => Buffer.byteLength(JSON.stringify(rows)) < 65536,
+      ),
+    );
+    assert.ok(!JSON.stringify(h.returnedRows).includes("CONTROL_NOT_PUBLIC"));
+    await engine.transaction(true, (client) =>
+      client.query(
+        `UPDATE ${engine.table("results")} SET revoked=1 WHERE id=$1`,
+        [parent.result_id],
+      ),
+    );
+    for (const params of [
+      { mode: "rows" },
+      { mode: "evidence" },
+      { collection: "source_versions", record_index: 0 },
+      { collection: "rows", record_index: 0 },
+    ]) {
+      await assert.rejects(
+        engine.inspectResult({ result_id: root.result_id, ...params }),
+        (error: any) => error.code === "unauthorized",
+      );
+    }
     assert.equal(h.submissions, 0);
   } finally {
     await h.close();

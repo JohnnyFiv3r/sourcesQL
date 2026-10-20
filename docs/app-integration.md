@@ -109,8 +109,11 @@ retained source body on each row page. Optional `columns` narrows wide rows.
 and `source_offset/source_limit`; follow the returned offsets for each collection.
 An oversized record exposes its immutable index. Request `collection`,
 `record_index`, `chunk_offset` and `chunk_limit` on that same tool, concatenate
-`json_chunk` strings and parse the complete JSON. Chunk offsets use UTF-16 code
-units, with surrogate pairs kept intact. Every page and chunk reauthorizes the
+`json_chunk` strings and parse the complete JSON. Follow the returned `offset_unit`: current producer reads use Unicode code points;
+legacy gateway chunking uses UTF-16 code units and keeps surrogate pairs intact.
+An oversized first record returns `complete:false`, `next_offset:null` and a
+`chunk_required` request. After reconstructing it, continue with
+`next_offset_after_chunk`; never repeat the same page cursor. Every page and chunk reauthorizes the
 result. Arrays, offsets, omitted metadata and totals describe the response, not
 loss of retained data. Full immutable records remain exportable.
 
@@ -130,3 +133,13 @@ repairs can use saved inputs and zero search/model budgets.
 App display previews bound per-cell sources and quotations; complete canonical
 evidence remains inspectable. Effective materialization preserves citations only
 for explicitly identified unchanged cells; manual decisions stay separate.
+
+Current local engines and the MotherDuck controller project evidence/source pages
+and JSON substrings before transferring retained bodies to the gateway. Each
+read freshly authorizes the complete canonical parent closure; inspection never
+starts a Flight or provider call. Public metadata remains present when it fits;
+`metadata_omitted` identifies optional fields excluded by the response allowance.
+The database still parses legacy JSON metadata blobs, and local row reads still
+load the bounded table payload. This is bounded producer transfer, not indexed
+record storage or a claim of constant-time chunk access. An older local engine
+without the inspection contract uses the bounded gateway response fallback.
