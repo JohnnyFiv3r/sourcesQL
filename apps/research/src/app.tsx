@@ -1254,8 +1254,12 @@ function Workspace() {
         (height, element) => height + (element as HTMLElement).offsetHeight,
         0,
       );
-      // Reserve the same dock clearance before and after a selection.
+      // Keep page boundaries stable when selection controls appear, while
+      // letting the unselected frame shrink to the table and footer.
       const padding = getComputedStyle(viewport);
+      const dockSpace = parseFloat(
+        padding.getPropertyValue("--selection-dock-space"),
+      );
       // Layout measurements must ignore the fallback entrance transform.
       const available =
         (inlineHeightLimit === null
@@ -1264,7 +1268,7 @@ function Workspace() {
         heading.offsetHeight -
         (footer?.offsetHeight ?? 0) -
         parseFloat(padding.paddingTop) -
-        parseFloat(padding.paddingBottom) -
+        Math.max(dockSpace, parseFloat(padding.paddingBottom)) -
         (viewport.querySelector<HTMLElement>(".refresh-context")
           ?.offsetHeight ?? 0);
       const rowHeight = firstRow.offsetHeight;
@@ -1290,7 +1294,7 @@ function Workspace() {
     const workspace = viewport.closest<HTMLElement>(".workspace")!;
     const measure = () => {
       // Measure content, not the flex-filled viewport or a transformed screen
-      // rectangle. Persistent dock clearance keeps selection from resizing it.
+      // rectangle. Include dock clearance only when selection actions exist.
       const content = [
         ...Array.from(
           workspace.querySelectorAll<HTMLElement>(":scope > .app-header"),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import ast
 import csv
 import hashlib
 import importlib.util
@@ -16,6 +17,7 @@ import zipfile
 
 import pytest
 
+from sourcesql.feature_contracts import WORKER_FEATURE_CONTRACTS
 from sourcesql.resources import build_personal_cloud_archive
 
 spec = importlib.util.spec_from_file_location(
@@ -133,6 +135,18 @@ def test_full_current_source_flight_retains_the_reviewed_200kb_limit(tmp_path):
     wheel = tmp_path / f"sourcesql-{runtime['version']}-py3-none-any.whl"
     wheel.write_bytes(archive(files))
     manifest = builder.build(wheel, tmp_path / "flight")
+    assert manifest["worker_feature_contracts"] == WORKER_FEATURE_CONTRACTS
+    generated = ast.parse((tmp_path / "flight/flight.py").read_text())
+    declaration = next(
+        node
+        for node in generated.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "SOURCESQL_CONTRACTS_JSON"
+            for target in node.targets
+        )
+    )
+    assert json.loads(ast.literal_eval(declaration.value)) == WORKER_FEATURE_CONTRACTS
     assert manifest["flight_source_bytes"] <= 200_000
     assert manifest["execution_wheel_omitted_files"] == list(builder.EXECUTION_OMISSIONS)
     assert manifest["tokenizer_hydration"] == {

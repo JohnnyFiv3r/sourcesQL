@@ -27,6 +27,13 @@ from sourcesql.storage.store import Store
 from sourcesql.research_quality import validate_requirements, assess_requirements
 from sourcesql.query_feedback import build_query_feedback, observe_result
 from sourcesql.execution.worker import run_sql, WorkerSession
+from sourcesql.execution.materialized_evidence import validate_cell_origins, preserve_cell_evidence
+from sourcesql.curation import validate_citations, bind_curated_citations
+from sourcesql.feature_contracts import (
+    CURATED_CITATION_CONTRACT,
+    MATERIALIZATION_CONTRACT,
+    WORKER_FEATURE_CONTRACTS,
+)
 
 
 def now():
@@ -283,6 +290,13 @@ class Engine:
             "sqlglot_version": "30.19.0",
             "operators": sorted(EXTERNAL),
             "input_views": ["original", "effective", "sources"],
+            "worker_feature_contracts": dict(WORKER_FEATURE_CONTRACTS),
+            "curated_citations": {
+                "contract": CURATED_CITATION_CONTRACT,
+                "quote_offset_unit": "unicode_code_points",
+                "advisory": True,
+                "factual_truth_verified": False,
+            },
             "default_profile": "fixture",
             "profiles": [
                 {
@@ -398,6 +412,7 @@ class Engine:
             "continuation_of",
             "research_requirements",
             "answer_intent",
+            "citations",
         }
         if not isinstance(request, dict) or set(request) - allowed:
             raise SourcesQLError("invalid_request", "Unknown request field")
@@ -428,6 +443,7 @@ class Engine:
         inputs, parents, classification = self._inputs(request.get("inputs", {}))
         plan = admit(query, parameters, {k: v.columns for k, v in inputs.items()})
         validate_requirements(request.get("research_requirements"), plan.columns)
+        validate_citations(request.get("citations"))
         operators = getattr(plan, "operators", getattr(plan, "custom_operators", []))
         has_external = any(operator != "SOURCE_WINDOW" for operator in operators)
         if classification == "private_derived" and has_external:
@@ -645,7 +661,7 @@ class Engine:
             if parent.get("view") == "effective":
                 effective.append(
                     meta.get("provenance", {}).get("materialization_contract")
-                    == "sourcesql.app-effective.v1"
+                    == MATERIALIZATION_CONTRACT
                 )
         result = {
             "found": True,
@@ -1694,6 +1710,28 @@ class Engine:
             evidence, source_bindings, bound_cells, cell_diagnostics = attribution.bind(
                 table, row_ids, evidence
             )
+            citation_feedback = {}
+            if request.get("citations"):
+                curated, citation_diagnostics, citation_feedback = bind_curated_citations(
+                    table,
+                    row_ids,
+                    sources,
+                    validate_citations(request["citations"]),
+                    wire_rows=[
+                        {c.key: wire_value(row[c.key], c.logical_type) for c in table.columns}
+                        for row in table.rows
+                    ],
+                )
+                evidence.extend(curated)
+                cell_diagnostics.extend(citation_diagnostics)
+                bound_cells = len(
+                    {
+                        (entry["row_id"], entry["column_key"])
+                        for entry in evidence
+                        if entry.get("row_id") and entry.get("column_key")
+                    }
+                )
+                receipt["citation_feedback"] = citation_feedback
             requirements = validate_requirements(
                 request.get("research_requirements"), table.columns
             )
@@ -1740,6 +1778,11 @@ class Engine:
                         "research_requirements": requirements,
                         "research_quality": quality,
                         "query_feedback": receipt["query_feedback"],
+                        **(
+                            {"citation_feedback": citation_feedback}
+                            if request.get("citations")
+                            else {}
+                        ),
                         "replay_level": "recomputable_inputs" if sources else "values_only",
                         "created_at": receipt["finished_at"],
                     },
@@ -1792,6 +1835,9 @@ class Engine:
             if session:
                 session.__exit__(None, None, None)
 
+    def inspect_result(self, **params):
+        return self.store.inspect_result(params, wire_value, self.allow_private)
+
     def read_result(self, result_id, offset=0, limit=100, columns=None):
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
             raise SourcesQLError("invalid_request", "Invalid page bounds", "read")
@@ -1832,7 +1878,11 @@ class Engine:
         data_classification="private_local",
         provenance=None,
         parents=None,
+        cell_origins=None,
     ):
+        origins = validate_cell_origins(
+            cell_origins, columns=columns, row_ids=row_ids, parents=parents
+        )
         if data_classification not in (
             "public_web",
             "private_local",
@@ -1854,7 +1904,10 @@ class Engine:
                 data_classification = "private_derived"
         if not self.allow_private and data_classification in ("private_local", "private_derived"):
             raise SourcesQLError("unauthorized", "This launcher cannot derive private data")
-        identity = digest([table.to_dict(), row_ids, data_classification, provenance, parents])
+        recipe = [table.to_dict(), row_ids, data_classification, provenance, parents]
+        if origins:
+            recipe.append(origins)
+        identity = digest(recipe)
         return table, data_classification, provenance, parents, identity
 
     def import_table(
@@ -1865,9 +1918,19 @@ class Engine:
         data_classification="private_local",
         provenance=None,
         parents=None,
+        cell_origins=None,
     ):
+        origins = validate_cell_origins(
+            cell_origins, columns=columns, row_ids=row_ids, parents=parents
+        )
         table, data_classification, provenance, parents, identity = self._normalize_import(
-            columns, rows, row_ids, data_classification, provenance, parents
+            columns, rows, row_ids, data_classification, provenance, parents, origins
+        )
+        published_row_ids = row_ids or [
+            "row_" + digest([identity, i])[:32] for i in range(len(rows))
+        ]
+        copied_evidence, copied_sources = preserve_cell_evidence(
+            self.store, table, published_row_ids, origins, parents, wire_value
         )
         stamp = now()
         run_id = "run_import_" + identity[:32]
@@ -1912,11 +1975,15 @@ class Engine:
                     "parents": parents,
                     "data_classification": data_classification,
                     "provenance": provenance,
-                    "row_ids": row_ids
-                    or ["row_" + digest([identity, i])[:32] for i in range(len(rows))],
+                    "row_ids": published_row_ids,
                     "created_at": stamp,
                     "receipt": receipt,
-                    "lineage_precision": "input_set",
+                    "lineage_precision": "cell_where_proven" if copied_evidence else "input_set",
+                    "source_versions": copied_sources,
+                    "evidence": copied_evidence,
+                    "bound_evidence_cells": len(
+                        {(e["row_id"], e["column_key"]) for e in copied_evidence}
+                    ),
                     "replay_level": "values_only",
                 },
             )

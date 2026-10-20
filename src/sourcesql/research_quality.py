@@ -189,6 +189,10 @@ def assess_requirements(
     for diagnostic in cell_diagnostics or []:
         if not isinstance(diagnostic, dict):
             continue
+        # A rejected optional attribution is feedback about that quotation, not
+        # an extraction failure or a missing value. NULL still gets a gap below.
+        if diagnostic.get("operator") == "CURATED_CITATION" and diagnostic.get("advisory") is True:
+            continue
         row_id, key = diagnostic.get("row_id"), diagnostic.get("column_key")
         if (
             isinstance(row_id, str)

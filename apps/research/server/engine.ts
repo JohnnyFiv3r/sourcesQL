@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { WORKER_FEATURE_CONTRACTS } from "./feature-contracts.js";
+import { curatedCitationsSchema } from "./citation-contract.js";
 import { queryFeedbackSchema } from "../src/query-feedback.js";
 import {
   snapshotSchema,
@@ -47,6 +49,10 @@ export type EffectiveMaterialization = {
   payload: Record<string, unknown>;
 };
 export interface ResearchEngine {
+  /** Bounded producer-side read; undefined supports a legacy read fallback. */
+  inspectResult?(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | undefined>;
   lookupPreparedQuery?(
     operation: "query" | "explain",
     args: Record<string, unknown>,
@@ -125,7 +131,52 @@ export class PythonEngine implements ResearchEngine {
             receipt: await this.call("run_status", { run_id: prior.run_id }),
           };
   }
-  call<T = Record<string, unknown>>(
+  private async features(): Promise<Record<string, unknown>> {
+    const capabilities =
+      await this.bridgeCall<Record<string, unknown>>("capabilities");
+    const declared = capabilities.worker_feature_contracts;
+    return declared && typeof declared === "object" && !Array.isArray(declared)
+      ? (declared as Record<string, unknown>)
+      : {};
+  }
+  async inspectResult(params: Record<string, unknown>) {
+    if (
+      (await this.features()).result_inspection !==
+      WORKER_FEATURE_CONTRACTS.result_inspection
+    )
+      return undefined;
+    return this.bridgeCall<Record<string, unknown>>("inspect_result", params);
+  }
+  async call<T = Record<string, unknown>>(
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<T> {
+    if (
+      params.citations !== undefined &&
+      !curatedCitationsSchema.safeParse(params.citations).success
+    )
+      throw new Error("invalid_request: Invalid curated citation contract");
+    const origins = params.cell_origins as
+      { cells?: unknown[] } | unknown[] | undefined;
+    const needed: (keyof typeof WORKER_FEATURE_CONTRACTS)[] = [];
+    if (Array.isArray(params.citations) && params.citations.length)
+      needed.push("curated_citations");
+    if (Array.isArray(origins) ? origins.length : origins?.cells?.length) {
+      needed.push("materialized_cell_origins");
+      if (!Array.isArray(origins)) needed.push("cell_origins_encoding");
+    }
+    if (needed.length) {
+      const features = await this.features();
+      if (
+        needed.some((name) => features[name] !== WORKER_FEATURE_CONTRACTS[name])
+      )
+        throw new Error(
+          "unsupported_capability: Update the local worker to support this citation/materialization contract before retrying",
+        );
+    }
+    return this.bridgeCall<T>(method, params);
+  }
+  private bridgeCall<T = Record<string, unknown>>(
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
@@ -226,6 +277,7 @@ function safeCellDiagnostic(value: Record<string, unknown>): CellDiagnostic {
   const candidate: CellDiagnostic = {
     status: status.success ? status.data : "unknown",
   };
+  if (typeof value.advisory === "boolean") candidate.advisory = value.advisory;
   for (const [raw, field] of [
     ["diagnostic_id", "diagnosticId"],
     ["source_version_id", "sourceVersionId"],
@@ -395,14 +447,21 @@ export function resultSnapshot(
         ]);
         if (seenSupport.has(supportIdentity)) continue;
         seenSupport.add(supportIdentity);
-        (evidence[field] ??= []).push(span.quote);
+        // Display a bounded preview; complete canonical evidence remains in
+        // sourcesql_inspect_evidence and exports.
+        const quotes = (evidence[field] ??= []);
+        if (quotes.length < 12) quotes.push(span.quote);
         // Only canonical source-version references establish citation links.
         // An output URL or an input-set reference cannot prove this cell.
         const url = sources.get(sourceVersionId)?.url;
         if (typeof url === "string" && webUrl.safeParse(url).success) {
           urls.add(url);
-          if (!(cellSources[field] ?? []).some((source) => source.url === url))
-            (cellSources[field] ??= []).push({ url });
+          const fieldSources = (cellSources[field] ??= []);
+          if (
+            fieldSources.length < 12 &&
+            !fieldSources.some((source) => source.url === url)
+          )
+            fieldSources.push({ url });
         }
       }
     }

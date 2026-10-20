@@ -10,9 +10,10 @@ import sqlite3
 import uuid
 from sourcesql.contracts import Column, Table, SourcesQLError, canonical, digest
 from sourcesql.storage.stages import StageJournalMixin
+from sourcesql.storage.inspection import InspectionMixin
 
 
-class Store(StageJournalMixin):
+class Store(StageJournalMixin, InspectionMixin):
     def __init__(self, root: Path | str, quota: int = 100 * 1024 * 1024):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)

@@ -123,6 +123,14 @@ test("actual fixture engine supports fresh manual claims and SQL continuation af
       partial_policy: "strict",
     });
     const result = queried.structuredContent as unknown as EngineResult;
+    Object.assign(
+      result,
+      (
+        await call("sourcesql_inspect_evidence", {
+          result_id: result.result_id,
+        })
+      ).structuredContent,
+    );
     assert.deepEqual(result.row_ids, [canonicalRow]);
     assert.equal(result.rows[0].grid_status, "proposed");
     const source = result.source_versions.find(

@@ -127,6 +127,7 @@ export const cellDiagnosticStatusSchema = z.enum([
 export const cellDiagnosticSchema = z
   .object({
     status: cellDiagnosticStatusSchema,
+    advisory: z.boolean().optional(),
     diagnosticId: id.optional(),
     sourceVersionId: id.optional(),
     valuePath: z

@@ -340,3 +340,99 @@ test("inline roots use verified dataRef dependencies even when the root is not r
   assert.equal(payload.provenance.amendment_revision, 0);
   assert.deepEqual(payload.row_ids, ["row_0"]);
 });
+
+test("quoted unchanged cells retain explicit canonical origins while manual corrections do not", () => {
+  const root = view("cited", { resultId: "wq_cited" });
+  root.snapshot.rows[0].evidence.value = ["An inspected canonical quote."];
+  root.snapshot.rows[0].cellSources = {
+    value: [{ url: "https://source.example/retained" }],
+  };
+  const original = buildMaterializationPayload(context(root));
+  assert.deepEqual(original.cell_origins, {
+    encoding: "indexed-cells.v1",
+    cells: [[0, 0, 0]],
+  });
+  root.amendments.push({
+    snapshot_id: "cited",
+    row_id: "row_0",
+    field: "value",
+    value: "Manual interpretation",
+    originalValue: "original",
+    reason: "User decision",
+    revision: 1,
+    expected_revision: 0,
+    mutation_id: "68af54ae-d37d-431a-a8c0-993d3b03d54f",
+    createdAt: "2026-10-19T12:00:00Z",
+  });
+  root.revision = 1;
+  const corrected = buildMaterializationPayload(context(root));
+  assert.equal(corrected.cell_origins, undefined);
+  assert.equal(corrected.rows[0].value, "Manual interpretation");
+});
+
+test("an accepted refresh citation names its exact recorded canonical source", () => {
+  const root = view("baseline", { resultId: "wq_base" });
+  const refresh = view("refresh", {
+    resultId: "wq_refresh",
+    rows: [{ value: "New observation" }],
+  });
+  refresh.snapshot.rows[0].evidence.value = [
+    "New observation from an inspected passage.",
+  ];
+  refresh.snapshot.rows[0].cellSources = {
+    value: [{ url: "https://source.example/refresh" }],
+  };
+  root.amendments.push({
+    snapshot_id: "baseline",
+    row_id: "row_0",
+    field: "value",
+    value: "New observation",
+    originalValue: "original",
+    sourceSnapshotId: "refresh",
+    revision: 1,
+    expected_revision: 0,
+    mutation_id: "68af54ae-d37d-431a-a8c0-993d3b03d54f",
+    createdAt: "2026-10-19T12:00:00Z",
+  });
+  root.revision = 1;
+  const payload = buildMaterializationPayload(context(root, refresh));
+  assert.deepEqual(payload.cell_origins, {
+    encoding: "indexed-cells.v1",
+    cells: [[0, 0, 1]],
+  });
+  assert.deepEqual(payload.provenance.dependencies, ["wq_base", "wq_refresh"]);
+});
+
+test("a fully cited 1000 by 128 table fits the hosted request envelope", () => {
+  const columns = Array.from({ length: 128 }, (_, index) => ({
+    key: `field_${index}`,
+    label: `Field ${index}`,
+    logicalType: "VARCHAR",
+    nullable: false,
+  }));
+  const rows = Array.from({ length: 1000 }, (_, index) =>
+    Object.fromEntries(columns.map((column) => [column.key, `Value ${index}`])),
+  );
+  const root = view("large_cited", {
+    resultId: "wq_" + "a".repeat(64),
+    columns,
+    rows,
+  });
+  for (const row of root.snapshot.rows) {
+    row.evidence = Object.fromEntries(
+      columns.map((column) => [column.key, ["Inspected canonical quotation."]]),
+    );
+    row.cellSources = Object.fromEntries(
+      columns.map((column) => [
+        column.key,
+        [{ url: "https://source.example/retained" }],
+      ]),
+    );
+  }
+  const payload = buildMaterializationPayload(context(root));
+  assert.equal(payload.cell_origins?.cells.length, 128000);
+  assert.ok(Buffer.byteLength(JSON.stringify(payload)) < 16 * 1024 * 1024);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(payload.cell_origins)) < 2 * 1024 * 1024,
+  );
+});

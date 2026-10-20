@@ -28,6 +28,7 @@ import zipfile
 
 BUNDLE_MANIFEST = None
 BUNDLE_ENCODED = None
+SOURCESQL_CONTRACTS_JSON = None
 
 TOKENIZER_HYDRATION = {
     "resource": "sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz",

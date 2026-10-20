@@ -262,6 +262,12 @@ def build(wheel: Path, output: Path) -> dict:
     wheel = wheel.resolve()
     runtime, requirements = runtime_requirements(root)
     source_hashes = validate_wheel(root, wheel, runtime)
+    contract_spec = importlib.util.spec_from_file_location(
+        "sourcesql_build_contracts", root / "src/sourcesql/feature_contracts.py"
+    )
+    contracts = importlib.util.module_from_spec(contract_spec)
+    contract_spec.loader.exec_module(contracts)
+    worker_contracts = contracts.WORKER_FEATURE_CONTRACTS
     distribution_bytes = wheel.read_bytes()
     execution_bytes = execution_wheel(distribution_bytes)
     profile_source = (directory / "exa_profile.py").read_bytes()
@@ -296,6 +302,7 @@ def build(wheel: Path, output: Path) -> dict:
         "engine_source_sha256": source_hashes,
         "hosted_profile_sha256": digest(profile_source),
         "hosted_profile_default": "fixture",
+        "worker_feature_contracts": worker_contracts,
         "runtime": runtime,
         "credentials_embedded": False,
         "tests_embedded": False,
@@ -306,9 +313,13 @@ def build(wheel: Path, output: Path) -> dict:
         for node in ast.parse(template).body
         if isinstance(node, ast.Assign)
         and isinstance(node.targets[0], ast.Name)
-        and node.targets[0].id in {"BUNDLE_MANIFEST", "BUNDLE_ENCODED"}
+        and node.targets[0].id in {"BUNDLE_MANIFEST", "BUNDLE_ENCODED", "SOURCESQL_CONTRACTS_JSON"}
     }
-    if assignments != {"BUNDLE_MANIFEST": None, "BUNDLE_ENCODED": None}:
+    if assignments != {
+        "BUNDLE_MANIFEST": None,
+        "BUNDLE_ENCODED": None,
+        "SOURCESQL_CONTRACTS_JSON": None,
+    }:
         raise ValueError("Hosted Flight template assignments changed")
     encoded_manifest = base64.b64encode(
         lzma.compress(json.dumps(manifest, separators=(",", ":")).encode())
@@ -323,6 +334,11 @@ def build(wheel: Path, output: Path) -> dict:
     source = source.replace(
         "BUNDLE_ENCODED = None",
         "BUNDLE_ENCODED = " + repr(base64.b85encode(compressed).decode("ascii")),
+        1,
+    )
+    source = source.replace(
+        "SOURCESQL_CONTRACTS_JSON = None",
+        "SOURCESQL_CONTRACTS_JSON = " + json.dumps(json.dumps(worker_contracts, sort_keys=True)),
         1,
     )
     if len(source.encode()) > 200_000:

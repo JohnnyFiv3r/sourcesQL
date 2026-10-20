@@ -550,9 +550,9 @@ h1 {
   padding: 5px;
 }
 .table-scroll {
-  /* Keep space for selection actions without changing the content-sized frame. */
-  padding-bottom: var(--selection-dock-space);
-  scroll-padding-bottom: var(--selection-dock-space);
+  /* Reserve visible clearance only while selection actions are present. */
+  padding-bottom: var(--selection-clearance);
+  scroll-padding-bottom: var(--selection-clearance);
   overflow: auto;
   flex: 1;
   min-height: 0;
@@ -908,11 +908,15 @@ html[data-table-transition="out"] {
   margin-bottom: 15px;
 }
 .workspace-content {
+  --selection-clearance: 0px;
   position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+.workspace-content:has(.selection-dock) {
+  --selection-clearance: var(--selection-dock-space);
 }
 .workspace-notifications {
   position: absolute;
@@ -921,7 +925,7 @@ html[data-table-transition="out"] {
   display: flex;
   flex-direction: column;
   align-items: center;
-  max-height: max(0px, calc(100% - var(--selection-dock-space) - 24px));
+  max-height: max(0px, calc(100% - var(--selection-clearance, 0px) - 24px));
   overflow-y: auto;
   scrollbar-width: thin;
   pointer-events: none;

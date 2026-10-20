@@ -6,6 +6,32 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased citation and result-read correction
+
+Public result rows and retained evidence/source records now have separate byte-
+bounded pages, with lossless chunks for a single oversized record. Per-page and
+per-chunk authorization remains required; full immutable records stay retained.
+Agent-curated fields can attach explicit quotes from authorized canonical source
+versions. Invalid individual bindings produce advisory feedback while preserving
+rows. Quote existence is not a factual-truth or semantic-entailment guarantee.
+Effective-table v2 materialization carries existing citations through unchanged
+cells and keeps manual corrections uncited; v1 replay requires exact-handle
+inspection before new work. The inline table no longer reserves selection-control
+space when no selection is active. These changes require source-matched gateway
+and worker qualification before claiming deployed behavior; historical immutable
+findings are preserved. See [app integration](docs/app-integration.md) and the
+[materialization upgrade procedure](docs/materialization.md).
+
+The review correction checks explicit worker feature declarations against actual
+source/requirements pins before reserving affected jobs. Citation admission is
+shared by MCP and hosted reservation, with Python parity fixtures; rejected
+optional attributions remain separate from missing/extraction gaps. Promotion
+origins use compact indexed transport and one canonical validation recipe.
+Retained-body inspection now projects bounded metadata, records and substrings
+at the storage boundary, preserving public provenance and explicit omission
+feedback. Databases still parse legacy JSON blobs; indexed storage, changed
+budgets and deployment qualification are not implied by these source changes.
+
 ## Unreleased effective-table and recovery correction
 
 Query, explain and explicit materialization now share a coherent app-state

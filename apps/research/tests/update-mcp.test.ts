@@ -319,12 +319,28 @@ async function runCheck(t: { after(fn: () => Promise<void>): unknown }) {
     },
   });
   const existing = queried.structuredContent as unknown as EngineResult;
+  Object.assign(
+    existing,
+    (
+      await f.call("sourcesql_inspect_evidence", {
+        result_id: existing.result_id,
+      })
+    ).structuredContent,
+  );
   const found = await f.call("sourcesql_query", {
     request_id: randomUUID(),
     query:
       "SELECT title AS issuer, 300 AS capacity FROM WEB_SEARCH('synthetic organization discovery')",
   });
   const discovery = found.structuredContent as unknown as EngineResult;
+  Object.assign(
+    discovery,
+    (
+      await f.call("sourcesql_inspect_evidence", {
+        result_id: discovery.result_id,
+      })
+    ).structuredContent,
+  );
   const append = {
     request_id: input.request_id,
     existing_result_ref: {

@@ -65,12 +65,53 @@ def path_present(row: dict, path: tuple[str, ...]) -> bool:
     return True
 
 
-def checked_support(record: dict, sources: dict) -> list[dict]:
+class SupportValidationContext:
+    """Reuse only computed source hashes within one evidence operation.
+
+    The cache key contains the actual immutable text, not a caller-provided hash
+    or validity assertion. A changed source therefore cannot inherit validation
+    from an earlier version, even when it reuses a source-version identifier.
+    """
+
+    def __init__(self) -> None:
+        self._content_hashes: dict[tuple[str, str], str] = {}
+
+    def content_hash(self, source: dict) -> str:
+        text = source["content"]
+        key = (str(source.get("source_version_id")), text)
+        if key not in self._content_hashes:
+            self._content_hashes[key] = hashlib.sha256(text.encode()).hexdigest()
+        return self._content_hashes[key]
+
+    def source_hash(self, source: dict, *, expected_id: str) -> str | None:
+        """Check current source metadata against its computed text hash.
+
+        Only digest computation is cached. Identity and declared-hash checks run
+        again on every call, so mutated metadata cannot inherit an earlier pass.
+        Authorization remains the caller's separate, per-operation obligation.
+        """
+        if source.get("source_version_id") != expected_id or not isinstance(
+            source.get("content"), str
+        ):
+            return None
+        content_hash = self.content_hash(source)
+        if source.get("content_sha256", content_hash) != content_hash:
+            return None
+        return content_hash
+
+
+def checked_support(
+    record: dict, sources: dict, *, context: SupportValidationContext | None = None
+) -> list[dict]:
     source = sources.get(str(record.get("source_version_id")))
     if not source or record.get("status") not in ("supported_text", "processed", "no_match"):
         return []
+    content_hash = (context or SupportValidationContext()).source_hash(
+        source, expected_id=str(record.get("source_version_id"))
+    )
+    if content_hash is None:
+        return []
     text = source["content"]
-    content_hash = hashlib.sha256(text.encode()).hexdigest()
     support = []
     for span in record.get("support", []):
         start, end = span.get("start"), span.get("end")
@@ -102,6 +143,7 @@ class EvidenceContext:
         self.source_handles: dict[str, str] = {}
         self.source_windows: dict[str, tuple[int, int]] = {}
         self.diagnostics: dict[str, dict] = {}
+        self._support_validation = SupportValidationContext()
 
     def add_source(self, source: dict) -> None:
         sid = source["source_version_id"]
@@ -189,7 +231,7 @@ class EvidenceContext:
                         continue
                     index = rows[row_id]
                     full_path = (key, *path)
-                    support = checked_support(record, sources)
+                    support = checked_support(record, sources, context=self._support_validation)
                     if not support or path_value(table.rows[index], full_path) is None:
                         continue
                     token = "e_" + digest([rid, record.get("evidence_id"), full_path, support])[:32]
@@ -256,7 +298,7 @@ class EvidenceContext:
 
     def record(self, base: dict, fields: dict, target: dict) -> list[dict]:
         """Mint field-specific handles after validated semantic support is returned."""
-        support = checked_support(base, self.sources)
+        support = checked_support(base, self.sources, context=self._support_validation)
         grouped: dict[tuple[str, ...], list[dict]] = defaultdict(list)
         path: tuple[str, ...]
         for span in support:

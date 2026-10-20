@@ -33,6 +33,7 @@ def main():
         "query": engine.query,
         "explain": engine.explain,
         "read_result": engine.read_result,
+        "inspect_result": engine.inspect_result,
         "import_table": engine.import_table,
         "export": engine.export,
         "import": engine.import_bundle,

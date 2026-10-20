@@ -98,3 +98,48 @@ rendering. See [current status](../STATUS.md), [provider setup](providers.md) an
 UI bundles use content-derived resource identifiers. When a retired bundle is unavailable, reopen the saved snapshot with `open_research` to render it with the current UI; the saved research itself is unchanged.
 
 Manual update proposals use the existing table controls. The table opens without an inline review panel. Its updates icon opens the full review and publication dialog; selecting a proposed cell reveals Accept proposal and Keep current in the correction panel, with evidence collapsed until requested. Choices remain adjustable until explicit publication creates a successor. Published decisions remain available as history. Ordinary corrections and earlier observations stay separate.
+
+
+## Bounded result reads and curated citations
+
+`sourcesql_read_result` returns typed rows with actual `next_offset`, source and
+evidence totals, and bounded receipt/feedback metadata. It no longer repeats every
+retained source body on each row page. Optional `columns` narrows wide rows.
+`sourcesql_inspect_evidence` independently pages `evidence_offset/evidence_limit`
+and `source_offset/source_limit`; follow the returned offsets for each collection.
+An oversized record exposes its immutable index. Request `collection`,
+`record_index`, `chunk_offset` and `chunk_limit` on that same tool, concatenate
+`json_chunk` strings and parse the complete JSON. Follow the returned `offset_unit`: current producer reads use Unicode code points;
+legacy gateway chunking uses UTF-16 code units and keeps surrogate pairs intact.
+An oversized first record returns `complete:false`, `next_offset:null` and a
+`chunk_required` request. After reconstructing it, continue with
+`next_offset_after_chunk`; never repeat the same page cursor. Every page and chunk reauthorizes the
+result. Arrays, offsets, omitted metadata and totals describe the response, not
+loss of retained data. Full immutable records remain exportable.
+
+Host-authored interpretations can cite already retained passages with the query's
+optional `citations` array. Each entry supplies `match`, `column_key`, canonical
+`source_version_id`, and an exact `quote`. The selector must uniquely identify an
+output row with exact typed wire values; optional `start/end` use Unicode code
+points in the canonical source. Repeated quotations require offsets. Source IDs
+must belong to the query's authorized inputs or acquisitions. The coordinator
+checks source identity, text hash and quote coordinates, then stores the citation
+as `agent_selected_quote`. This proves a quotation exists, not semantic
+entailment or factual truth. Invalid individual bindings return advisory
+`citation_feedback` and cell diagnostics without deleting findings. Missing
+prices or other meaningful unknowns remain valid partial research. Citation-only
+repairs can use saved inputs and zero search/model budgets.
+
+App display previews bound per-cell sources and quotations; complete canonical
+evidence remains inspectable. Effective materialization preserves citations only
+for explicitly identified unchanged cells; manual decisions stay separate.
+
+Current local engines and the MotherDuck controller project evidence/source pages
+and JSON substrings before transferring retained bodies to the gateway. Each
+read freshly authorizes the complete canonical parent closure; inspection never
+starts a Flight or provider call. Public metadata remains present when it fits;
+`metadata_omitted` identifies optional fields excluded by the response allowance.
+The database still parses legacy JSON metadata blobs, and local row reads still
+load the bounded table payload. This is bounded producer transfer, not indexed
+record storage or a claim of constant-time chunk access. An older local engine
+without the inspection contract uses the bounded gateway response fallback.
