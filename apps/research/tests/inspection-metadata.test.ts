@@ -10,6 +10,7 @@ type Row = Record<string, unknown>;
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const python =
   process.env.SOURCESQL_TEST_PYTHON ??
+  process.env.SOURCESQL_PYTHON ??
   join(root, "local/python312/venv/bin/python");
 const size = (value: unknown) =>
   Buffer.byteLength(JSON.stringify(value), "utf8");

@@ -20,6 +20,7 @@ async function sqlFixture(metadata: Row, rows: Row[] = []) {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-inspection-"));
   const child = spawn(
     process.env.SOURCESQL_TEST_PYTHON ??
+      process.env.SOURCESQL_PYTHON ??
       join(root, "local/python312/venv/bin/python"),
     [
       fileURLToPath(
