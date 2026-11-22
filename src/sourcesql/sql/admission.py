@@ -91,7 +91,7 @@ class _ClosedDuckDB(DuckDB):
         # `$q1, $q2` tokenized as two parameters. The closed language binds
         # every value through `$name` parameters and has no dollar-quoted
         # literals, so `$` is always a parameter sigil here.
-        HEREDOC_STRINGS: list[str] = []
+        HEREDOC_STRINGS = []
 
     class Parser(DuckDBParser):
         def _parse_as_command(self, start: Any) -> exp.Command:
