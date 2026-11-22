@@ -445,7 +445,12 @@ export function createServer(
         result.provider_capacity_v1 = capacity.data;
     }
     if (receipt.status === "failed") {
-      const error = safeExecutionError(receipt.error_code);
+      const error = safeExecutionError(
+        receipt.error_code,
+        receipt.stage === "admission"
+          ? (receipt.error as { reason?: unknown } | undefined)?.reason
+          : undefined,
+      );
       result.error_code = error.code;
       result.error = error;
       Object.assign(result, safeFailureContext(receipt));

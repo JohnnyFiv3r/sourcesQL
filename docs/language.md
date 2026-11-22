@@ -5,6 +5,8 @@ only explicitly bound `input.<alias>` results, CTEs, derived relations and the w
 sources below. Closed AST validation rejects commands, physical tables, catalogs,
 file readers, extensions, arbitrary functions and multiple statements. Parameters
 use `$name` bindings; values never become SQL identifiers or interpolated SQL.
+`$` is always a parameter sigil (`$q1,$q2` and `$q1, $q2` admit identically);
+dollar-quoted string literals are not part of the language.
 
 Pure SQL includes INNER/LEFT/CROSS joins, DISTINCT, GROUP BY/HAVING, set operations,
 ORDER BY/LIMIT/OFFSET, approved arithmetic/string/JSON functions, scalar casts,

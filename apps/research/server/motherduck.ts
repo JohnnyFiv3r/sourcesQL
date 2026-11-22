@@ -734,7 +734,14 @@ export class MotherDuckEngine implements ResearchEngine {
     return row;
   }
   private envelope(job: Row): Row {
-    const error = safeExecutionError(job.error_code);
+    const failure =
+      job.status === "failed" && job.output_json
+        ? JSON.parse(job.output_json)
+        : {};
+    const error = safeExecutionError(
+      job.error_code,
+      failure?.stage === "admission" ? failure.refusal_reason : undefined,
+    );
     return {
       job_id: job.id,
       operation: job.operation,
@@ -759,9 +766,7 @@ export class MotherDuckEngine implements ResearchEngine {
             error_code: error.code,
             ...(job.engine_run_id ? { run_id: job.engine_run_id } : {}),
             error,
-            ...safeFailureContext(
-              job.output_json ? JSON.parse(job.output_json) : {},
-            ),
+            ...safeFailureContext(failure),
           }
         : {}),
     };

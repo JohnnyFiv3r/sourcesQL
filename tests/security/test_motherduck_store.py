@@ -286,6 +286,52 @@ def test_admission_failure_retains_its_code_without_a_run_result_or_private_mess
     assert job(reopened, job_id)["error_code"] == "unsupported_query"
 
 
+def test_admission_refusal_reason_is_kept_only_for_an_admission_refusal(make_store, tmp_path):
+    from sourcesql.sql.admission import public_refusal_reason
+
+    store = make_store()
+    request = {"query": "SELECT title FROM WEB_SEARCH(", "profile": "fixture"}
+    job_id, context = seed_job(store, request=request)
+    token, claimed = claim(store, job_id, context)
+    with pytest.raises(SourcesQLError) as error:
+        engine(store, tmp_path).explain(**claimed["request"])
+    reason = public_refusal_reason(error.value)
+    assert reason == "SQL could not be parsed in the installed dialect"
+    store.fail_job(
+        job_id, token, error.value.code, "PRIVATE-RAW", error.value.stage, refusal_reason=reason
+    )
+    saved = job(make_store(), job_id)
+    assert saved["error_code"] == "invalid_query"
+    assert json.loads(saved["output_json"]) == {
+        "stage": "admission",
+        "provider_dispatch": "not_dispatched",
+        "refusal_reason": reason,
+    }
+    assert "PRIVATE" not in json.dumps(saved, default=str)
+
+
+@pytest.mark.parametrize(
+    ("code", "stage", "reason"),
+    [
+        ("provider_error", "admission", "SQL could not be parsed in the installed dialect"),
+        ("invalid_query", "semantic", "SQL could not be parsed in the installed dialect"),
+        ("invalid_query", "admission", 'PRIVATE value "secret" in <html>'),
+        ("invalid_query", "admission", "x" * 241),
+        ("invalid_query", "admission", ""),
+    ],
+)
+def test_refusal_reason_is_dropped_outside_admission_or_when_not_a_fixed_sentence(
+    make_store, code, stage, reason
+):
+    store = make_store()
+    job_id, context = seed_job(store)
+    token, _ = claim(store, job_id, context)
+    store.fail_job(job_id, token, code, "PRIVATE-RAW", stage, refusal_reason=reason)
+    saved = job(make_store(), job_id)
+    assert "refusal_reason" not in json.loads(saved["output_json"])
+    assert "PRIVATE" not in json.dumps(saved, default=str)
+
+
 @pytest.mark.parametrize(
     "provider_code",
     ["provider_timeout", "provider_connection_error", "provider_http_error", "provider_error"],

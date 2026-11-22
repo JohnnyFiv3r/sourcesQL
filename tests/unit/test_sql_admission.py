@@ -263,3 +263,50 @@ def test_search_count_is_named_and_bad_positional_count_has_repair_hint():
         assert error.value.code == "invalid_query"
     admitted = admit("SELECT title FROM WEB_SEARCH('query', per_query_limit := 6)")
     assert admitted.custom_operators == ("WEB_SEARCH",)
+
+
+@pytest.mark.parametrize(
+    ("compact", "spaced"),
+    [
+        ("SELECT title FROM WEB_SEARCH($q1,$q2)", "SELECT title FROM WEB_SEARCH($q1, $q2)"),
+        ("SELECT $q1,$q2", "SELECT $q1, $q2"),
+        ("SELECT $q1,$q2,$q1 AS again", "SELECT $q1 , $q2 , $q1 AS again"),
+    ],
+)
+def test_parameters_after_a_bare_comma_admit_like_spaced_ones(compact, spaced):
+    # SQLGlot's DuckDB tokenizer read `$q1,$` as a dollar-quoted string tag.
+    params = {"q1": "x", "q2": "y"}
+    tight, loose = admit(compact, parameters=params), admit(spaced, parameters=params)
+    assert tight.sql == loose.sql
+    assert tight.parameters == loose.parameters == params
+    assert tight.custom_operators == loose.custom_operators
+    assert [c.to_dict() for c in tight.columns] == [c.to_dict() for c in loose.columns]
+    assert tight.explain == loose.explain
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT $q1,$q2",  # an unbound parameter is still refused
+        "SELECT $tag$text$tag$",  # dollar-quoted literals are not part of the closed language
+        "SELECT $$text$$",
+    ],
+)
+def test_dollar_sigil_never_hides_text_from_binding(query):
+    with pytest.raises(SourcesQLError) as error:
+        admit(query, parameters={"q1": "x"})
+    assert error.value.code == "invalid_query"
+
+
+def test_only_admission_refusals_carry_a_public_reason():
+    from sourcesql.sql.admission import public_refusal_reason
+
+    with pytest.raises(SourcesQLError) as parse:
+        admit("SELECT FROM WHERE (")
+    assert public_refusal_reason(parse.value) == "SQL could not be parsed in the installed dialect"
+    with pytest.raises(SourcesQLError) as construct:
+        admit("SELECT random()")
+    assert public_refusal_reason(construct.value) == construct.value.safe_message
+    assert public_refusal_reason(SourcesQLError("invalid_query", "PRIVATE detail")) is None
+    assert public_refusal_reason(SourcesQLError("provider_error", "x", "dispatch")) is None
+    assert public_refusal_reason(ValueError("x")) is None

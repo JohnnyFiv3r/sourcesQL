@@ -2766,6 +2766,82 @@ test("MCP reopens an admission-failed job with its safe code and no result or ex
   }
 });
 
+test("MCP job status carries an admission refusal's own reason, and only that", async () => {
+  const h = await harness();
+  const client = new Client({ name: "admission-reason-test", version: "1" });
+  let server: ReturnType<typeof createServer> | undefined;
+  try {
+    const original = h.engine("owner-a", { allowSubmission: true });
+    await original.initialize();
+    const submitted = await original.call<Row>("query", {
+      ...query(),
+      query: "SELECT title FROM WEB_SEARCH($q1,$q2",
+      parameters: { q1: "x", q2: "y" },
+    });
+    // What the Flight's store.fail_job records for an admission parse refusal.
+    await original.connection((connection) =>
+      connection.query(
+        `UPDATE ${original.table("jobs")} SET status='failed',error_code='invalid_query',error_message=$1,output_json=$2 WHERE id=$3::UUID`,
+        [
+          "PRIVATE-RAW-EXCEPTION-MUST-NOT-REACH-THE-HOST",
+          JSON.stringify({
+            stage: "admission",
+            provider_dispatch: "not_dispatched",
+            refusal_reason: "SQL could not be parsed in the installed dialect",
+          }),
+          submitted.job_id,
+        ],
+      ),
+    );
+    h.runs[0].status = "RUN_STATUS_FAILED";
+    h.runs[0].exit_code = 1;
+    const reopened = h.engine("owner-a", { allowSubmission: true });
+    const direct = await reopened.call<Row>("job_status", {
+      job_id: submitted.job_id,
+    });
+    assert.equal(direct.error.code, "invalid_query");
+    assert.equal(direct.error.reason, "SQL could not be parsed in the installed dialect");
+    const store = new ResearchStore(h.directory, seed, undefined, 3000, {
+      backend: new MotherDuckStateBackend(reopened),
+    });
+    server = createServer(store, join(root, "apps/research/dist/research.html"), {
+      engine: reopened,
+      access: { mode: "protected", principal: "owner-a", allowPrivateDisclosure: false },
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const result = await client.callTool({
+      name: "sourcesql_job_status",
+      arguments: { job_id: submitted.job_id },
+    });
+    assert.notEqual(result.isError, true);
+    const receipt = result.structuredContent as Row;
+    assert.equal(receipt.error_code, "invalid_query");
+    assert.equal(receipt.stage, "admission");
+    assert.equal(receipt.error.reason, "SQL could not be parsed in the installed dialect");
+    assert.match(receipt.error.message, /SQL could not be parsed in the installed dialect/);
+    assert.ok(!JSON.stringify(result).includes("PRIVATE-RAW-EXCEPTION"));
+
+    // A reason recorded outside admission, or not a fixed sentence, is never shown.
+    await reopened.connection((connection) =>
+      connection.query(
+        `UPDATE ${reopened.table("jobs")} SET output_json=$1 WHERE id=$2::UUID`,
+        [
+          JSON.stringify({ stage: "admission", refusal_reason: 'PRIVATE "q" <x>' }),
+          submitted.job_id,
+        ],
+      ),
+    );
+    const hostile = await reopened.call<Row>("job_status", { job_id: submitted.job_id });
+    assert.equal(hostile.error.reason, undefined);
+    assert.ok(!JSON.stringify(hostile).includes("PRIVATE"));
+  } finally {
+    await client.close();
+    await server?.close();
+    await h.close();
+  }
+});
+
 test("operator-reserved compatibility: MCP returns the blocked queued receipt and same-ID resume guidance rather than an error", async () => {
   const h = await harness();
   const client = new Client({ name: "budget-boundary-test", version: "1" });

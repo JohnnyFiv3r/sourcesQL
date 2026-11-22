@@ -35,6 +35,7 @@ class JobStore(Store):
         super().__init__(root)
         self.request, self.operation, self.fingerprint = request, operation, fingerprint
         self.failures, self.finished, self.explanations = [], [], []
+        self.reasons = []
 
     def claim_job(self, *args, **kwargs):
         return {
@@ -52,8 +53,9 @@ class JobStore(Store):
     def finish_preflight(self, job_id, token, explanation):
         self.explanations.append(explanation)
 
-    def fail_job(self, identity, token, code, message, stage="admission"):
+    def fail_job(self, identity, token, code, message, stage="admission", refusal_reason=None):
         self.failures.append(code)
+        self.reasons.append(refusal_reason)
 
 
 def tracked_execution(monkeypatch):
@@ -133,6 +135,30 @@ def test_hosted_query_owns_one_binding_pass_and_sandbox_without_explain(tmp_path
     ]
 
 
+@pytest.mark.parametrize(
+    ("query", "reason"),
+    [
+        (
+            "SELECT title FROM WEB_SEARCH($q1,$q2",
+            "SQL could not be parsed in the installed dialect",
+        ),
+        ("SELECT random() AS n", "Unsupported SQL construct: Rand"),
+    ],
+)
+def test_admission_refusal_hands_its_own_reason_to_the_job_store(
+    tmp_path, monkeypatch, query, reason
+):
+    tracked_execution(monkeypatch)
+    request = {"query": query, "parameters": {"q1": "x", "q2": "y"}}
+    store = JobStore(tmp_path / "store", request)
+    report = {}
+    runner.execute_job(
+        store, {"job_id": str(uuid4())}, report, tmp_path, policy, policy.load_configuration({})
+    )
+    assert report["status"] == "failed" and store.finished == []
+    assert store.reasons == [reason]
+
+
 @pytest.mark.parametrize("provider", ["exa", "brave", "serper", "deepseek"])
 def test_binding_failure_precedes_hosted_hydration_and_provider_effects(
     tmp_path, monkeypatch, provider
@@ -174,6 +200,8 @@ def test_binding_failure_precedes_hosted_hydration_and_provider_effects(
     report = {}
     runner.execute_job(store, {"job_id": str(uuid4())}, report, tmp_path, policy, settings)
     assert store.failures == ["invalid_query"] and store.finished == []
+    # A planner binding failure is not an admission refusal: its text stays private.
+    assert store.reasons == [None]
     assert report["status"] == "failed" and report["error_code"] == "invalid_query"
     assert events == ["binding_started"]
     assert len(sessions) == 1 and sessions[0].closed

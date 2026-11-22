@@ -20,6 +20,9 @@ import uuid
 from sourcesql.contracts import Table, Column, SourcesQLError, canonical, digest
 from sourcesql.storage.store import Store
 
+# Mirrors sourcesql.sql.admission.PUBLIC_REASON without importing SQLGlot here.
+PUBLIC_REFUSAL_REASON = re.compile(r"[A-Za-z0-9 ,.;:()_'-]{1,240}\Z")
+
 TABLES = (
     "CREATE TABLE IF NOT EXISTS input_preparations(request_id UUID PRIMARY KEY, operation VARCHAR NOT NULL, original_hash VARCHAR NOT NULL, recipe VARCHAR NOT NULL, manifest_json VARCHAR NOT NULL, created_at VARCHAR NOT NULL)",
     "CREATE TABLE IF NOT EXISTS usage_notice_dismissals(id VARCHAR PRIMARY KEY,dismissed_at VARCHAR NOT NULL)",
@@ -512,7 +515,9 @@ class MotherDuckStore(Store):
                 [payload, timestamp(), job_id],
             )
 
-    def fail_job(self, job_id, claim_token, code, safe_message, stage="admission"):
+    def fail_job(
+        self, job_id, claim_token, code, safe_message, stage="admission", refusal_reason=None
+    ):
         with self.db() as db:
             db.execute("BEGIN IMMEDIATE")
             job = self._job(db, job_id)
@@ -599,7 +604,22 @@ class MotherDuckStore(Store):
                 "UPDATE jobs SET status='failed',error_code=?,error_message='Research execution failed safely',output_json=?,updated_at=? WHERE id=?::UUID",
                 [
                     code,
-                    canonical({"stage": stage, "provider_dispatch": state}).decode(),
+                    canonical(
+                        {
+                            "stage": stage,
+                            "provider_dispatch": state,
+                            # Only admission's own fixed refusal sentence is kept;
+                            # safe_message and any other text stay private.
+                            **(
+                                {"refusal_reason": refusal_reason}
+                                if stage == "admission"
+                                and code in {"invalid_query", "unsupported_query"}
+                                and isinstance(refusal_reason, str)
+                                and PUBLIC_REFUSAL_REASON.fullmatch(refusal_reason)
+                                else {}
+                            ),
+                        }
+                    ).decode(),
                     timestamp(),
                     job_id,
                 ],

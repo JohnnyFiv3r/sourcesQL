@@ -278,6 +278,7 @@ def execute_job(
 ) -> None:
     from sourcesql.contracts import SourcesQLError
     from sourcesql.engine import Engine
+    from sourcesql.sql.admission import public_refusal_reason
 
     from uuid import uuid4
 
@@ -373,7 +374,14 @@ def execute_job(
             plan_complete=receipt["plan_complete"],
         )
     except SourcesQLError as error:
-        store.fail_job(config["job_id"], token, error.code, "Research job failed", error.stage)
+        store.fail_job(
+            config["job_id"],
+            token,
+            error.code,
+            "Research job failed",
+            error.stage,
+            refusal_reason=public_refusal_reason(error),
+        )
         report.update(
             status="cancelled" if error.code == "cancelled" else "failed",
             phase="finished",
