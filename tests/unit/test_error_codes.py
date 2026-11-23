@@ -11,18 +11,27 @@ from sourcesql.storage import stages
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Raised with a code held in a variable. Each forwards a code that was already
-# filtered through the table or read from a stored failure.
+# Each call site that passes a code held in a variable or expression, keyed by
+# file, enclosing function and the code expression. A new site must be listed
+# here with where its code was already checked or read from a stored failure.
 DYNAMIC_SITES = {
-    "src/sourcesql/engine.py": "stored or bridged failure codes, filtered by stages._ERROR_CODES",
-    "src/sourcesql/storage/motherduck.py": "stored job error code, filtered by HOSTED_CODES",
-    "src/sourcesql/sql/admission.py": "refuse() default and callers pass literals checked below",
-    "hosted/flight/runner.py": "fail_job forwards the code of a SourcesQLError, checked where it is raised",
+    "src/sourcesql/engine.py::stage_begin::'execution_outcome_unknown' if state['status'] in {'intent', 'outcome_unknown'} else 'storage_unavailable' if state['status'] == 'completed_unretained' else state['error_code'] or 'execution_failed'": "stored stage state, error_code filtered by stages._ERROR_CODES",
+    "src/sourcesql/engine.py::begin_score_batch::'execution_outcome_unknown' if state['status'] in {'intent', 'outcome_unknown'} else 'storage_conflict'": "stage journal state, both literals checked",
+    "src/sourcesql/engine.py::dispatch_score_batch::'execution_outcome_unknown' if retained['status'] in {'intent', 'outcome_unknown'} else retained['error_code'] or 'execution_failed'": "stored stage state, error_code filtered by stages._ERROR_CODES",
+    "src/sourcesql/engine.py::fail_score_batch::failure.get('code', 'execution_failed')": "stored failure code, filtered by stages._ERROR_CODES",
+    "src/sourcesql/engine.py::dispatch::code": "stored failure code, filtered by stages._ERROR_CODES",
+    "src/sourcesql/engine.py::dispatch::failure['code']": "stored failure code, filtered by stages._ERROR_CODES",
+    "src/sourcesql/engine.py::dispatch::validation['code']": "stored failure code, filtered by stages._ERROR_CODES",
+    "src/sourcesql/sql/admission.py::refuse::code": "refuse() forwards its caller's code; callers are scanned as literal sites",
+    "src/sourcesql/storage/motherduck.py::db::code": "stored job error code, filtered by HOSTED_CODES",
+    "hosted/flight/runner.py::execute_job::error.code": "fail_job forwards the code of a SourcesQLError, checked where it is raised",
 }
 
 
 def scan(source: str, relative: str, literal: dict[str, list[str]], dynamic: list[str]) -> None:
-    for node in ast.walk(ast.parse(source)):
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         function = node.func
@@ -38,14 +47,20 @@ def scan(source: str, relative: str, literal: dict[str, list[str]], dynamic: lis
         if name in {"SourcesQLError", "AdmissionRefusal"}:
             candidates = node.args[:1] + keyword
         elif name == "refuse":
-            candidates = keyword + node.args[1:2]
+            candidates = node.args[1:2] + keyword
         elif name == "fail_job":
             candidates = node.args[2:3] + keyword
+        enclosing: ast.AST = node
+        while enclosing in parents and not isinstance(
+            enclosing, ast.FunctionDef | ast.AsyncFunctionDef
+        ):
+            enclosing = parents[enclosing]
+        scope = getattr(enclosing, "name", "<module>")
         for candidate in candidates:
             if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
                 literal.setdefault(candidate.value, []).append(f"{relative}:{node.lineno}")
-            elif name != "refuse":
-                dynamic.append(relative)
+            else:
+                dynamic.append(f"{relative}::{scope}::{ast.unparse(candidate)}")
 
 
 def raised_codes() -> tuple[dict[str, list[str]], list[str]]:
@@ -55,7 +70,12 @@ def raised_codes() -> tuple[dict[str, list[str]], list[str]]:
         for path in sorted((ROOT / base).rglob("*.py")):
             if "tests" in path.parts:
                 continue
-            scan(path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix(), literal, dynamic)
+            scan(
+                path.read_text(encoding="utf-8"),
+                path.relative_to(ROOT).as_posix(),
+                literal,
+                dynamic,
+            )
     return literal, dynamic
 
 
@@ -73,6 +93,7 @@ def test_scan_reads_positional_and_keyword_codes():
         literal,
         dynamic,
     )
+    assert dynamic == ["probe.py::<module>::variable"]
     assert set(literal) == {
         "a_positional",
         "a_keyword",
@@ -80,16 +101,33 @@ def test_scan_reads_positional_and_keyword_codes():
         "a_failed_job",
         "a_failed_keyword",
     }
-    assert dynamic == ["probe.py"]
+
+
+def test_scan_tracks_each_variable_site_by_function_even_in_known_files():
+    dynamic: list[str] = []
+    scan(
+        "def known():\n    raise SourcesQLError(code, 'm', 'admission')\n"
+        "def added():\n    refuse('m', code=code)\n    refuse('m', other)\n",
+        "src/sourcesql/engine.py",
+        {},
+        dynamic,
+    )
+    assert dynamic == [
+        "src/sourcesql/engine.py::known::code",
+        "src/sourcesql/engine.py::added::code",
+        "src/sourcesql/engine.py::added::other",
+    ]
 
 
 def test_every_raised_code_is_in_the_table():
     literal, dynamic = raised_codes()
     missing = {code: sites for code, sites in literal.items() if code not in error_codes.CODES}
     assert not missing, f"Add these codes to src/sourcesql/error_codes.json: {missing}"
-    assert set(dynamic) <= set(DYNAMIC_SITES), (
-        "A new site raises a code held in a variable; list its source in DYNAMIC_SITES: "
-        f"{sorted(set(dynamic) - set(DYNAMIC_SITES))}"
+    assert sorted(dynamic) == sorted(DYNAMIC_SITES), (
+        "Call sites that pass a code held in a variable changed. List each new one in "
+        f"DYNAMIC_SITES with where its code is checked, and drop stale entries: "
+        f"new {sorted(set(dynamic) - set(DYNAMIC_SITES))}, "
+        f"gone {sorted(set(DYNAMIC_SITES) - set(dynamic))}"
     )
 
 
