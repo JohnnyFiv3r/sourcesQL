@@ -198,6 +198,34 @@ function withHostEvidenceDowngrade(
   };
 }
 
+/** The request as an export carries it: assessments already downgraded. */
+function withExportedAssessments(request: ResearchRequest): ResearchRequest {
+  if (!request.completion) return request;
+  const completion = withHostEvidenceDowngrade(request.completion);
+  return {
+    ...request,
+    completion,
+    ...(request.assessments ? { assessments: completion.assessments } : {}),
+  };
+}
+
+/**
+ * A completion replayed against a stored one. Exact equality, or, when the
+ * stored one came from an export (already downgraded), equality once the
+ * replay is downgraded too: the export dropped the submitted status.
+ */
+function sameCompletion(
+  stored: AppendResearchInput,
+  replay: AppendResearchInput,
+): boolean {
+  if (canonicalJson(stored) === canonicalJson(replay)) return true;
+  return (
+    canonicalJson(withHostEvidenceDowngrade(stored)) ===
+      canonicalJson(stored) &&
+    canonicalJson(stored) === canonicalJson(withHostEvidenceDowngrade(replay))
+  );
+}
+
 export class ResearchStore {
   private queue: Promise<unknown> = Promise.resolve();
   private versions = new WeakMap<State, string>();
@@ -674,7 +702,7 @@ export class ResearchStore {
           "Research request not found. Return the original request_id.",
         );
       if (request.status === "completed") {
-        if (canonicalJson(request.completion) !== canonicalJson(result))
+        if (!sameCompletion(request.completion!, result))
           throw new Error(
             "This request already has different results. Start a new request.",
           );
@@ -1176,20 +1204,7 @@ export class ResearchStore {
       amendments: state.amendments.filter((a) => selected.has(a.snapshot_id)),
       requests: state.requests
         ?.filter((r) => selected.has(r.snapshotId))
-        .map((r) =>
-          r.completion
-            ? {
-                ...r,
-                completion: withHostEvidenceDowngrade(r.completion),
-                ...(r.assessments
-                  ? {
-                      assessments: withHostEvidenceDowngrade(r.completion)
-                        .assessments,
-                    }
-                  : {}),
-              }
-            : r,
-        ),
+        .map(withExportedAssessments),
       titles: Object.fromEntries(
         Object.entries(state.titles ?? {}).filter(([key]) => selected.has(key)),
       ),
@@ -1500,7 +1515,12 @@ export class ResearchStore {
       }
       for (const request of bundle.state.requests ?? []) {
         const existing = state.requests?.find((r) => r.id === request.id);
-        if (existing && canonicalJson(existing) !== canonicalJson(request))
+        if (
+          existing &&
+          canonicalJson(existing) !== canonicalJson(request) &&
+          canonicalJson(withExportedAssessments(existing)) !==
+            canonicalJson(request)
+        )
           throw new Error("Bundle request collision");
         if (!existing) {
           (state.requests ??= []).push(request);

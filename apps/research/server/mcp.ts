@@ -289,8 +289,37 @@ export function createServer(
       );
     const hostUrls = urlsOf("host");
     const engineUrls = urlsOf("engine");
+    // Unknown to every engine snapshot means nothing vouches for it.
+    const isHostUrl = (url: string) =>
+      hostUrls.has(url) || !engineUrls.has(url);
+    const hostQuotes = snapshotAssertion(context.originalSnapshot) === "host";
+    // The effective rows repeat the saved row's URLs and quotes, so they carry
+    // the same attribution as the snapshot copy above.
+    const markEffectiveRow = (
+      row: (typeof context.effectiveRowsAtRequest)[number],
+    ) => {
+      const urls = sourcesForSelection(row).map((source) => source.url);
+      return {
+        ...row,
+        assertion:
+          hostQuotes || urls.some(isHostUrl)
+            ? ("host" as const)
+            : ("engine" as const),
+        hostUrls: urls.filter(isHostUrl),
+        evidence: hostQuotes
+          ? Object.fromEntries(
+              Object.entries(row.evidence).map(([field, quotes]) => [
+                field,
+                quotes.map(hostQuoteText),
+              ]),
+            )
+          : row.evidence,
+      };
+    };
     return {
       ...context,
+      effectiveRowsAtRequest:
+        context.effectiveRowsAtRequest.map(markEffectiveRow),
       originalSnapshot: markSnapshot(context.originalSnapshot),
       acceptedObservationsAtRequest:
         context.acceptedObservationsAtRequest.map(markSnapshot),
@@ -298,11 +327,9 @@ export function createServer(
         ...entry,
         sources: entry.sources.map((source) => ({
           ...source,
-          // Unknown to every engine snapshot means nothing vouches for it.
-          assertion:
-            hostUrls.has(source.url) || !engineUrls.has(source.url)
-              ? ("host" as const)
-              : ("engine" as const),
+          assertion: isHostUrl(source.url)
+            ? ("host" as const)
+            : ("engine" as const),
         })),
       })),
       assertionNotice: HOST_ASSERTED_NOTICE,
@@ -340,8 +367,33 @@ export function createServer(
                 : {}),
             })),
           };
+    const markEffectiveRow = (
+      row: (typeof marked.effectiveRowsAtRequest)[number],
+    ) => {
+      const host = new Set(row.hostUrls);
+      const text = (url: string) => (host.has(url) ? hostSourceText(url) : url);
+      const markList = <T extends { url: string }>(sources: T[]) =>
+        sources.map((source) => ({ ...source, url: text(source.url) }));
+      return {
+        ...row,
+        ...(row.sourceUrl ? { sourceUrl: text(row.sourceUrl) } : {}),
+        ...(row.sources ? { sources: markList(row.sources) } : {}),
+        ...(row.cellSources
+          ? {
+              cellSources: Object.fromEntries(
+                Object.entries(row.cellSources).map(([field, list]) => [
+                  field,
+                  markList(list),
+                ]),
+              ),
+            }
+          : {}),
+      };
+    };
     return {
       ...marked,
+      effectiveRowsAtRequest:
+        marked.effectiveRowsAtRequest.map(markEffectiveRow),
       originalSnapshot: markSnapshot(marked.originalSnapshot),
       acceptedObservationsAtRequest:
         marked.acceptedObservationsAtRequest.map(markSnapshot),

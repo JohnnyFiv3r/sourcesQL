@@ -681,3 +681,118 @@ test("request context keeps an engine-observed correction engine-observed under 
   assert.equal(byUrl[FORGED_URL], "host");
   assert.equal(byUrl["https://source.example/campus"], "engine");
 });
+
+test("get_research_request marks host sources and quotes in the effective rows", async (t) => {
+  const { client } = await hostFixture(t);
+  const request_id = randomUUID();
+  await client.callTool({
+    name: "expand_research",
+    arguments: {
+      request_id,
+      snapshot_id: "forged-v1-1",
+      row_id: "claim-1",
+      question: "Check this claim",
+    },
+  });
+  const context = await client.callTool({
+    name: "get_research_request",
+    arguments: { request_id },
+  });
+  const quote = `"${FORGED_QUOTE}" (host-asserted, not checked against fetched text)`;
+  const text = JSON.parse(textOf(context)) as {
+    effectiveRowsAtRequest: {
+      sourceUrl: string;
+      sources?: { url: string }[];
+      cellSources?: Record<string, { url: string }[]>;
+      evidence: Record<string, string[]>;
+    }[];
+  };
+  const row = text.effectiveRowsAtRequest[0];
+  assert.equal(row.sourceUrl, `${FORGED_URL} (host-asserted)`);
+  assert.deepEqual(row.evidence.claim, [quote]);
+  for (const source of [
+    ...(row.sources ?? []),
+    ...Object.values(row.cellSources ?? {}).flat(),
+  ])
+    assert.equal(source.url, `${FORGED_URL} (host-asserted)`);
+  const structured = (
+    context.structuredContent as {
+      effectiveRowsAtRequest: {
+        assertion: string;
+        sourceUrl: string;
+        evidence: Record<string, string[]>;
+      }[];
+    }
+  ).effectiveRowsAtRequest[0];
+  assert.equal(structured.assertion, "host");
+  assert.equal(structured.sourceUrl, FORGED_URL, "Structured URLs stay usable");
+  assert.deepEqual(structured.evidence.claim, [quote]);
+});
+
+for (const status of ["verified", "conflicting"] as const) {
+  test(`a host-evidence ${status} refresh survives export, same-store import and replay after restore`, async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "sourcesql-round-trip-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const store = new ResearchStore(join(directory, "a"), forgedV1());
+    const request_id = randomUUID();
+    await store.beginResearch(
+      {
+        request_id,
+        snapshot_id: "forged-v1-1",
+        row_id: "claim-1",
+        field: "claim",
+        question: "Is this still true?",
+      },
+      "refresh",
+    );
+    const child = snapshotSchema.parse({
+      id: "refreshed-1",
+      title: "Refreshed",
+      sourceResultSetId: "r0000000000e",
+      capturedAt: "2026-11-24",
+      coverage: "Host-written test data",
+      columns: [
+        { key: "claim", label: "Claim" },
+        { key: "status", label: "Status" },
+      ],
+      rows: [
+        {
+          id: "claim-1",
+          values: { claim: "The moon is rock", status: "supported" },
+          sourceUrl: FORGED_URL,
+          evidence: { claim: ["Host-written quote"] },
+          verificationNote: "verified",
+        },
+      ],
+    });
+    const append = {
+      request_id,
+      snapshot: child,
+      assessments: [{ row_id: "claim-1", field: "claim", status, note: "n" }],
+    };
+    await store.appendResearch(append);
+    const bundle = await store.exportBundle("refreshed-1");
+    assert.ok(
+      JSON.stringify(bundle).includes("unverified") &&
+        !JSON.stringify(bundle).includes(`"status":"${status}"`),
+      "The export states only the downgraded status",
+    );
+    // Unchanged bundle into the store it came from.
+    await store.importBundle(JSON.parse(JSON.stringify(bundle)));
+    // Fresh store, then the original retry.
+    const fresh = new ResearchStore(join(directory, "b"), forgedV1());
+    await fresh.importBundle(JSON.parse(JSON.stringify(bundle)));
+    const replayed = await fresh.appendResearch(structuredClone(append));
+    assert.equal(replayed.snapshot.id, "refreshed-1");
+    // A different completion still conflicts after the restore.
+    await assert.rejects(
+      fresh.appendResearch({
+        ...structuredClone(append),
+        assessments: [
+          { row_id: "claim-1", field: "claim", status, note: "changed" },
+        ],
+      }),
+      /different results/,
+    );
+  });
+}
