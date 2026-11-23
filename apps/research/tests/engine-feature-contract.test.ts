@@ -52,7 +52,8 @@ test("local compatibility uses the actual feature map rather than the 0.2.3 pack
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line)),
-      ["capabilities", "capabilities", "capabilities"],
+      // The feature map is fetched once per engine, not once per call.
+      ["capabilities"],
     );
     assert.deepEqual(await old.call("query", { query: "SELECT 1" }), {
       executed: "query",

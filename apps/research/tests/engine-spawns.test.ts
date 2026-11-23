@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
-import { PythonEngine, type EngineResult } from "../server/engine.js";
+import { PythonEngine, type EngineResult, type ResearchEngine } from "../server/engine.js";
 import { ResearchStore } from "../server/store.js";
 import { createServer } from "../server/mcp.js";
 import type { AccessPolicy } from "../server/access.js";
@@ -179,12 +179,14 @@ test("a private result on the query's own page is still refused", async () => {
   const dir = await mkdtemp(join(tmpdir(), "sourcesql-private-page-"));
   const htmlPath = join(dir, "research.html");
   await writeFile(htmlPath, "<html>Test</html>");
-  const engine = {
+  const engine: ResearchEngine = {
     queryReturnsAuthorizedPage: true,
-    async call(method: string) {
-      return method === "query"
-        ? { result_id: "wq_private", data_classification: "private_local", rows: [], columns: [] }
-        : {};
+    async call<T>(method: string) {
+      return (
+        method === "query"
+          ? { result_id: "wq_private", data_classification: "private_local", rows: [], columns: [] }
+          : {}
+      ) as T;
     },
   };
   const server = createServer(new ResearchStore(join(dir, "app"), seed), htmlPath, {
