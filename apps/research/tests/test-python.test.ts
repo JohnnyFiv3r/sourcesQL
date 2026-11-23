@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative as relative_ } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureBuilt } from "./ensure-built.js";
 import { resolveTestPython, testEnv } from "./python.js";
@@ -239,6 +239,26 @@ test("the environment handed to a real engine pins the interpreter the resolver 
     assert.throws(
       () => testEnv({ SOURCESQL_PYTHON: join(root, "missing") }, root),
       /SOURCESQL_PYTHON +.*\(missing\)/,
+    );
+  });
+});
+
+test("a relative interpreter path is returned absolute, so a child started elsewhere finds it", async () => {
+  await withRoot(async (root) => {
+    const real = await fakeInterpreter(join(root, "env/bin/python"));
+    const link = join(root, "env/bin/python-link");
+    await symlink(real, link);
+    const relative = relative_(process.cwd(), link);
+    for (const variable of ["SOURCESQL_TEST_PYTHON", "SOURCESQL_PYTHON"]) {
+      // The link is kept as the user named it: resolving it would pick another environment.
+      assert.deepEqual(resolveTestPython({ [variable]: relative }, root), {
+        python: link,
+      });
+    }
+    assert.ok(
+      isAbsolute(
+        testEnv({ SOURCESQL_PYTHON: relative }, root).SOURCESQL_PYTHON!,
+      ),
     );
   });
 });

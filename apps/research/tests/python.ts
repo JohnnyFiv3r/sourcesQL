@@ -1,5 +1,5 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -39,7 +39,9 @@ export function resolveTestPython(
   const decided = sources.findIndex((source) => source.path);
   const chosen = sources[decided];
   const state = problem(chosen.path!);
-  if (!state) return { python: chosen.path! };
+  // Children of the tests start in other directories, so a relative path must be made absolute
+  // now. resolve() does not follow symlinks, which would pick a different environment.
+  if (!state) return { python: resolve(chosen.path!) };
   const lines = sources.map((source, index) => {
     const detail =
       index < decided
