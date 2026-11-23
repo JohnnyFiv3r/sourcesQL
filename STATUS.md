@@ -6,6 +6,22 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased host-found URL research
+
+A host agent can search with its own tool and have sourcesQL fetch the URLs, with
+no sourcesQL search provider. `WEB_FETCH` rows now carry `fetch_status` and
+`fetch_failure`; a URL that fails to fetch stays as a failed row with no
+citation, and an all-failed fetch completes instead of failing the job. In live
+mode a non-public or non-allowlisted URL becomes a `blocked_host` row and is never
+requested, where it used to refuse the whole call. Receipts add `fetch_failed`,
+`fetch_cap_hit`, `not_fetched_urls` and `not_fetched_count`. Capabilities report
+per-profile `search`, `fetch` and `host_search_route`, and the served guidance now
+permits host search when no sourcesQL search provider works. Fixture- and
+mock-tested only: `live_qualified` stays false, and no live run over host-found URLs
+or scripted host session has been done. Hosted fetch-only profiles are not offered.
+Behaviour changes: failed `WEB_FETCH` URLs are no longer dropped from rows, and
+`WEB_FETCH` has two more columns.
+
 ## Unreleased citation and result-read correction
 
 Public result rows and retained evidence/source records now have separate byte-
