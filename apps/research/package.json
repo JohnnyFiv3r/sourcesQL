@@ -7,7 +7,7 @@
     "build": "tsc --noEmit && node --import tsx scripts/build.ts",
     "start": "node --import tsx server/main.ts",
     "stdio": "node --import tsx server/main.ts --stdio",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx tests/preflight.ts && node --import tsx --test tests/*.test.ts",
     "check": "npm run build && npm test",
     "build:vercel": "npm run build && node --import tsx scripts/build-vercel.ts"
   },
