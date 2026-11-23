@@ -154,3 +154,30 @@ test("no test or script falls back to the removed interpreter path", async () =>
     }
   }
 });
+
+test("preflight names the build step when the app has not been built", async () => {
+  await withRoot(async (root) => {
+    // A copy of the app directory without dist/ shows the unbuilt state.
+    const app = join(root, "app");
+    await mkdir(join(app, "tests"), { recursive: true });
+    for (const name of ["preflight.ts", "python.ts"]) {
+      await writeFile(
+        join(app, "tests", name),
+        await readFile(join(appDirectory, "tests", name), "utf8"),
+      );
+    }
+    const python = await fakeInterpreter(join(root, "python"));
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", join(app, "tests/preflight.ts")],
+      {
+        cwd: appDirectory,
+        env: { ...process.env, SOURCESQL_TEST_PYTHON: python },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /dist\/research\.html was not found/);
+    assert.match(result.stderr, /npm run build/);
+  });
+});

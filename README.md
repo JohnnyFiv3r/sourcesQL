@@ -129,6 +129,8 @@ npm run build
 npm start
 ```
 
+To run the app's tests, run `uv sync --frozen` first, then `npm ci` and `npm run check` in `apps/research`; `check` builds the app, which the tests read, and then runs them. The tests find Python in `.venv`. To use another interpreter, set `SOURCESQL_PYTHON` to its path.
+
 Open [localhost:3117](http://127.0.0.1:3117), or use `npm run stdio` with a local MCP client. See the [example client configuration](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/apps/research/mcp-config.example.json). CLI and app stores are separate by default; use the MCP query/result-reference workflow for app research, or research bundles to move it between stores.
 
 Actual SQL execution requires the supported OS protections: macOS `sandbox-exec`, or Linux Landlock and seccomp. Missing protection causes a refusal. Use Docker on Windows. See [runtime qualification](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/python-linux-qualification.md) for the tested environments.
