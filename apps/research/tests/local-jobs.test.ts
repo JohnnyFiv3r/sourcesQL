@@ -304,7 +304,9 @@ test("one tool call's bridge processes share a total budget under the host cap",
         await engine.call("import_table", {});
         return engine.call("query", {});
       }, 900),
-      /Engine timed out; inspect the run before retrying/,
+      // Under load the second step can reach its admission check just after the
+      // deadline, which is refused with the budget message instead of the timer's.
+      /Engine (timed out|call budget used up before this step started); inspect the run before retrying/,
     );
     // Without a budget, the same two steps both finish.
     await engine.call("import_table", {});
