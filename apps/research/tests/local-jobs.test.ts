@@ -14,6 +14,7 @@ import {
   LOCAL_READ_LIMIT_MS,
   LOCAL_CALL_BUDGET_MS,
   withLocalCallBudget,
+  remainingLocalCallBudgetMs,
   type ResearchEngine,
 } from "../server/engine.js";
 import {
@@ -284,6 +285,10 @@ test("exactly the documented methods get the long limit", async () => {
 test("one tool call's bridge processes share a total budget under the host cap", async () => {
   assert.ok(LOCAL_CALL_BUDGET_MS <= 240_000);
   assert.ok(LOCAL_CALL_BUDGET_MS >= LOCAL_DISPATCH_LIMIT_MS);
+  // The whole call may overrun the reported dispatch deadline by at most 30 s.
+  assert.ok(
+    LOCAL_CALL_BUDGET_MS <= (LOCAL_DISPATCH_DEADLINE_SECONDS + 30) * 1000,
+  );
   const { directory, script } = await fakeBridge(
     `await new Promise((r) => setTimeout(r, 600)); answer({ok: request.method});`,
   );
@@ -458,4 +463,39 @@ test("local text never mentions job tools; hosted text is unchanged", async () =
     hosted.instructions!,
     /sourcesql_job_status reads hosted progress/,
   );
+});
+
+test("read-only tools share one short budget across their bridge steps; query gets the long one", async () => {
+  // The first engine call each tool makes, and the budget it runs under.
+  let first: number | undefined;
+  const engine: ResearchEngine = {
+    async call<T>(): Promise<T> {
+      first ??= remainingLocalCallBudgetMs();
+      throw new Error("stop after recording the budget");
+    },
+  };
+  const budgetOf = (
+    client: Client,
+    name: string,
+    args: Record<string, unknown>,
+  ) => {
+    first = undefined;
+    return client.callTool({ name, arguments: args }).then(() => first);
+  };
+  await withClient(engine, async (client) => {
+    for (const [name, args] of [
+      ["sourcesql_capabilities", {}],
+      ["sourcesql_read_result", { result_id: "wq_1" }],
+      ["sourcesql_run_status", { run_id: JOB_ID }],
+    ] as const) {
+      const budget = await budgetOf(client, name, args);
+      assert.ok(budget !== undefined, name);
+      assert.ok(budget <= LOCAL_READ_LIMIT_MS, name);
+    }
+    const query = await budgetOf(client, "sourcesql_query", {
+      query: "SELECT 1 AS value",
+    });
+    assert.ok(query !== undefined);
+    assert.ok(query > LOCAL_READ_LIMIT_MS && query <= LOCAL_CALL_BUDGET_MS);
+  });
 });

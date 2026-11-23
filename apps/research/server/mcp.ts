@@ -14,6 +14,7 @@ import {
   resultSnapshot,
   localJobsUnavailable,
   withLocalCallBudget,
+  LOCAL_READ_LIMIT_MS,
   type ResearchEngine,
   type ResultReference,
   type EngineResult,
@@ -309,6 +310,10 @@ export function createServer(
       };
     }
   };
+  // Read-only tools do no provider work: every bridge step they start shares
+  // one short limit, so the host hears back within it.
+  const safeShort = (work: () => Promise<CallToolResult>) =>
+    safe(() => withLocalCallBudget(work, LOCAL_READ_LIMIT_MS));
   const jobStates = new Set([
     "queued",
     "dispatching",
@@ -2313,7 +2318,8 @@ export function createServer(
           openWorldHint: false,
         },
       },
-      () => safe(async () => engineResult(await engine.call("capabilities"))),
+      () =>
+        safeShort(async () => engineResult(await engine.call("capabilities"))),
     );
     if (engine.supportsUsageReporting)
       tools.registerTool(
@@ -2337,7 +2343,7 @@ export function createServer(
           },
         },
         (args) =>
-          safe(async () => {
+          safeShort(async () => {
             if (options.access?.mode === "fixture-anonymous")
               throw new Error(
                 "Usage reports require authenticated owner access",
@@ -2517,7 +2523,7 @@ export function createServer(
         },
       },
       (args) =>
-        safe(async () => {
+        safeShort(async () => {
           const projected = await engine.inspectResult?.({
             ...args,
             mode: "rows",
@@ -2570,7 +2576,7 @@ export function createServer(
         },
       },
       (args) =>
-        safe(async () => {
+        safeShort(async () => {
           if (args.collection && args.record_index === undefined)
             throw new Error("record_index is required for chunk inspection");
           if (
@@ -2691,7 +2697,7 @@ export function createServer(
           },
         },
         (args) =>
-          safe(async () => {
+          safeShort(async () => {
             const receipt = await engine.call(method, args);
             authorizeRunReceipt(receipt);
             if (typeof receipt.result_id === "string") {

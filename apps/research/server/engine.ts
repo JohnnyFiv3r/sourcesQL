@@ -86,10 +86,16 @@ export const LOCAL_DISPATCH_LIMIT_MS = Math.min(
 );
 export const LOCAL_READ_LIMIT_MS = 30_000;
 // One tool call can start several bridge processes (materialize an input, then
-// query). This total stays under the 240 s cap of claude.ai and Desktop, so the
-// host gets an answer even when each process is within its own limit.
-export const LOCAL_CALL_BUDGET_MS = 235_000;
+// query). The whole call may exceed the engine's reported dispatch deadline by
+// at most 30 s, which is also under the 240 s cap of claude.ai and Desktop.
+export const LOCAL_CALL_BUDGET_MS =
+  (LOCAL_DISPATCH_DEADLINE_SECONDS + 30) * 1000;
 const callBudget = new AsyncLocalStorage<{ deadline: number }>();
+/** Time left in the tool call's shared budget, or undefined outside one. */
+export const remainingLocalCallBudgetMs = (): number | undefined => {
+  const budget = callBudget.getStore();
+  return budget && budget.deadline - Date.now();
+};
 /** Runs a tool call so that its bridge processes share one total time budget. */
 export const withLocalCallBudget = <T>(
   run: () => Promise<T>,
