@@ -1005,7 +1005,13 @@ test("an engine-backed refresh replays after a restore maps its result to a new 
       capturePrecision: "instant",
       captureBasis: "run_completed_at",
       dataClassification: "public_web",
-      coverage: { planComplete: true, corpusComplete: "unknown", notes: [] },
+      coverage: {
+        planComplete: true,
+        corpusComplete: resultId.startsWith("wq_restore")
+          ? "bounded_fixture"
+          : "unknown",
+        notes: [],
+      },
       columns: forgedV2().columns,
       rowCount: 1,
       rows: [
@@ -1022,7 +1028,7 @@ test("an engine-backed refresh replays after a restore maps its result to a new 
   // The app's resolver rebinds the saved snapshot to the engine result and keeps its parent.
   const resolveAs =
     (resultId: string, capturedAt: string) => async (saved: Snapshot) => ({
-      ...engineChild(resultId, capturedAt),
+      ...engineChild(saved.dataRef?.resultId ?? resultId, capturedAt),
       // The title comes from the result reference and the evidence from the
       // engine result, so both follow what was submitted.
       title: saved.title,
@@ -1088,6 +1094,15 @@ test("an engine-backed refresh replays after a restore maps its result to a new 
           note: "n",
         },
       ],
+    }),
+    /different results/,
+  );
+  // A newly executed result with the same table is a different completion in
+  // the store that submitted the first one, even though nothing else differs.
+  await assert.rejects(
+    store.appendResearch({
+      ...structuredClone(append),
+      snapshot: engineChild("wq_second_run", "2026-11-24T10:00:00.000Z"),
     }),
     /different results/,
   );

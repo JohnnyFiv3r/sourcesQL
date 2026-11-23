@@ -218,44 +218,24 @@ function withExportedAssessments(request: ResearchRequest): ResearchRequest {
   };
 }
 
-/**
- * A restore maps an engine-backed result to a new local result and read time,
- * so those fields stand in for themselves in the digest. Everything else in the
- * snapshot (title, rows, evidence, content hash) still counts, so a different
- * title or an uncited copy of the same table is a different completion.
- * A host-written snapshot has no engine identity, so all of it counts.
- */
-const completionDigest = (completion: AppendResearchInput) => {
-  const { snapshot } = completion;
-  const identified = snapshot.dataRef
-    ? {
-        ...completion,
-        snapshot: {
-          ...snapshot,
-          capturedAt: "",
-          dataRef: { ...snapshot.dataRef, resultId: "" },
-          ...(snapshot.origin
-            ? { origin: { ...snapshot.origin, resultId: "", runId: "" } }
-            : {}),
-        },
-      }
-    : completion;
-  return createHash("sha256").update(canonicalJson(identified)).digest("hex");
-};
+const completionDigest = (completion: AppendResearchInput) =>
+  createHash("sha256").update(canonicalJson(completion)).digest("hex");
 
 /**
  * Whether a replay is the completion the request already holds. An export
- * downgrades the stored payload, so a restored request is compared by the
- * digest of what was submitted; requests saved before digests existed fall
- * back to the stored payload, and with neither nothing can be identical.
+ * downgrades a host-written completion's assessments, so a restored host
+ * request is compared by the digest of what was submitted. An engine-backed
+ * completion is never downgraded, so it is compared as stored; import rebinds
+ * it to the local result. Requests saved before digests existed fall back to
+ * the stored payload, and with neither nothing can be identical.
  */
 function sameCompletion(
   request: ResearchRequest,
   replay: AppendResearchInput,
 ): boolean {
-  if (request.completionDigest)
-    return request.completionDigest === completionDigest(replay);
   const stored = request.completion;
+  if (request.completionDigest && !stored?.snapshot.dataRef)
+    return request.completionDigest === completionDigest(replay);
   if (!stored) return false;
   if (canonicalJson(stored) === canonicalJson(replay)) return true;
   return (
@@ -841,7 +821,8 @@ export class ResearchStore {
       // different status still conflicts; the assessments are what is shown.
       request.assessments = withHostEvidenceDowngrade(result).assessments;
       request.completion = result;
-      request.completionDigest = completionDigest(result);
+      if (!result.snapshot.dataRef)
+        request.completionDigest = completionDigest(result);
       await this.write(state);
       return this.view(state, result.snapshot.id);
     });
