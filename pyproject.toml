@@ -33,7 +33,7 @@ Issues = "https://github.com/JohnnyFiv3r/sourcesQL/issues"
 sourcesql = "sourcesql.cli:main"
 
 [dependency-groups]
-dev = ["pytest==9.0.2", "ruff==0.15.6", "mypy==1.19.1"]
+dev = ["pytest==9.0.2", "ruff==0.15.6", "mypy==1.19.1", "coverage==7.17.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -113,3 +113,17 @@ include = [
     "apps/research/ui-history/research-cf775e01f999f8db.html",
     "apps/research/ui-history/research-06264491f36e0c07.html",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["src/sourcesql", "hosted/flight"]
+omit = ["hosted/flight/tests/*"]
+
+[tool.coverage.report]
+skip_empty = true
+
+[tool.coverage.html]
+directory = "coverage/python"
+
+[tool.coverage.json]
+output = "coverage/python/coverage.json"

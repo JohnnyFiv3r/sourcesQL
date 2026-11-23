@@ -26,3 +26,5 @@ apps/research/.data/
 apps/research/.tunnel/
 apps/research/.vercel/
 apps/research/.vercel-assets/
+coverage/
+.coverage*

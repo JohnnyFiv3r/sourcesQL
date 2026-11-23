@@ -7,7 +7,7 @@ Install Python 3.12 and Node 24, then run:
 
 ```sh
 uv sync --locked --all-extras
-uv run --frozen ruff check src tests scripts/qualify_python.py
+uv run --frozen ruff check src tests scripts/qualify_python.py scripts/coverage_python.py
 uv run --frozen mypy src
 uv run --frozen pytest -q tests hosted/flight/tests
 npm ci --prefix apps/research
@@ -18,6 +18,20 @@ node --test hosted/setup.test.mjs hosted/personal-cloud.test.mjs
 
 PR CI uses no provider credentials and does not publish or deploy. Python 3.13
 and 3.14 installed-artifact qualification remains part of the release workflow.
+
+## Measuring coverage
+
+```sh
+uv run --frozen python scripts/coverage_python.py
+npm run build --prefix apps/research && npm run coverage --prefix apps/research
+```
+
+Each command runs its suite and prints line and branch coverage by module with
+a total. Two runs on the same commit agree within about one point. Code that
+runs only in child processes, or that no test loads, cannot be measured; the
+commands list it, and [docs/coverage.md](docs/coverage.md) says how each file is
+checked instead. There is no coverage threshold; the figures are a baseline,
+not a gate.
 
 ## Main branch policy
 
