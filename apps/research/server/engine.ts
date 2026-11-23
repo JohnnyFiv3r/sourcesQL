@@ -75,8 +75,33 @@ export interface ResearchEngine {
     params?: Record<string, unknown>,
   ): Promise<T>;
 }
+/** Mirrors DEFAULT_LIMITS["dispatch_deadline_seconds"] in src/sourcesql/contracts.py. */
+export const LOCAL_DISPATCH_DEADLINE_SECONDS = 180;
+// Above the engine's own deadline so it can answer cleanly first, and below
+// the 240 s per-call cap of claude.ai and Desktop.
+export const LOCAL_DISPATCH_LIMIT_MS = Math.min(
+  (LOCAL_DISPATCH_DEADLINE_SECONDS + 20) * 1000,
+  240_000,
+);
+export const LOCAL_READ_LIMIT_MS = 30_000;
+// Bridge methods that can dispatch providers or do heavy materialization;
+// every other method gets the short limit.
+const LOCAL_DISPATCH_METHODS = new Set([
+  "query",
+  "explain",
+  "resume_run",
+  "recover_run",
+  "import_table",
+  "import",
+]);
+const LOCAL_JOB_METHODS = new Set(["job_status", "start_job", "cancel_job"]);
+export const localJobsUnavailable = (toolName: string) =>
+  `invalid_request: This sourcesQL server runs queries synchronously and has no jobs, so ${toolName} is not available. A query returns its result in the same call. To check or recover a run, use sourcesql_run_status or sourcesql_recover_run with the run handle.`;
 export type BridgeProcessOptions = {
   timeoutMs?: number;
+  /** Tests only: shorten the per-method limits. */
+  dispatchTimeoutMs?: number;
+  readTimeoutMs?: number;
   command?: string;
   args?: string[];
 };
@@ -151,6 +176,8 @@ export class PythonEngine implements ResearchEngine {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
+    if (LOCAL_JOB_METHODS.has(method))
+      throw new Error(localJobsUnavailable(`sourcesql_${method}`));
     if (
       params.citations !== undefined &&
       !curatedCitationsSchema.safeParse(params.citations).success
@@ -174,7 +201,19 @@ export class PythonEngine implements ResearchEngine {
           "unsupported_capability: Update the local worker to support this citation/materialization contract before retrying",
         );
     }
-    return this.bridgeCall<T>(method, params);
+    const result = await this.bridgeCall<T>(method, params);
+    return method === "capabilities"
+      ? ({
+          ...result,
+          execution: {
+            mode: "synchronous",
+            jobs: false,
+            note: "Queries return their result in the same call. There are no jobs to poll.",
+            dispatch_deadline_seconds: LOCAL_DISPATCH_DEADLINE_SECONDS,
+            enforced_limit_seconds: LOCAL_DISPATCH_LIMIT_MS / 1000,
+          },
+        } as T)
+      : result;
   }
   private bridgeCall<T = Record<string, unknown>>(
     method: string,
@@ -212,6 +251,11 @@ export class PythonEngine implements ResearchEngine {
         }
         return true;
       };
+      const limitMs =
+        this.processOptions.timeoutMs ??
+        (LOCAL_DISPATCH_METHODS.has(method)
+          ? (this.processOptions.dispatchTimeoutMs ?? LOCAL_DISPATCH_LIMIT_MS)
+          : (this.processOptions.readTimeoutMs ?? LOCAL_READ_LIMIT_MS));
       const timer = setTimeout(() => {
         const stopped = terminateOwnedGroup();
         finish(
@@ -221,7 +265,7 @@ export class PythonEngine implements ResearchEngine {
               : "Engine timed out; inspect the run before retrying.",
           ),
         );
-      }, this.processOptions.timeoutMs ?? 30000);
+      }, limitMs);
       child.stdout.on("data", (chunk) => {
         output += String(chunk);
         if (Buffer.byteLength(output) > 8 * 1024 * 1024) {
