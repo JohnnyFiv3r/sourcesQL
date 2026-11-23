@@ -28,8 +28,10 @@ GitHub settings. Editing these files alone does not change GitHub enforcement.
   GitHub Actions against the current base branch.
 - Resolve review conversations before merging. Squash or rebase to keep linear
   history; direct pushes, force pushes, deletion and merge commits are blocked.
-- Contributor PRs need one approval, including approval after the latest
-  reviewable push. New changes dismiss stale approvals.
+- Contributor PRs need one approval from a code owner, including approval
+  after the latest reviewable push. `.github/CODEOWNERS` names the maintainer
+  as the only code owner, so other approvals do not satisfy the rule. New
+  changes dismiss stale approvals.
 - Repository administrators may bypass only the approval rule, through a PR.
   This lets the sole maintainer merge tested work without self-approval.
   The PR requirement, CI, conversation resolution and history protections have
