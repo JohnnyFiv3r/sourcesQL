@@ -103,20 +103,22 @@ function nestedCell(depth: number): z.ZodType<CellValue> {
 }
 const validatedCell = nestedCell(0);
 // Hosts load every advertised schema, so the exported cell advertises a flat
-// union and enforces the full nesting limits in a refinement instead.
-// The flat union's output type is looser than CellValue; the refinement below
-// is what guarantees the nested shape.
+// union and runs the full nested validator in a transform instead. The transform
+// returns the validator's normalized value (it drops keys the nested parse drops),
+// so stored cells match what the recursive schema produced. The flat union's
+// output type is looser than CellValue; the transform guarantees the nested shape.
 export const cell = z
   .union([scalarCell, z.array(z.unknown()), z.record(key, z.unknown())])
-  .superRefine((value, ctx) => {
+  .transform((value, ctx) => {
     const checked = validatedCell.safeParse(value);
-    if (!checked.success)
-      for (const issue of checked.error.issues)
-        ctx.addIssue({
-          code: "custom",
-          message: issue.message,
-          path: issue.path,
-        });
+    if (checked.success) return checked.data;
+    for (const issue of checked.error.issues)
+      ctx.addIssue({
+        code: "custom",
+        message: issue.message,
+        path: issue.path,
+      });
+    return z.NEVER;
   })
   .describe(
     `A table cell: a string, number, boolean or null, or an array or object of such values, nested at most ${cellLimits.depth} levels deep. Arrays have at most ${cellLimits.items} items and objects at most ${cellLimits.keys} keys. Object keys follow the same rules as column names.`,

@@ -52,7 +52,8 @@ test("the advertised tool list stays within the total size budget", async (t) =>
   const sizes = tools
     .map((tool) => ({ name: tool.name, size: JSON.stringify(tool).length }))
     .sort((x, y) => y.size - x.size);
-  const total = sizes.reduce((sum, tool) => sum + tool.size, 0);
+  // A host receives the whole list as one JSON array, so measure that, not a sum of entries.
+  const total = JSON.stringify(tools).length;
   t.diagnostic(`tool list total: ${total} characters`);
   const top = sizes
     .slice(0, 3)

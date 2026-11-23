@@ -122,3 +122,10 @@ test("a match cell nested to the limit is accepted over MCP", async () => {
     assert.equal(accepted.isError, false, accepted.text);
   });
 });
+
+test("a __proto__ key nested inside a cell is dropped, as the recursive schema did", () => {
+  assert.deepEqual(cell.parse(JSON.parse('[{"__proto__":0}]')), [{}]);
+  assert.deepEqual(cell.parse(JSON.parse('{"a":[{"__proto__":0,"keep":2}]}')), {
+    a: [{ keep: 2 }],
+  });
+});
