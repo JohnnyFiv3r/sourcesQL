@@ -47,37 +47,29 @@ test("the advertised tool list keeps its names and uses no $ref or $defs", async
   assert.ok(!text.includes('"$defs"'), "tool schemas must not use $defs");
 });
 
-test(
-  "the advertised tool list stays within the total size budget",
-  { todo: "#130 step 2 flips this on" },
-  async (t) => {
-    const tools = await listTools();
-    const sizes = tools
-      .map((tool) => ({ name: tool.name, size: JSON.stringify(tool).length }))
-      .sort((x, y) => y.size - x.size);
-    const total = sizes.reduce((sum, tool) => sum + tool.size, 0);
-    t.diagnostic(`tool list total: ${total} characters`);
-    const top = sizes
-      .slice(0, 3)
-      .map((tool) => `${tool.name} ${tool.size}`)
-      .join(", ");
-    assert.ok(
-      total <= TOTAL_BUDGET,
-      `Tool list is ${total} characters, over the budget of ${TOTAL_BUDGET}. Largest tools: ${top}`,
-    );
-  },
-);
+test("the advertised tool list stays within the total size budget", async (t) => {
+  const tools = await listTools();
+  const sizes = tools
+    .map((tool) => ({ name: tool.name, size: JSON.stringify(tool).length }))
+    .sort((x, y) => y.size - x.size);
+  const total = sizes.reduce((sum, tool) => sum + tool.size, 0);
+  t.diagnostic(`tool list total: ${total} characters`);
+  const top = sizes
+    .slice(0, 3)
+    .map((tool) => `${tool.name} ${tool.size}`)
+    .join(", ");
+  assert.ok(
+    total <= TOTAL_BUDGET,
+    `Tool list is ${total} characters, over the budget of ${TOTAL_BUDGET}. Largest tools: ${top}`,
+  );
+});
 
-test(
-  "no tool entry goes over the per-tool size budget",
-  { todo: "#130 step 2 flips this on" },
-  async () => {
-    for (const tool of await listTools()) {
-      const size = JSON.stringify(tool).length;
-      assert.ok(
-        size <= TOOL_BUDGET,
-        `Tool ${tool.name} schema is ${size} characters, over the per-tool budget of ${TOOL_BUDGET}.`,
-      );
-    }
-  },
-);
+test("no tool entry goes over the per-tool size budget", async () => {
+  for (const tool of await listTools()) {
+    const size = JSON.stringify(tool).length;
+    assert.ok(
+      size <= TOOL_BUDGET,
+      `Tool ${tool.name} schema is ${size} characters, over the per-tool budget of ${TOOL_BUDGET}.`,
+    );
+  }
+});

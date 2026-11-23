@@ -89,18 +89,38 @@ export const v1SnapshotSchema = z
 
 export type CellValue =
   string | number | boolean | null | CellValue[] | { [key: string]: CellValue };
+export const cellLimits = { depth: 8, items: 1000, keys: 128 } as const;
 function nestedCell(depth: number): z.ZodType<CellValue> {
-  return depth === 8
+  return depth === cellLimits.depth
     ? scalarCell
     : z.union([
         scalarCell,
-        z.array(nestedCell(depth + 1)).max(1000),
+        z.array(nestedCell(depth + 1)).max(cellLimits.items),
         z
           .record(key, nestedCell(depth + 1))
-          .refine((v) => Object.keys(v).length <= 128),
+          .refine((v) => Object.keys(v).length <= cellLimits.keys),
       ]);
 }
-export const cell = nestedCell(0);
+const validatedCell = nestedCell(0);
+// Hosts load every advertised schema, so the exported cell advertises a flat
+// union and enforces the full nesting limits in a refinement instead.
+// The flat union's output type is looser than CellValue; the refinement below
+// is what guarantees the nested shape.
+export const cell = z
+  .union([scalarCell, z.array(z.unknown()), z.record(key, z.unknown())])
+  .superRefine((value, ctx) => {
+    const checked = validatedCell.safeParse(value);
+    if (!checked.success)
+      for (const issue of checked.error.issues)
+        ctx.addIssue({
+          code: "custom",
+          message: issue.message,
+          path: issue.path,
+        });
+  })
+  .describe(
+    `A table cell: a string, number, boolean or null, or an array or object of such values, nested at most ${cellLimits.depth} levels deep. Arrays have at most ${cellLimits.items} items and objects at most ${cellLimits.keys} keys. Object keys follow the same rules as column names.`,
+  ) as unknown as z.ZodType<CellValue>;
 export const cellDiagnosticStatusSchema = z.enum([
   "processed",
   "supported_text",
