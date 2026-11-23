@@ -21,6 +21,7 @@ from .semantic import OpenAIEmbeddingProvider, PydanticSemanticProvider, TYPES
 
 __all__ = [
     "ProviderRegistry",
+    "route_capabilities",
     "FixtureProvider",
     "BraveProvider",
     "ExaProvider",
@@ -30,6 +31,59 @@ __all__ = [
     "PydanticSemanticProvider",
     "OpenAIEmbeddingProvider",
 ]
+
+
+SEARCH_PROVIDERS = ("brave", "exa", "serper", "deepseek")
+HOST_SEARCH_NOTE = (
+    "Search with your own tool and pass the URLs to WEB_FETCH. Titles, snippets and dates "
+    "from your search are leads, not citations. Only text sourcesQL fetches itself is cited."
+)
+
+
+def _search_credential(profile: dict) -> str:
+    credential = profile.get("api_key")
+    if credential is None and profile.get("api_key_env"):
+        credential = os.environ.get(profile["api_key_env"])
+    return credential or ""
+
+
+def route_capabilities(profile: dict | None) -> dict:
+    """Which acquisition routes a profile can run, without building providers or dialing out.
+
+    Only booleans and reason codes are reported, never credential names or values.
+    """
+    profile = profile or {}
+    mode = profile.get("mode", "fixture")
+    if mode == "fixture":
+        search_configured = fetch_configured = True
+    else:
+        search_configured = profile.get("provider", "brave") in SEARCH_PROVIDERS and bool(
+            _search_credential(profile)
+        )
+        hosts = profile.get("allowed_source_hosts")
+        fetch_configured = profile.get("allow_public_source_hosts") is True or (
+            isinstance(hosts, list) and bool(hosts)
+        )
+    available = fetch_configured and (mode == "fixture" or not search_configured)
+    route: dict[str, Any] = {"available": available}
+    if available:
+        route["operators"] = ["WEB_FETCH", "SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL"]
+        route["note"] = HOST_SEARCH_NOTE
+    else:
+        route["reason"] = (
+            "fetch_not_configured" if not fetch_configured else "search_provider_configured"
+        )
+    return {
+        "search": {"configured": search_configured},
+        "fetch": {
+            "implemented": True,
+            "configured": fetch_configured,
+            "live_qualified": False,
+            "formats": ["html", "text"],
+            "max_urls_per_call": 32,
+        },
+        "host_search_route": route,
+    }
 
 
 def blocked_fetch_record(url: str) -> dict:
@@ -68,10 +122,10 @@ class ProviderRegistry:
             }
             if provider not in providers:
                 raise SourcesQLError("unsupported_capability", "Unknown search provider")
-            credentials = self.profile.get("api_key")
-            if credentials is None and self.profile.get("api_key_env"):
-                credentials = os.environ.get(self.profile["api_key_env"])
-            kwargs = {"api_key": credentials or "", "client": self.profile.get("http_client")}
+            kwargs = {
+                "api_key": _search_credential(self.profile),
+                "client": self.profile.get("http_client"),
+            }
             if provider == "exa":
                 kwargs["search_type"] = self.profile.get("search_type", "auto")
             if provider == "deepseek":
@@ -177,7 +231,7 @@ class ProviderRegistry:
             },
             "metering": "fixture" if self.mode == "fixture" else "estimated_only",
             "token_limits": "output_per_request_and_reported_totals",
-            "fetch": {"implemented": True, "live_qualified": False, "formats": ["html", "text"]},
+            "fetch": route_capabilities(self.profile)["fetch"],
         }
 
     def _authorize(self, budget: Budget) -> None:

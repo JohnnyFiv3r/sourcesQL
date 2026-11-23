@@ -283,6 +283,7 @@ class Engine:
 
     def capabilities(self):
         from sourcesql.sql.admission import EXTERNAL
+        from sourcesql.providers import route_capabilities
 
         return {
             "engine_version": __version__,
@@ -302,8 +303,11 @@ class Engine:
                 {
                     "name": k,
                     "mode": v.get("mode", "fixture"),
-                    "provider": v.get("provider", "fixture"),
+                    "provider": v.get(
+                        "provider", "fixture" if v.get("mode", "fixture") == "fixture" else "brave"
+                    ),
                     "live_qualified": False,
+                    **route_capabilities(v),
                 }
                 for k, v in self.profiles.items()
             ],

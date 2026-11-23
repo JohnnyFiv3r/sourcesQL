@@ -178,3 +178,61 @@ def test_imported_host_hits_still_have_no_evidence_or_sources(tmp_path):
     assert result["replay_level"] == "values_only"
     sources = engine.query(query="SELECT url FROM input.s", inputs={"s": pin(result, "sources")})
     assert sources["rows"] == []
+
+
+LIVE = {"mode": "live", "provider": "brave", "allow_live": True, "approved_cost_microusd": 50_000}
+
+
+def profile_entry(tmp_path, **changes):
+    engine = Engine(
+        tmp_path / "caps",
+        profiles={"p": {**LIVE, **changes}},
+        worker=reference_worker,
+    )
+    return next(p for p in engine.capabilities()["profiles"] if p["name"] == "p")
+
+
+def test_live_profile_without_search_key_reports_fetch_and_host_route(tmp_path, monkeypatch):
+    monkeypatch.delenv("SYNTHETIC_SEARCH_KEY", raising=False)
+    entry = profile_entry(
+        tmp_path, allow_public_source_hosts=True, api_key_env="SYNTHETIC_SEARCH_KEY"
+    )
+    assert entry["search"] == {"configured": False}
+    assert entry["fetch"]["configured"] is True
+    assert entry["fetch"]["live_qualified"] is False
+    assert entry["host_search_route"]["available"] is True
+    assert "WEB_FETCH" in entry["host_search_route"]["operators"]
+    assert "SYNTHETIC_SEARCH_KEY" not in json.dumps(entry)
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason", "fetch_configured"),
+    [
+        (
+            {"api_key": "SAFE-SYNTHETIC-KEY", "allow_public_source_hosts": True},
+            "search_provider_configured",
+            True,
+        ),
+        ({"allowed_source_hosts": []}, "fetch_not_configured", False),
+        ({"allow_public_source_hosts": "true"}, "fetch_not_configured", False),
+    ],
+)
+def test_host_route_is_unavailable_when_search_is_configured_or_fetch_is_not(
+    tmp_path, changes, reason, fetch_configured
+):
+    entry = profile_entry(tmp_path, **changes)
+    assert entry["host_search_route"] == {"available": False, "reason": reason}
+    assert entry["fetch"]["configured"] is fetch_configured
+    assert "SAFE-SYNTHETIC-KEY" not in json.dumps(entry)
+
+
+def test_explicit_allowlist_counts_as_fetch_configured(tmp_path):
+    entry = profile_entry(tmp_path, allowed_source_hosts=["source.example"])
+    assert entry["host_search_route"]["available"] is True
+
+
+def test_fixture_profile_advertises_the_host_route_so_it_runs_offline(tmp_path):
+    entry = next(p for p in make(tmp_path).capabilities()["profiles"] if p["name"] == "fixture")
+    assert entry["host_search_route"]["available"] is True
+    assert entry["search"] == {"configured": True}
+    assert entry["provider"] == "fixture"

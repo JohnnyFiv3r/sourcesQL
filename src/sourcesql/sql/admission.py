@@ -739,7 +739,9 @@ class _Binder:
                 if custom_name(node.this) not in ("WEB_SEARCH", "WEB_FETCH"):
                     refuse("Only WEB_SEARCH and WEB_FETCH are source operators")
                 self.validate_call(node.this, {}, source=True)
-                cols = list(FETCH_COLUMNS if custom_name(node.this) == "WEB_FETCH" else SOURCE_COLUMNS)
+                cols = list(
+                    FETCH_COLUMNS if custom_name(node.this) == "WEB_FETCH" else SOURCE_COLUMNS
+                )
             elif node.db:
                 if node.db.lower() != "input" or node.name not in self.inputs:
                     refuse("Unknown or unbound input relation", "invalid_query")
