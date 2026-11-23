@@ -41,11 +41,21 @@ def leaves(expression: ast.AST) -> list[str]:
     return []
 
 
+def own_nodes(scope: ast.AST):
+    """Nodes of one function body, not those of functions or classes nested in it."""
+    pending = list(ast.iter_child_nodes(scope))
+    while pending:
+        node = pending.pop()
+        yield node
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef):
+            pending.extend(ast.iter_child_nodes(node))
+
+
 def flowing_literals(candidate: ast.AST, scope: ast.AST) -> list[str]:
     """Literals a variable code can hold: its own branches, its assignments and its default."""
     names = {node.id for node in ast.walk(candidate) if isinstance(node, ast.Name)}
     found = leaves(candidate)
-    for node in ast.walk(scope):
+    for node in own_nodes(scope):
         if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if node.value and any(isinstance(t, ast.Name) and t.id in names for t in targets):
@@ -172,6 +182,21 @@ def test_scan_reads_defaults_and_assignments_behind_a_variable_code():
         "another_branch",
         "a_fallback",
     }
+
+
+def test_scan_ignores_a_nested_functions_unrelated_variable_of_the_same_name():
+    literal: dict[str, list[str]] = {}
+    scan(
+        "def refuse(message, code='a_default'):\n"
+        "    def metadata(code='nested_default'):\n"
+        "        code = 'descriptive_metadata'\n"
+        "        return code\n"
+        "    raise AdmissionRefusal(code, message)\n",
+        "probe.py",
+        literal,
+        [],
+    )
+    assert set(literal) == {"a_default"}
 
 
 def test_every_raised_code_is_in_the_table():

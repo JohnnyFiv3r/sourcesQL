@@ -35,6 +35,8 @@ async function discover(
     capabilities?: object;
     open?: boolean;
     snapshot?: Snapshot;
+    // Existing tests pin the hosted text; local text is covered in local-jobs.test.ts.
+    jobs?: boolean;
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-agent-guidance-"));
@@ -42,6 +44,7 @@ async function discover(
   await writeFile(htmlPath, "<!doctype html><html>Synthetic widget</html>");
   const calls: string[] = [];
   const engine: ResearchEngine = {
+    supportsAsyncJobs: options.jobs !== false,
     async call<T>(method: string): Promise<T> {
       calls.push(method);
       if (method === "capabilities" && options.capabilities)
