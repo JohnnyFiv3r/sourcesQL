@@ -426,6 +426,8 @@ def validate_type(logical_type: str) -> str:
         tree = expression.args["to"]
     except SqlglotError:
         refuse("Invalid logical type", "invalid_output")
+    except RecursionError:
+        refuse("Logical type exceeds the supported nesting", "invalid_output")
 
     scalar = {
         "TEXT": "VARCHAR",
@@ -1100,6 +1102,10 @@ def admit(
         statements = sqlglot.parse(query, read=_ClosedDuckDB)
     except SqlglotError:
         refuse("SQL could not be parsed in the installed dialect", "invalid_query")
+    except RecursionError:
+        # The parser recurses per nesting level, so input too deep to parse is the same
+        # condition as the post-parse depth limit in _closed_tree.
+        refuse("Query exceeds the AST depth limit", "invalid_query")
     if len(statements) != 1 or not isinstance(statements[0], (exp.Select, exp.SetOperation)):
         refuse("Exactly one read-only SELECT statement is required")
     tree = statements[0]

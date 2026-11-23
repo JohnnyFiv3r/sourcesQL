@@ -230,3 +230,17 @@ def test_explicit_hosted_explain_still_explains_without_provider_setup(tmp_path,
 def test_query_cannot_supply_a_validation_override(tmp_path, field):
     with pytest.raises(SourcesQLError, match="Unknown request field"):
         engine_module.Engine(tmp_path).query(query="SELECT 1 AS value", **{field: True})
+
+
+def test_too_deep_query_fails_the_hosted_job_with_the_depth_reason(tmp_path, monkeypatch):
+    tracked_execution(monkeypatch)
+    request = {"query": "SELECT " + "(" * 100 + "1" + ")" * 100 + " AS x"}
+    store = JobStore(tmp_path / "store", request)
+    report = {}
+    runner.execute_job(
+        store, {"job_id": str(uuid4())}, report, tmp_path, policy, policy.load_configuration({})
+    )
+    assert report["status"] == "failed" and store.finished == []
+    assert store.failures == ["invalid_query"]
+    assert store.reasons == ["Query exceeds the AST depth limit"]
+    assert report["error_code"] == "invalid_query"
