@@ -41,15 +41,35 @@ const messages: Record<string, string> = {
     "Research execution failed safely. Inspect this job or run before continuing.",
 };
 
-export function safeExecutionError(code: unknown): {
+/** Admission's own refusal sentences: fixed text, never query text or values. */
+const refusalCodes = new Set(["invalid_query", "unsupported_query"]);
+const refusalReason = /^[A-Za-z0-9 ,.;:()_'-]{1,240}$/;
+
+export function safeExecutionError(
+  code: unknown,
+  reason?: unknown,
+): {
   code: string;
   message: string;
+  reason?: string;
 } {
   const safeCode =
     typeof code === "string" && Object.hasOwn(messages, code)
       ? code
       : "execution_failed";
-  return { code: safeCode, message: messages[safeCode] };
+  const safeReason =
+    refusalCodes.has(safeCode) &&
+    typeof reason === "string" &&
+    refusalReason.test(reason)
+      ? reason
+      : undefined;
+  return safeReason
+    ? {
+        code: safeCode,
+        message: `${messages[safeCode]} Admission refused it: ${safeReason}.`,
+        reason: safeReason,
+      }
+    : { code: safeCode, message: messages[safeCode] };
 }
 
 const stages = new Set([

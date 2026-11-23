@@ -328,7 +328,7 @@ def test_runner_binds_trusted_policy_without_a_separate_query_explain(tmp_path, 
         def finish_job(self, *args):
             captured["verified"] = True
 
-        def fail_job(self, *args):
+        def fail_job(self, *args, **kwargs):
             raise AssertionError("Unexpected execution failure")
 
     class Engine:
@@ -385,7 +385,7 @@ def test_runner_refuses_a_live_job_bound_to_another_policy_before_engine(
         def bind_job(self, *args):
             pass
 
-        def fail_job(self, identity, token, code, message, stage="admission"):
+        def fail_job(self, identity, token, code, message, stage="admission", refusal_reason=None):
             captured["failure"] = code
 
     report = {}

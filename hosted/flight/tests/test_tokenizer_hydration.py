@@ -215,7 +215,7 @@ def test_only_validated_scoring_hydrates_before_dispatch_and_preserves_request(
         def finish_job(self, *args):
             events.append("finish")
 
-        def fail_job(self, *args):
+        def fail_job(self, *args, **kwargs):
             events.append("fail")
 
     class Helper:

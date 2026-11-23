@@ -74,14 +74,36 @@ SCALAR_TYPES = frozenset(
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
+class AdmissionRefusal(SourcesQLError):
+    """A refusal raised by admission itself.
+
+    Its message is one of this module's fixed sentences (at most naming an
+    SQLGlot node class), never query text, bound values or provider detail,
+    so hosted job status may return it to the caller as the refusal reason.
+    """
+
+
 class _ClosedDuckDB(DuckDB):
+    class Tokenizer(DuckDB.Tokenizer):
+        # SQLGlot's DuckDB tokenizer reads `$` as the start of a dollar-quoted
+        # string whenever the text up to the next `$` has no whitespace, so
+        # `$q1,$q2` became an unterminated `$q1,$...$q1,$` string while
+        # `$q1, $q2` tokenized as two parameters. The closed language binds
+        # every value through `$name` parameters and has no dollar-quoted
+        # literals, so `$` is always a parameter sigil here.
+        HEREDOC_STRINGS = []
+
     class Parser(DuckDBParser):
         def _parse_as_command(self, start: Any) -> exp.Command:
             # SQLGlot's fallback otherwise logs original, potentially private SQL.
-            raise SourcesQLError("unsupported_query", "Only read-only SELECT queries are supported")
+            raise AdmissionRefusal(
+                "unsupported_query", "Only read-only SELECT queries are supported"
+            )
 
         def _parse_command(self) -> exp.Command:
-            raise SourcesQLError("unsupported_query", "Only read-only SELECT queries are supported")
+            raise AdmissionRefusal(
+                "unsupported_query", "Only read-only SELECT queries are supported"
+            )
 
 
 @dataclass
@@ -229,7 +251,22 @@ _ARGS: dict[str, set[str]] = {
 
 
 def refuse(message: str, code: str = "unsupported_query") -> NoReturn:
-    raise SourcesQLError(code, message)
+    raise AdmissionRefusal(code, message)
+
+
+PUBLIC_REASON = re.compile(r"[A-Za-z0-9 ,.;:()_'-]{1,240}\Z")
+
+
+def public_refusal_reason(error: BaseException) -> str | None:
+    """The admission refusal sentence a hosted caller may see, or None."""
+    if (
+        type(error) is AdmissionRefusal
+        and error.code in {"invalid_query", "unsupported_query"}
+        and error.stage == "admission"
+        and PUBLIC_REASON.fullmatch(error.safe_message)
+    ):
+        return error.safe_message
+    return None
 
 
 def custom_name(node: exp.Expr) -> str | None:
