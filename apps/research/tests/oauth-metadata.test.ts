@@ -66,7 +66,17 @@ async function discover(oauth?: { scopes: string[] }) {
 test("OAuth discovery exposes the complete owner scope on all tools while preserving schemas, annotations and widget metadata", async () => {
   const bearer = await discover();
   const oauth = await discover({ scopes: ["sourcesql:access"] });
-  assert.equal(oauth.tools.length, 39);
+  // The stub engine has no jobs, so this is the local list.
+  assert.equal(oauth.tools.length, 36);
+  assert.ok(
+    !oauth.tools.some((tool) =>
+      [
+        "sourcesql_job_status",
+        "sourcesql_start_job",
+        "sourcesql_cancel_job",
+      ].includes(tool.name),
+    ),
+  );
   assert.deepEqual(
     oauth.tools.map((t) => t.name),
     bearer.tools.map((t) => t.name),
