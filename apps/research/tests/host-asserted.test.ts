@@ -902,7 +902,12 @@ test("an export of a request saved before digests existed still tells a changed 
       ],
     }),
     assessments: [
-      { row_id: "claim-1", field: "claim", status: "verified", note: "n" },
+      {
+        row_id: "claim-1",
+        field: "claim",
+        status: "verified" as const,
+        note: "n",
+      },
     ],
   };
   await store.appendResearch(append);
@@ -930,7 +935,12 @@ test("an export of a request saved before digests existed still tells a changed 
     fresh.appendResearch({
       ...structuredClone(append),
       assessments: [
-        { row_id: "claim-1", field: "claim", status: "conflicting", note: "n" },
+        {
+          row_id: "claim-1",
+          field: "claim",
+          status: "conflicting" as const,
+          note: "n",
+        },
       ],
     }),
     /different results/,
@@ -962,7 +972,12 @@ test("a completion digest that is not a 64-character hex string is refused on im
       ],
     }),
     assessments: [
-      { row_id: "claim-1", field: "claim", status: "unverified", note: "n" },
+      {
+        row_id: "claim-1",
+        field: "claim",
+        status: "unverified" as const,
+        note: "n",
+      },
     ],
   });
   const bundle = JSON.parse(
@@ -1020,7 +1035,12 @@ test("an engine-backed refresh replays after a restore maps its result to a new 
     request_id,
     snapshot: engineChild("wq_origin", "2026-11-24T10:00:00.000Z"),
     assessments: [
-      { row_id: "claim-1", field: "claim", status: "verified", note: "n" },
+      {
+        row_id: "claim-1",
+        field: "claim",
+        status: "verified" as const,
+        note: "n",
+      },
     ],
   };
   await store.appendResearch(append);
@@ -1057,7 +1077,12 @@ test("an engine-backed refresh replays after a restore maps its result to a new 
       ...structuredClone(append),
       snapshot: local,
       assessments: [
-        { row_id: "claim-1", field: "claim", status: "conflicting", note: "n" },
+        {
+          row_id: "claim-1",
+          field: "claim",
+          status: "conflicting" as const,
+          note: "n",
+        },
       ],
     }),
     /different results/,
