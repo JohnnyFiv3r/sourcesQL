@@ -155,6 +155,32 @@ def test_long_shallow_type_past_the_length_cap_keeps_its_existing_refusal():
     )
 
 
+@pytest.mark.parametrize(
+    "admitted",
+    [
+        # Parentheses in a comment are not type levels.
+        "VARCHAR /* " + "(" * 9 + ")" * 9 + " */",
+        # Precision parentheses are not type levels.
+        "STRUCT(a " * 8 + "DECIMAL(18,2)" + ")" * 8,
+    ],
+)
+def test_padding_a_type_within_the_nesting_limit_keeps_the_length_refusal(admitted):
+    validate_type(admitted)
+    with pytest.raises(SourcesQLError) as error:
+        validate_type(admitted + " " * 4096)
+    assert (error.value.code, error.value.safe_message) == (
+        "invalid_output",
+        "Invalid logical type",
+    )
+
+
+def test_unbalanced_or_untokenizable_long_type_keeps_the_length_refusal():
+    for long_type in (")" * 5000, "STRUCT(" + "'" * 5000):
+        with pytest.raises(SourcesQLError) as error:
+            validate_type(long_type)
+        assert error.value.safe_message == "Invalid logical type"
+
+
 def test_too_deep_declared_input_type_is_refused_at_admission():
     schemas = {"t": [Column("c", struct(300), True)]}
     with pytest.raises(SourcesQLError) as error:

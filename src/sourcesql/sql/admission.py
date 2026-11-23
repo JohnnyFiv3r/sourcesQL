@@ -18,6 +18,7 @@ from sqlglot import exp
 from sqlglot.dialects.duckdb import DuckDB
 from sqlglot.errors import SqlglotError
 from sqlglot.parsers.duckdb import DuckDBParser
+from sqlglot.tokens import TokenType
 
 from sourcesql.contracts import Column, SourcesQLError
 
@@ -400,6 +401,39 @@ def _fields(logical_type: str) -> list[Column]:
 _TYPE_NESTING_LIMIT = 8
 
 
+_NESTED_TYPE_TOKENS = {
+    TokenType.STRUCT,
+    TokenType.MAP,
+    TokenType.UNION,
+    TokenType.ARRAY,
+}
+
+
+def _constructor_nesting(logical_type: str) -> int:
+    """Deepest nesting of STRUCT/MAP/UNION/ARRAY constructors, counted on tokens.
+
+    Tokens, not characters, so parentheses in comments or around DECIMAL
+    precision do not count as type levels. The tokenizer does not recurse.
+    """
+    try:
+        tokens = _ClosedDuckDB.Tokenizer().tokenize(logical_type)
+    except SqlglotError:
+        return 0
+    stack: list[bool] = []
+    depth = deepest = 0
+    previous = None
+    for token in tokens:
+        if token.token_type == TokenType.L_PAREN:
+            constructor = previous in _NESTED_TYPE_TOKENS
+            stack.append(constructor)
+            depth += constructor
+            deepest = max(deepest, depth)
+        elif token.token_type == TokenType.R_PAREN and stack:
+            depth -= stack.pop()
+        previous = token.token_type
+    return deepest
+
+
 def validate_type(logical_type: str) -> str:
     """Validate a declared type as an AST before it enters trusted worker SQL."""
     if type(logical_type) is not str:
@@ -407,11 +441,7 @@ def validate_type(logical_type: str) -> str:
     if len(logical_type) > 4096:
         # Too long to parse. An extra, earlier refusal only: it names deep
         # nesting when that is why the type is long, and never admits anything.
-        depth = deepest = 0
-        for character in logical_type:
-            depth += (character == "(") - (character == ")")
-            deepest = max(deepest, depth)
-        if deepest > _TYPE_NESTING_LIMIT:
+        if _constructor_nesting(logical_type) > _TYPE_NESTING_LIMIT:
             refuse("Logical type exceeds the supported nesting", "invalid_output")
         refuse("Invalid logical type", "invalid_output")
     try:
