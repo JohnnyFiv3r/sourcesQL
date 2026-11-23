@@ -219,8 +219,10 @@ function withExportedAssessments(request: ResearchRequest): ResearchRequest {
 }
 
 /**
- * An engine-backed result is named by its id and content hash only: a restore
- * maps it to a new result id and read time, which must not change the digest.
+ * A restore maps an engine-backed result to a new local result and read time,
+ * so those fields stand in for themselves in the digest. Everything else in the
+ * snapshot (title, rows, evidence, content hash) still counts, so a different
+ * title or an uncited copy of the same table is a different completion.
  * A host-written snapshot has no engine identity, so all of it counts.
  */
 const completionDigest = (completion: AppendResearchInput) => {
@@ -229,8 +231,12 @@ const completionDigest = (completion: AppendResearchInput) => {
     ? {
         ...completion,
         snapshot: {
-          id: snapshot.id,
-          contentSha256: snapshot.dataRef.contentSha256,
+          ...snapshot,
+          capturedAt: "",
+          dataRef: { ...snapshot.dataRef, resultId: "" },
+          ...(snapshot.origin
+            ? { origin: { ...snapshot.origin, resultId: "", runId: "" } }
+            : {}),
         },
       }
     : completion;

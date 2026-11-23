@@ -1023,6 +1023,10 @@ test("an engine-backed refresh replays after a restore maps its result to a new 
   const resolveAs =
     (resultId: string, capturedAt: string) => async (saved: Snapshot) => ({
       ...engineChild(resultId, capturedAt),
+      // The title comes from the result reference and the evidence from the
+      // engine result, so both follow what was submitted.
+      title: saved.title,
+      rows: saved.rows,
       parentSnapshotId: saved.parentSnapshotId,
     });
   const store = new ResearchStore(
@@ -1087,4 +1091,27 @@ test("an engine-backed refresh replays after a restore maps its result to a new 
     }),
     /different results/,
   );
+  // Only the title changed, or a different result holds the same table without
+  // the citation: neither is the same completion, in either store.
+  const uncited = {
+    ...local,
+    origin: { ...local.origin!, resultId: "wq_uncited", runId: "run_uncited" },
+    dataRef: { ...local.dataRef!, resultId: "wq_uncited" },
+    rows: local.rows.map((row) => ({ ...row, evidence: {} })),
+  };
+  for (const [target, original] of [
+    [fresh, local],
+    [store, append.snapshot],
+  ] as const)
+    for (const changed of [
+      { ...original, title: "Another title" },
+      { ...uncited, id: original.id },
+    ])
+      await assert.rejects(
+        target.appendResearch({
+          ...structuredClone(append),
+          snapshot: changed,
+        }),
+        /different results/,
+      );
 });
