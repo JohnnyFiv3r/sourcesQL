@@ -80,6 +80,15 @@ export type BridgeProcessOptions = {
   command?: string;
   args?: string[];
 };
+/** An engine refusal. Its message keeps the `code: message` shape callers match on. */
+export class EngineCallError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+  }
+}
 export class PythonEngine implements ResearchEngine {
   constructor(
     private projectRoot = fileURLToPath(new URL("../../../", import.meta.url)),
@@ -250,8 +259,9 @@ export class PythonEngine implements ResearchEngine {
           if (result.id !== id) throw new Error();
           if (result.error)
             finish(
-              new Error(
-                `${String(result.error.code)}: ${String(result.error.message)}`,
+              new EngineCallError(
+                String(result.error.code),
+                String(result.error.message),
               ),
             );
           else if (Object.hasOwn(result, "result"))

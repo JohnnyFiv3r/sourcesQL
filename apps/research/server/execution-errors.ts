@@ -1,5 +1,5 @@
 /** Public summaries use fixed text; stored/provider error strings stay private. */
-const messages: Record<string, string> = {
+export const messages: Record<string, string> = {
   unsupported_query:
     "The query is not supported. Review its SQL against sourcesql_capabilities before starting new work.",
   invalid_query:
@@ -39,7 +39,16 @@ const messages: Record<string, string> = {
     "Execution outcome is unknown. Inspect this job or run; do not automatically resubmit it.",
   execution_failed:
     "Research execution failed safely. Inspect this job or run before continuing.",
+  not_found: "Not found.",
+  result_unavailable: "Result or dependency unavailable.",
+  idempotency_conflict:
+    "That request ID was already used with different parameters. Use a new request ID, or repeat the original request unchanged.",
+  revision_conflict:
+    "The research changed since you read it. Reread it and apply your change again.",
 };
+
+export const knownErrorCode = (code: string): boolean =>
+  Object.hasOwn(messages, code);
 
 /** Admission's own refusal sentences: fixed text, never query text or values. */
 const refusalCodes = new Set(["invalid_query", "unsupported_query"]);

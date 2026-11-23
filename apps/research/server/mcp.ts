@@ -12,6 +12,7 @@ import {
   resolveResult,
   boundedPreview,
   resultSnapshot,
+  EngineCallError,
   type ResearchEngine,
   type ResultReference,
   type EngineResult,
@@ -75,6 +76,7 @@ import {
 import { capacitySchema, researchJobView } from "../src/job-view.js";
 import { encodeResearchView, type ResearchViewWire } from "../src/view-wire.js";
 import {
+  knownErrorCode,
   safeExecutionError,
   safeRunErrors,
   safeFailureContext,
@@ -290,18 +292,15 @@ export function createServer(
         };
       return result;
     } catch (error) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text:
-              error instanceof Error
-                ? error.message
-                : "Unable to complete the operation.",
-          },
-        ],
-      };
+      // An engine code outside the shared table gets its fixed summary, never
+      // the engine's own text.
+      const text =
+        error instanceof EngineCallError && !knownErrorCode(error.code)
+          ? `execution_failed: ${safeExecutionError("execution_failed").message}`
+          : error instanceof Error
+            ? error.message
+            : "Unable to complete the operation.";
+      return { isError: true, content: [{ type: "text", text }] };
     }
   };
   const jobStates = new Set([
