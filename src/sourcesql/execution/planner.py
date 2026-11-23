@@ -14,6 +14,7 @@ from sqlglot import exp
 from sourcesql.contracts import Column, Table, SourcesQLError
 from sourcesql.sql.admission import (
     ParsedQuery,
+    FETCH_COLUMNS,
     SOURCE_COLUMNS,
     _direct_nodes,
     call_parts,
@@ -390,6 +391,7 @@ class _Executor:
                 args = [literal_value(v, self.plan.parameters) for v in positional]
                 kwargs = {k: literal_value(v, self.plan.parameters) for k, v in keywords.items()}
                 lineage_output: dict[tuple[str, ...], list[str]] = {}
+                columns = FETCH_COLUMNS if custom_name(call) == "WEB_FETCH" else SOURCE_COLUMNS
                 rows = self.dispatch(
                     custom_name(call),
                     args,
@@ -401,8 +403,8 @@ class _Executor:
                     )
                 name = self.store(
                     Table(
-                        list(SOURCE_COLUMNS),
-                        [{c.key: row.get(c.key) for c in SOURCE_COLUMNS} for row in rows],
+                        list(columns),
+                        [{c.key: row.get(c.key) for c in columns} for row in rows],
                         [
                             {
                                 path[1:]: references

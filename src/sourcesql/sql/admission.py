@@ -60,6 +60,9 @@ SOURCE_COLUMNS.extend(
         Column("best_search_rank", "BIGINT"),
     ]
 )
+# Only WEB_FETCH reports per-URL outcomes, so a failed URL stays visible with its
+# reason. WEB_SEARCH keeps SOURCE_COLUMNS and its row type unchanged.
+FETCH_COLUMNS = [*SOURCE_COLUMNS, Column("fetch_status"), Column("fetch_failure")]
 SCALAR_TYPES = frozenset(
     {
         "VARCHAR",
@@ -508,7 +511,8 @@ def operator_type(node: exp.Anonymous, parameters: dict[str, Any]) -> str:
     name = custom_name(node)
     _, kwargs = call_parts(node)
     if name in ("WEB_SEARCH", "WEB_FETCH"):
-        return "STRUCT(" + ", ".join(c.key + " " + c.logical_type for c in SOURCE_COLUMNS) + ")[]"
+        columns = FETCH_COLUMNS if name == "WEB_FETCH" else SOURCE_COLUMNS
+        return "STRUCT(" + ", ".join(c.key + " " + c.logical_type for c in columns) + ")[]"
     if name == "SEM_MATCH":
         return "BOOLEAN"
     if name == "SEM_SCORE":
@@ -735,7 +739,7 @@ class _Binder:
                 if custom_name(node.this) not in ("WEB_SEARCH", "WEB_FETCH"):
                     refuse("Only WEB_SEARCH and WEB_FETCH are source operators")
                 self.validate_call(node.this, {}, source=True)
-                cols = list(SOURCE_COLUMNS)
+                cols = list(FETCH_COLUMNS if custom_name(node.this) == "WEB_FETCH" else SOURCE_COLUMNS)
             elif node.db:
                 if node.db.lower() != "input" or node.name not in self.inputs:
                     refuse("Unknown or unbound input relation", "invalid_query")

@@ -870,9 +870,20 @@ class Engine:
 
         budget.on_reserve = reserved
 
+        fetch_summary = {"used": False, "failed": 0}
+
         def capture_provider_state():
             if registry is None:
                 return
+            if fetch_summary["used"]:
+                # Both the finished and the refused run say what a fetch call left out.
+                not_fetched = list(getattr(registry, "not_fetched_urls", []))
+                receipt.update(
+                    fetch_failed=fetch_summary["failed"],
+                    fetch_cap_hit=bool(not_fetched),
+                    not_fetched_urls=not_fetched[:100],
+                    not_fetched_count=len(not_fetched),
+                )
             events = registry.events
             receipt["provider_events"] = events
             receipt["source_hits"] = [*(continuation or {}).get("source_hits", []), *registry.hits]
@@ -1365,6 +1376,7 @@ class Engine:
                     return value
                 if operator in ("WEB_SEARCH", "WEB_FETCH"):
                     options["source_mode"] = request.get("source_mode", "require_document")
+                    fetch_summary["used"] |= operator == "WEB_FETCH"
                     rows = (
                         registry.search(args, options, budget)
                         if operator == "WEB_SEARCH"
@@ -1384,6 +1396,16 @@ class Engine:
                                 raise SourcesQLError(
                                     "provider_unavailable", "Required source fetch failed", "fetch"
                                 )
+                            # A failed URL stays visible with its reason. It has no
+                            # source version, so nothing can cite it.
+                            fetch_summary["failed"] += 1
+                            normalized.append(
+                                {
+                                    "url": row["url"],
+                                    "fetch_status": "failed",
+                                    "fetch_failure": row.get("failure_reason") or "provider_error",
+                                }
+                            )
                             continue
                         if isinstance(row.get("content"), str):
                             row.setdefault(
@@ -1391,13 +1413,10 @@ class Engine:
                                 "src_" + hashlib.sha256(row["content"].encode()).hexdigest()[:32],
                             )
                             attribution.add_source(row)
+                        if operator == "WEB_FETCH":
+                            # After add_source: retained source versions stay as acquired.
+                            row["fetch_status"], row["fetch_failure"] = "ok", None
                         normalized.append(row)
-                    if rows and not normalized:
-                        raise SourcesQLError(
-                            "provider_unavailable",
-                            "No requested source was acquired",
-                            "acquisition",
-                        )
                     target = context.get("_lineage_output")
                     if isinstance(target, dict):
                         for index, row in enumerate(normalized, 1):
