@@ -1,5 +1,5 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -40,8 +40,15 @@ export function resolveTestPython(
   const chosen = sources[decided];
   const state = problem(chosen.path!);
   // Children of the tests start in other directories, so a relative path must be made absolute
-  // now. resolve() does not follow symlinks, which would pick a different environment.
-  if (!state) return { python: resolve(chosen.path!) };
+  // now. Only the working directory is prepended. Normalising the rest would cancel "link/.." as if
+  // link were a plain directory, but the OS resolves it through link's target.
+  if (!state) {
+    return {
+      python: isAbsolute(chosen.path!)
+        ? chosen.path!
+        : process.cwd() + sep + chosen.path!,
+    };
+  }
   const lines = sources.map((source, index) => {
     const detail =
       index < decided

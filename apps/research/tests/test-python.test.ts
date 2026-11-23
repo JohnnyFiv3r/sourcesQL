@@ -11,8 +11,9 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative as relative_ } from "node:path";
+import { basename, isAbsolute, join, relative as relative_ } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureBuilt } from "./ensure-built.js";
 import { resolveTestPython, testEnv } from "./python.js";
@@ -251,14 +252,40 @@ test("a relative interpreter path is returned absolute, so a child started elsew
     const relative = relative_(process.cwd(), link);
     for (const variable of ["SOURCESQL_TEST_PYTHON", "SOURCESQL_PYTHON"]) {
       // The link is kept as the user named it: resolving it would pick another environment.
-      assert.deepEqual(resolveTestPython({ [variable]: relative }, root), {
-        python: link,
-      });
+      const resolved = resolveTestPython({ [variable]: relative }, root);
+      assert.ok("python" in resolved);
+      assert.ok(isAbsolute(resolved.python));
+      assert.equal(basename(resolved.python), "python-link");
+      assert.equal(
+        realpathSync.native(resolved.python),
+        realpathSync.native(link),
+      );
     }
     assert.ok(
       isAbsolute(
         testEnv({ SOURCESQL_PYTHON: relative }, root).SOURCESQL_PYTHON!,
       ),
+    );
+  });
+});
+
+test("a relative interpreter path through a symlinked directory and '..' keeps meaning what the OS says", async () => {
+  await withRoot(async (root) => {
+    // link/.. is the symlink target's parent, not root. Lexical cleanup would pick root/bin/python.
+    const real = join(root, "real/inner");
+    await fakeInterpreter(join(root, "real/bin/python"));
+    await fakeInterpreter(join(root, "bin/python"));
+    await mkdir(real, { recursive: true });
+    await symlink(real, join(root, "link"));
+    const unnormalized = `${relative_(process.cwd(), root)}/link/../bin/python`;
+    const resolved = resolveTestPython(
+      { SOURCESQL_PYTHON: unnormalized },
+      root,
+    );
+    assert.ok("python" in resolved);
+    assert.equal(
+      realpathSync.native(resolved.python),
+      realpathSync(join(root, "real/bin/python")),
     );
   });
 });
