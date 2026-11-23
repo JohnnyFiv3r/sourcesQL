@@ -16,6 +16,32 @@ SCHEMAS = {
 }
 
 
+# Refusals whose code is invalid_query; every other closed construct is unsupported_query.
+INVALID_QUERY_CODE_CLOSED = {
+    "SELECT * FROM information_schema.tables",
+    "SELECT * FROM input.missing",
+    "SELECT 1 AS x, 2 AS x",
+    "SELECT a.id,b.id FROM input.a a JOIN input.b b ON a.id=b.id",
+    "SELECT count(*) FROM input.a WHERE count(*)>0",
+    "SELECT id FROM input.a WHERE row_number() OVER ()=1",
+    "SELECT __wql1 FROM input.a",
+}
+INVALID_QUERY_CODE_SHAPES = {
+    "SELECT SEM_EXTRACT(content,'x',type := 'VARCHAR',name := 'x') FROM input.a",
+    "SELECT SEM_EXTRACT(content,'x',type := 'BLOB') FROM input.a",
+    "SELECT SEM_MATCH(id,'x') FROM input.a",
+}
+INVALID_QUERY_CODE_FILTERS = {
+    "split_part(id, '#', 1)",
+    "split_part(label, 1, 1)",
+    "split_part(label, '#', '1')",
+    "split_part(label, '#', 1.5)",
+    "split_part(label, '#')",
+    "regexp_matches(id, 'x')",
+    "regexp_matches(label, 1)",
+}
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -53,8 +79,10 @@ SCHEMAS = {
     ],
 )
 def test_closed_queries_are_refused(query):
-    with pytest.raises(SourcesQLError):
+    with pytest.raises(SourcesQLError) as error:
         admit(query, input_schemas=SCHEMAS)
+    expected = "invalid_query" if query in INVALID_QUERY_CODE_CLOSED else "unsupported_query"
+    assert error.value.code == expected
 
 
 @pytest.mark.parametrize(
@@ -77,15 +105,18 @@ def test_closed_queries_are_refused(query):
     ],
 )
 def test_unsupported_custom_shapes_refuse_before_planning(query):
-    with pytest.raises(SourcesQLError):
+    with pytest.raises(SourcesQLError) as error:
         admit(query, input_schemas=SCHEMAS)
+    expected = "invalid_query" if query in INVALID_QUERY_CODE_SHAPES else "unsupported_query"
+    assert error.value.code == expected
 
 
 def test_parser_fallback_does_not_log_private_query(caplog):
     caplog.set_level(logging.DEBUG)
     private = "private-marker-89c2"
-    with pytest.raises(SourcesQLError):
+    with pytest.raises(SourcesQLError) as error:
         admit(f"CREATE RESEARCH {private} AS SELECT 1")
+    assert error.value.code == "unsupported_query"
     assert private not in caplog.text
 
 
@@ -111,8 +142,9 @@ def test_bound_values_are_never_interpolated_or_explained():
     ],
 )
 def test_parameters_are_closed_json_scalar_bindings(parameters):
-    with pytest.raises(SourcesQLError):
+    with pytest.raises(SourcesQLError) as error:
         admit("SELECT $n AS value", parameters)
+    assert error.value.code == "invalid_query"
 
 
 def test_lossless_string_cast_and_named_struct_schema():
@@ -160,8 +192,9 @@ def test_declared_types_are_ast_validated(logical_type):
     ],
 )
 def test_type_sql_cannot_escape_the_declared_type(logical_type):
-    with pytest.raises(SourcesQLError):
+    with pytest.raises(SourcesQLError) as error:
         validate_type(logical_type)
+    assert error.value.code == "invalid_output"
 
 
 def test_empty_source_has_static_extraction_schema():
@@ -178,8 +211,9 @@ def test_unknown_or_ambiguous_columns_are_refused_statically():
         "SELECT missing FROM WEB_SEARCH('x')",
         "SELECT id FROM input.a a JOIN input.b b ON a.id=b.id",
     ):
-        with pytest.raises(SourcesQLError):
+        with pytest.raises(SourcesQLError) as error:
             admit(query, input_schemas=SCHEMAS)
+        assert error.value.code == "invalid_query", query
 
 
 def test_publication_options_validate_real_dates_and_explicit_policy():
@@ -196,8 +230,9 @@ def test_publication_options_validate_real_dates_and_explicit_policy():
         "per_query_limit := 101",
         "per_query_limit := 1e3",
     ):
-        with pytest.raises(SourcesQLError):
+        with pytest.raises(SourcesQLError) as error:
             admit(f"SELECT url FROM WEB_SEARCH('campuses',{options})")
+        assert error.value.code == "invalid_query", options
 
 
 @pytest.mark.parametrize("count", [21, 100])
@@ -248,8 +283,10 @@ def test_split_part_and_regex_filters_have_closed_scalar_types():
     ],
 )
 def test_string_filter_admission_does_not_widen_types_functions_or_options(expression):
-    with pytest.raises(SourcesQLError):
+    with pytest.raises(SourcesQLError) as error:
         admit(f"SELECT {expression} AS value FROM input.a", input_schemas=SCHEMAS)
+    expected = "invalid_query" if expression in INVALID_QUERY_CODE_FILTERS else "unsupported_query"
+    assert error.value.code == expected
 
 
 

@@ -6,7 +6,8 @@ case here names the refusal's code and the start of its sentence. Messages are m
 so detail appended to a sentence does not break them.
 
 UNREACHABLE: refusal sites that no input fires, each shadowed by an earlier check that
-refuses the same input first. Coverage confirms none of them runs under the whole suite.
+refuses the same input first. Coverage confirms none of them runs under the whole suite. A
+mutation sweep (each refusal site given a wrong code in turn) leaves only these four unpinned.
 - "DISTINCT ON is not installed" (admission.py _closed_tree): the Distinct node's `on` clause is
   refused first as "Unsupported clause in Distinct".
 - "A query parameter has no binding" inside _Binder.infer: admit() refuses unbound parameters
@@ -100,6 +101,13 @@ CASES = [
         None,
         "invalid_query",
         "LEFT joins require ON or USING",
+    ),
+    (
+        "command_statement",
+        "CALL foo()",
+        None,
+        "unsupported_query",
+        "Only read-only SELECT queries are supported",
     ),
     (
         "reserved_planner_namespace",
