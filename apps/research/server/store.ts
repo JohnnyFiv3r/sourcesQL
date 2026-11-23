@@ -176,9 +176,9 @@ function effectiveClassification(
 }
 /**
  * Host-written evidence cannot back "verified" or "conflicting". Applied to
- * the replay payload as well as the review view, so no copy of an assessment
- * (stored, exported or compared) states a status the app does not stand
- * behind. Idempotent, and a no-op for engine-backed results.
+ * the stored assessments and to exports, so no copy a reader sees states a
+ * status the app does not stand behind. Replay comparison uses the submitted
+ * payload instead. Idempotent, and a no-op for engine-backed results.
  */
 function withHostEvidenceDowngrade(
   result: AppendResearchInput,
@@ -674,11 +674,7 @@ export class ResearchStore {
           "Research request not found. Return the original request_id.",
         );
       if (request.status === "completed") {
-        if (
-          canonicalJson(
-            request.completion && withHostEvidenceDowngrade(request.completion),
-          ) !== canonicalJson(withHostEvidenceDowngrade(result))
-        )
+        if (canonicalJson(request.completion) !== canonicalJson(result))
           throw new Error(
             "This request already has different results. Start a new request.",
           );
@@ -774,8 +770,10 @@ export class ResearchStore {
       });
       request.status = "completed";
       request.resultSnapshotId = result.snapshot.id;
-      request.completion = withHostEvidenceDowngrade(result);
-      request.assessments = request.completion.assessments;
+      // The completion keeps the submitted payload so a replay with a
+      // different status still conflicts; the assessments are what is shown.
+      request.assessments = withHostEvidenceDowngrade(result).assessments;
+      request.completion = result;
       await this.write(state);
       return this.view(state, result.snapshot.id);
     });
@@ -1180,7 +1178,16 @@ export class ResearchStore {
         ?.filter((r) => selected.has(r.snapshotId))
         .map((r) =>
           r.completion
-            ? { ...r, completion: withHostEvidenceDowngrade(r.completion) }
+            ? {
+                ...r,
+                completion: withHostEvidenceDowngrade(r.completion),
+                ...(r.assessments
+                  ? {
+                      assessments: withHostEvidenceDowngrade(r.completion)
+                        .assessments,
+                    }
+                  : {}),
+              }
             : r,
         ),
       titles: Object.fromEntries(

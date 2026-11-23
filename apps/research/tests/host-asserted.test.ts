@@ -123,6 +123,8 @@ async function hostFixture(t: { after(callback: () => Promise<void>): void }) {
   return { directory, data, store, client, stateHash };
 }
 
+const HOST_QUOTE_SENTENCE =
+  "1 quotes on 1 rows are host-asserted: sourcesQL has not checked them against fetched text.";
 const HOST_SENTENCE =
   "1 sources on 1 rows are host-asserted: sourcesQL has not fetched or checked them.";
 
@@ -145,6 +147,8 @@ test("open_research marks host sources in text and widget data", async (t) => {
     arguments: { snapshot_id: "forged-v1-1" },
   });
   assert.ok(textOf(opened).includes(HOST_SENTENCE));
+  // The quote is host text too, so it is attributed even beside a host URL.
+  assert.ok(textOf(opened).includes(HOST_QUOTE_SENTENCE), textOf(opened));
   const view = opened.structuredContent as ResearchView;
   assert.equal(view.assertion, "host");
   const sources = assertedSourcesForViewSelection(view, view.snapshot.rows[0]);
@@ -531,6 +535,32 @@ test("a quote-only host snapshot is attributed to the host in import and open te
   assert.ok(textOf(opened).includes(sentence), textOf(opened));
 });
 
+// What an earlier build stored when a refresh was accepted from another table.
+async function writeAcceptedAmendment(
+  data: string,
+  parent: Snapshot,
+  sourceSnapshotId: string,
+  value: string,
+  originalValue: string,
+) {
+  const file = join(data, "research.json");
+  const state = JSON.parse(await readFile(file, "utf8"));
+  state.amendments.push({
+    snapshot_id: parent.id,
+    row_id: parent.rows[0].id,
+    field: "capacity",
+    value,
+    reason: `Accepted evidence from ${sourceSnapshotId}`,
+    sourceSnapshotId,
+    expected_revision: 0,
+    mutation_id: randomUUID(),
+    revision: 1,
+    originalValue,
+    createdAt: "2026-11-23T10:00:00.000Z",
+  });
+  await writeFile(file, JSON.stringify(state, null, 2));
+}
+
 test("request context marks a host URL host-asserted even when the parent is engine-backed", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-mixed-context-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -557,23 +587,7 @@ test("request context marks a host URL host-asserted even when the parent is eng
     }),
     parentSnapshotId: parent.id,
   });
-  // What an earlier build stored when a host refresh was accepted.
-  const file = join(data, "research.json");
-  const state = JSON.parse(await readFile(file, "utf8"));
-  state.amendments.push({
-    snapshot_id: parent.id,
-    row_id: parent.rows[0].id,
-    field: "capacity",
-    value: "900 MW",
-    reason: "Accepted evidence from host-child",
-    sourceSnapshotId: "host-child",
-    expected_revision: 0,
-    mutation_id: randomUUID(),
-    revision: 1,
-    originalValue: "500 MW",
-    createdAt: "2026-11-23T10:00:00.000Z",
-  });
-  await writeFile(file, JSON.stringify(state, null, 2));
+  await writeAcceptedAmendment(data, parent, "host-child", "900 MW", "500 MW");
   const reopened = new ResearchStore(data, parent, async (s) => s);
   const requestId = randomUUID();
   await reopened.beginResearch(
@@ -601,6 +615,69 @@ test("request context marks a host URL host-asserted even when the parent is eng
     }
   ).selectedSources.flatMap((entry) => entry.sources);
   const byUrl = Object.fromEntries(sources.map((s) => [s.url, s.assertion]));
+  assert.equal(byUrl[FORGED_URL], "host");
+  assert.equal(byUrl["https://source.example/campus"], "engine");
+  // The accepted host source is attributed in the open text as well.
+  const opened = await client.callTool({
+    name: "open_research",
+    arguments: { snapshot_id: parent.id },
+  });
+  assert.ok(textOf(opened).includes(HOST_SENTENCE), textOf(opened));
+});
+
+test("request context keeps an engine-observed correction engine-observed under a host parent", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-inverse-context-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const data = join(directory, "data");
+  const engine = resultSnapshot(engineResult(), reference);
+  const hostParent: Snapshot = snapshotSchema.parse({
+    id: "host-parent",
+    title: "Host parent",
+    sourceResultSetId: "r0000000000f",
+    capturedAt: "2026-11-23",
+    coverage: "Host-written test data",
+    columns: [{ key: "capacity", label: "Capacity" }],
+    rows: [
+      {
+        id: engine.rows[0].id,
+        values: { capacity: "400 MW" },
+        sourceUrl: FORGED_URL,
+        evidence: {},
+        verificationNote: "n/a",
+      },
+    ],
+  });
+  const store = new ResearchStore(data, hostParent, async (s) => s);
+  await store.import({ ...engine, parentSnapshotId: hostParent.id });
+  await writeAcceptedAmendment(data, hostParent, engine.id, "500 MW", "400 MW");
+  const reopened = new ResearchStore(data, hostParent, async (s) => s);
+  const requestId = randomUUID();
+  await reopened.beginResearch(
+    {
+      request_id: requestId,
+      snapshot_id: hostParent.id,
+      row_id: hostParent.rows[0].id,
+      field: "capacity",
+      question: "What else is known about this capacity?",
+    },
+    "expand",
+  );
+  const client = await connect(reopened, directory);
+  t.after(() => client.close());
+  const response = await client.callTool({
+    name: "get_research_request",
+    arguments: { request_id: requestId },
+  });
+  assert.equal(response.isError, undefined, textOf(response));
+  const byUrl = Object.fromEntries(
+    (
+      response.structuredContent as {
+        selectedSources: { sources: { url: string; assertion: string }[] }[];
+      }
+    ).selectedSources
+      .flatMap((entry) => entry.sources)
+      .map((s) => [s.url, s.assertion]),
+  );
   assert.equal(byUrl[FORGED_URL], "host");
   assert.equal(byUrl["https://source.example/campus"], "engine");
 });

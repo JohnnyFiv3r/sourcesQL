@@ -7,7 +7,7 @@ import {
 export const HOST_ASSERTED_LABEL = "Host-asserted";
 export const HOST_ASSERTED_TITLE =
   "Host-asserted: the agent that saved this research supplied this source. sourcesQL has not fetched or checked it.";
-import type { Assertion } from "./schema.js";
+import type { Assertion, AssertedSource } from "./schema.js";
 export { snapshotAssertion, type Assertion } from "./schema.js";
 export const HOST_ASSERTED_NOTICE =
   'Sources and quotes in a snapshot marked assertion "host" were supplied by the agent that saved it: sourcesQL has not fetched or checked them.';
@@ -148,32 +148,52 @@ export function formatSourceUrl(value: string): string {
   }
 }
 
-/** One sentence for agent text: how many sources a host-asserted snapshot supplies. */
-export function hostAssertedSummary(snapshot: Snapshot): string {
-  if (snapshotAssertion(snapshot) !== "host") return "";
+/**
+ * Agent text for a view: which sources and quotes the host asserted. Covers
+ * the snapshot's own and any accepted refresh source a host supplied, so a
+ * correction on an engine-backed table is not presented as observed.
+ */
+export function hostAssertedSummary(
+  snapshot: Snapshot,
+  accepted: Record<string, Record<string, AssertedSource[]>> = {},
+): string {
   const urls = new Set<string>();
-  let rows = 0;
-  for (const row of snapshot.rows) {
-    const sources = sourcesForSelection(row);
-    if (!sources.length) continue;
-    rows++;
-    for (const source of sources) urls.add(source.url);
-  }
+  const sourceRows = new Set<string>();
+  const host = snapshotAssertion(snapshot) === "host";
+  if (host)
+    for (const row of snapshot.rows) {
+      const sources = sourcesForSelection(row);
+      if (!sources.length) continue;
+      sourceRows.add(row.id);
+      for (const source of sources) urls.add(source.url);
+    }
+  for (const [rowId, fields] of Object.entries(accepted))
+    for (const list of Object.values(fields))
+      for (const source of list)
+        if (source.assertion === "host") {
+          sourceRows.add(rowId);
+          urls.add(source.url);
+        }
+  const parts: string[] = [];
   if (urls.size)
-    return `${urls.size} sources on ${rows} rows are host-asserted: sourcesQL has not fetched or checked them.`;
-  // Quotes with no source URL are still host text; say so rather than nothing.
+    parts.push(
+      `${urls.size} sources on ${sourceRows.size} rows are host-asserted: sourcesQL has not fetched or checked them.`,
+    );
   let quotes = 0,
     quoteRows = 0;
-  for (const row of snapshot.rows) {
-    const count = Object.values(row.evidence).reduce(
-      (sum, list) => sum + list.filter((q) => q.trim()).length,
-      0,
+  if (host)
+    for (const row of snapshot.rows) {
+      const count = Object.values(row.evidence).reduce(
+        (sum, list) => sum + list.filter((q) => q.trim()).length,
+        0,
+      );
+      if (!count) continue;
+      quotes += count;
+      quoteRows++;
+    }
+  if (quotes)
+    parts.push(
+      `${quotes} quotes on ${quoteRows} rows are host-asserted: sourcesQL has not checked them against fetched text.`,
     );
-    if (!count) continue;
-    quotes += count;
-    quoteRows++;
-  }
-  return quotes
-    ? `${quotes} quotes on ${quoteRows} rows are host-asserted: sourcesQL has not checked them against fetched text.`
-    : "";
+  return parts.join(" ");
 }

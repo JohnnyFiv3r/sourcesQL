@@ -277,16 +277,18 @@ export function createServer(
         : { ...snapshot, assertion: "engine" as const };
     // A source is host-asserted if any host snapshot in the context names it;
     // the cautious reading wins when a URL appears in both kinds.
-    const hostOriginal = snapshotAssertion(context.originalSnapshot) === "host";
-    const hostUrls = new Set(
-      [context.originalSnapshot, ...context.acceptedObservationsAtRequest]
-        .filter((snapshot) => snapshotAssertion(snapshot) === "host")
-        .flatMap((snapshot) =>
-          snapshot.rows.flatMap((row) =>
-            sourcesForSelection(row).map((source) => source.url),
+    const urlsOf = (assertion: "host" | "engine") =>
+      new Set(
+        [context.originalSnapshot, ...context.acceptedObservationsAtRequest]
+          .filter((snapshot) => snapshotAssertion(snapshot) === assertion)
+          .flatMap((snapshot) =>
+            snapshot.rows.flatMap((row) =>
+              sourcesForSelection(row).map((source) => source.url),
+            ),
           ),
-        ),
-    );
+      );
+    const hostUrls = urlsOf("host");
+    const engineUrls = urlsOf("engine");
     return {
       ...context,
       originalSnapshot: markSnapshot(context.originalSnapshot),
@@ -296,8 +298,9 @@ export function createServer(
         ...entry,
         sources: entry.sources.map((source) => ({
           ...source,
+          // Unknown to every engine snapshot means nothing vouches for it.
           assertion:
-            hostOriginal || hostUrls.has(source.url)
+            hostUrls.has(source.url) || !engineUrls.has(source.url)
               ? ("host" as const)
               : ("engine" as const),
         })),
@@ -352,8 +355,11 @@ export function createServer(
       })),
     };
   };
-  const hostSentence = (snapshot: Snapshot) => {
-    const summary = hostAssertedSummary(snapshot);
+  const hostSentence = (
+    snapshot: Snapshot,
+    accepted?: ResearchView["acceptedSources"],
+  ) => {
+    const summary = hostAssertedSummary(snapshot, accepted);
     return summary ? ` ${summary}` : "";
   };
   const viewResult = (fullView: ResearchView, offset = 0): CallToolResult => {
@@ -362,7 +368,7 @@ export function createServer(
       content: [
         {
           type: "text",
-          text: `${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.${hostSentence(fullView.snapshot)}`,
+          text: `${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.${hostSentence(fullView.snapshot, fullView.acceptedSources)}`,
         },
       ],
       structuredContent: view,

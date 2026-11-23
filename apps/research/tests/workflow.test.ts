@@ -686,14 +686,31 @@ test("an export never carries a verified or conflicting status for host evidence
       (r: { id: string }) => r.id === request.request_id,
     );
     legacy.completion = original;
+    legacy.assessments = original.assessments;
     await writeFile(file, JSON.stringify(state, null, 2));
     const reopened = new ResearchStore(directory, refreshSeed, trustDataRef);
     const again = await reopened.exportBundle("refresh-child");
-    assert.equal(
-      again.state.requests![0].completion?.assessments?.[0].status,
-      "unverified",
-    );
+    for (const assessments of [
+      again.state.requests![0].assessments,
+      again.state.requests![0].completion?.assessments,
+    ])
+      assert.equal(assessments?.[0].status, "unverified");
     await reopened.appendResearch(original);
+  }
+});
+test("replaying a host completion with a different status still conflicts", async () => {
+  for (const [first, second] of [
+    ["verified", "conflicting"],
+    ["conflicting", "verified"],
+  ] as const) {
+    const { store } = await setup(refreshSeed);
+    const request = input();
+    await store.beginResearch(request, "refresh");
+    await store.appendResearch(proposal(request.request_id, first, "host"));
+    await assert.rejects(
+      store.appendResearch(proposal(request.request_id, second, "host")),
+      /already has different results/,
+    );
   }
 });
 test("engine-backed evidence still verifies and can be accepted", async () => {
