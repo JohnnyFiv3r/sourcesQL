@@ -397,9 +397,22 @@ def _fields(logical_type: str) -> list[Column]:
     ]
 
 
+_TYPE_NESTING_LIMIT = 8
+
+
 def validate_type(logical_type: str) -> str:
     """Validate a declared type as an AST before it enters trusted worker SQL."""
-    if type(logical_type) is not str or len(logical_type) > 4096:
+    if type(logical_type) is not str:
+        refuse("Invalid logical type", "invalid_output")
+    if len(logical_type) > 4096:
+        # Too long to parse. An extra, earlier refusal only: it names deep
+        # nesting when that is why the type is long, and never admits anything.
+        depth = deepest = 0
+        for character in logical_type:
+            depth += (character == "(") - (character == ")")
+            deepest = max(deepest, depth)
+        if deepest > _TYPE_NESTING_LIMIT:
+            refuse("Logical type exceeds the supported nesting", "invalid_output")
         refuse("Invalid logical type", "invalid_output")
     try:
         statements = sqlglot.parse(f"SELECT CAST(NULL AS {logical_type})", read=_ClosedDuckDB)
@@ -450,7 +463,7 @@ def validate_type(logical_type: str) -> str:
     }
 
     def walk(node: exp.DataType, depth: int = 0) -> str:
-        if depth > 8 or not isinstance(node, exp.DataType):
+        if depth > _TYPE_NESTING_LIMIT or not isinstance(node, exp.DataType):
             refuse("Logical type exceeds the supported nesting", "invalid_output")
         if any(
             v is not None and v != [] and k not in {"this", "expressions", "nested"}

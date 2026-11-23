@@ -136,9 +136,19 @@ def test_too_deep_struct_type_is_refused(depth):
     assert_clean(error.value.safe_message)
 
 
-def test_struct_type_past_the_length_cap_keeps_its_existing_refusal():
+def test_struct_type_past_the_length_cap_is_refused_for_its_nesting():
+    # 10,007 characters: the length cap would otherwise hide the real reason.
     with pytest.raises(SourcesQLError) as error:
         validate_type(struct(1000))
+    assert (error.value.code, error.value.safe_message) == ("invalid_output", TYPE_REFUSAL)
+    assert_clean(error.value.safe_message)
+
+
+def test_long_shallow_type_past_the_length_cap_keeps_its_existing_refusal():
+    wide = "STRUCT(" + ", ".join(f"f{i} INTEGER" for i in range(1000)) + ")"
+    assert len(wide) > 4096
+    with pytest.raises(SourcesQLError) as error:
+        validate_type(wide)
     assert (error.value.code, error.value.safe_message) == (
         "invalid_output",
         "Invalid logical type",
