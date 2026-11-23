@@ -1,3 +1,4 @@
+import { testPython } from "./python.js";
 import { WORKER_FEATURE_CONTRACTS } from "../server/feature-contracts.js";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -36,10 +37,7 @@ import sample from "../fixtures/water-procurement.json";
 type Row = Record<string, any>;
 const seed = snapshotSchema.parse(sample);
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const python =
-  process.env.SOURCESQL_TEST_PYTHON ??
-  process.env.SOURCESQL_PYTHON ??
-  join(root, "local/python312/venv/bin/python");
+const python = testPython();
 const flightId = "0a111111-1111-4111-a111-111111111111";
 const digest = (text: string) =>
   createHash("sha256").update(text).digest("hex");
