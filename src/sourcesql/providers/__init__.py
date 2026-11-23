@@ -47,6 +47,16 @@ def _search_credential(profile: dict) -> str:
     return credential or ""
 
 
+def _semantic_configured(profile: dict) -> bool:
+    """Mirrors how ProviderRegistry builds its semantic provider, without building it."""
+    if profile.get("semantic_provider") is not None:
+        return True
+    model = profile.get("model")
+    if isinstance(model, dict):
+        return bool(model.get("api_key") or os.environ.get(model.get("api_key_env", "")))
+    return model is not None
+
+
 def route_capabilities(profile: dict | None) -> dict:
     """Which acquisition routes a profile can run, without building providers or dialing out.
 
@@ -67,7 +77,11 @@ def route_capabilities(profile: dict | None) -> dict:
     available = fetch_configured and (mode == "fixture" or not search_configured)
     route: dict[str, Any] = {"available": available}
     if available:
-        route["operators"] = ["WEB_FETCH", "SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL"]
+        route["operators"] = ["WEB_FETCH"] + (
+            ["SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL"]
+            if mode == "fixture" or _semantic_configured(profile)
+            else []
+        )
         route["note"] = HOST_SEARCH_NOTE
     else:
         route["reason"] = (
@@ -112,6 +126,8 @@ class ProviderRegistry:
         # URLs of a WEB_FETCH call that stopped at the fetch limit; read by the
         # engine for the receipt because the exception may not survive checkpointing.
         self.not_fetched_urls: list[str] = []
+        # Failed URLs of a WEB_FETCH call that raised before returning its rows.
+        self.failed_before_error = 0
         if self.mode == "live":
             provider = self.profile.get("provider", "brave")
             providers = {
@@ -451,6 +467,7 @@ class ProviderRegistry:
                     except SourcesQLError:
                         refused.add(index)
         self.not_fetched_urls = []
+        self.failed_before_error = 0
         by_url: dict[int, list[dict]] = {}
         done = 0
         try:
@@ -490,6 +507,10 @@ class ProviderRegistry:
                     for index, url in enumerate(urls)
                 ]
         except SourcesQLError as error:
+            # The rows of a refused call are lost, but its failed URLs were still attempted.
+            self.failed_before_error = sum(
+                any(row.get("status") == "fetch_failed" for row in rows) for rows in by_url.values()
+            ) + sum(1 for index in refused if index < done)
             if (
                 error.code == "budget_exhausted"
                 and budget.counts.get("fetches", 0) >= budget.limits["max_fetches"]

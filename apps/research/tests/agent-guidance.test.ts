@@ -357,7 +357,10 @@ test("MCP initialize preserves failure identity and requires approved fallback o
     instructions,
     /When a sourcesQL search provider is configured and working, do not fall back to ChatGPT web search.*unless the user explicitly approves/,
   );
-  assert.doesNotMatch(instructions, /Keep recovery inside sourcesQL\. Do not fall back/);
+  assert.doesNotMatch(
+    instructions,
+    /Keep recovery inside sourcesQL\. Do not fall back/,
+  );
   assert.match(
     instructions,
     /including after validation errors, timeouts, provider failures or capacity blocks/,
@@ -410,6 +413,13 @@ test("tools/list describes research capabilities, inputs and side effects concis
   const open = wire.tools.find((tool) => tool.name === "open_research")!;
   assert.equal(query.description, SOURCESQL_QUERY_DESCRIPTION);
   assert.equal(capabilities.description, SOURCESQL_CAPABILITIES_DESCRIPTION);
+  // Tool discovery carries the host-search contract too, not only initialize.
+  for (const phrase of [
+    "host_search_route.available",
+    "leads, not citations",
+    "split the job",
+  ])
+    assert.ok(capabilities.description!.includes(phrase), phrase);
   assert.equal(open.description, SOURCESQL_OPEN_RESEARCH_DESCRIPTION);
   for (const [tool, maximum] of [
     [query, 1800],

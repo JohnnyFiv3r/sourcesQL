@@ -130,6 +130,7 @@ def test_strict_policy_still_refuses_when_a_fetch_fails(tmp_path):
             partial_policy="strict",
         )
     assert (refused.value.code, refused.value.stage) == ("provider_unavailable", "fetch")
+    assert latest_run(engine)["fetch_failed"] == 1
 
 
 def test_scalar_web_fetch_list_carries_the_status_fields(tmp_path):
@@ -157,6 +158,27 @@ def test_over_cap_fetch_is_refused_and_receipt_names_unfetched_urls(tmp_path):
     assert receipt["not_fetched_count"] == 1
     recovered = engine.recover_run(run_id)
     assert sorted(r["url"] for r in recovered["rows"]) == [AURORA, BIRCH]
+
+
+def test_refused_over_cap_job_counts_every_failed_fetch_it_attempted(tmp_path):
+    engine = make(tmp_path)
+    unknown = [f"https://nowhere.example/{n}" for n in range(41)]
+    first, second = unknown[:32], unknown[32:]
+    parameters = {f"u{i}": url for i, url in enumerate(unknown, 1)}
+    query = (
+        "SELECT url FROM WEB_FETCH("
+        + ", ".join(f"$u{i}" for i in range(1, 33))
+        + ") UNION ALL SELECT url FROM WEB_FETCH("
+        + ", ".join(f"$u{i}" for i in range(33, 42))
+        + ")"
+    )
+    with pytest.raises(SourcesQLError) as refused:
+        engine.query(query=query, parameters=parameters)
+    assert refused.value.code == "budget_exhausted"
+    receipt = latest_run(engine)
+    assert len(first) + len(second) == 41
+    assert receipt["fetch_failed"] == 40
+    assert receipt["not_fetched_urls"] == [unknown[40]]
 
 
 def test_web_search_rows_keep_their_columns(tmp_path):
@@ -213,6 +235,30 @@ def test_live_profile_without_search_key_reports_fetch_and_host_route(tmp_path, 
     assert "SYNTHETIC_SEARCH_KEY" not in json.dumps(entry)
 
 
+def test_host_route_lists_semantic_operators_only_when_a_model_is_configured(tmp_path, monkeypatch):
+    monkeypatch.delenv("SYNTHETIC_MODEL_KEY", raising=False)
+    without = profile_entry(tmp_path, allow_public_source_hosts=True)
+    assert without["host_search_route"]["operators"] == ["WEB_FETCH"]
+    unkeyed = profile_entry(
+        tmp_path,
+        allow_public_source_hosts=True,
+        model={"name": "synthetic", "api_key_env": "SYNTHETIC_MODEL_KEY"},
+    )
+    assert unkeyed["host_search_route"]["operators"] == ["WEB_FETCH"]
+    keyed = profile_entry(
+        tmp_path,
+        allow_public_source_hosts=True,
+        model={"name": "synthetic", "api_key": "SAFE-SYNTHETIC-KEY"},
+    )
+    assert keyed["host_search_route"]["operators"] == [
+        "WEB_FETCH",
+        "SEM_MATCH",
+        "SEM_EXTRACT",
+        "SEM_EXTRACT_ALL",
+    ]
+    assert "SAFE-SYNTHETIC-KEY" not in json.dumps(keyed)
+
+
 @pytest.mark.parametrize(
     ("changes", "reason", "fetch_configured"),
     [
@@ -255,6 +301,14 @@ def test_documented_fetch_example_runs_in_fixture_mode(tmp_path):
     result = make(tmp_path).query(query=match.group(1), parameters=urls(AURORA, BIRCH, VENDOR))
     assert [r["fetch_status"] for r in result["rows"]] == ["ok"] * 3
     assert [r["source_url"] for r in result["rows"]] == [AURORA, BIRCH, VENDOR]
+    # A copyable example must end in cited answers, not only fetched pages.
+    assert [r["project_name"] for r in result["rows"]] == [
+        "Aurora Campus",
+        "Birch Campus",
+        "Fictional Platform",
+    ]
+    cited = [e for e in result["evidence"] if e.get("row_id") and e.get("support")]
+    assert len(cited) == 3
 
 
 def live_engine(tmp_path, monkeypatch, reply, **changes):

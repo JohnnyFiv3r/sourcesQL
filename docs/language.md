@@ -162,7 +162,7 @@ before any fetch or model call.
 SELECT url AS source_url,
        fetch_status,
        fetch_failure,
-       SEM_EXTRACT(content, 'the annual price in USD', evidence := true) AS annual_price_usd
+       SEM_EXTRACT(content, 'the name of the project', evidence := true) AS project_name
 FROM WEB_FETCH($u1, $u2, $u3)
 ```
 
@@ -173,7 +173,9 @@ results as a snapshot is different: the imported rows have no sources and no
 citations.
 
 Limits: at most 32 URLs per call, 40 fetches per job by default, 2 MiB per page,
-HTML or text only. PDFs and pages that need JavaScript fail.
+HTML or text only. PDFs fail. sourcesQL reads the HTML as served and runs no
+scripts, so a page that builds its content with JavaScript can fetch as `ok` with
+only its shell as content; check that the extracted text is what you expected.
 
 A URL that cannot be fetched stays in the result as a row with
 `fetch_status = 'failed'`, a `fetch_failure` code and no content, so it cannot be

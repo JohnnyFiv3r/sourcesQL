@@ -1381,14 +1381,20 @@ class Engine:
                 if operator in ("WEB_SEARCH", "WEB_FETCH"):
                     options["source_mode"] = request.get("source_mode", "require_document")
                     fetch_summary["used"] |= operator == "WEB_FETCH"
-                    rows = (
-                        registry.search(args, options, budget)
-                        if operator == "WEB_SEARCH"
-                        else registry.fetch(args, options, budget)
-                    )
+                    try:
+                        rows = (
+                            registry.search(args, options, budget)
+                            if operator == "WEB_SEARCH"
+                            else registry.fetch(args, options, budget)
+                        )
+                    except SourcesQLError:
+                        if operator == "WEB_FETCH":
+                            fetch_summary["failed"] += getattr(registry, "failed_before_error", 0)
+                        raise
                     normalized = []
                     for row in rows:
                         if row.get("status") == "fetch_failed":
+                            fetch_summary["failed"] += 1
                             receipt["errors"].append(
                                 {
                                     "code": row.get("error_code", "fetch_failed"),
@@ -1402,7 +1408,6 @@ class Engine:
                                 )
                             # A failed URL stays visible with its reason. It has no
                             # source version, so nothing can cite it.
-                            fetch_summary["failed"] += 1
                             normalized.append(
                                 {
                                     "url": row["url"],
