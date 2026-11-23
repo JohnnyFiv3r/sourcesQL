@@ -552,3 +552,21 @@ test("capabilities returns actual configured profiles without dispatch and engin
   assert.ok(withoutEngine.tools.some((tool) => tool.name === "open_research"));
   assert.deepEqual(withoutEngine.calls, []);
 });
+
+test("guidance tells hosts their evidence is shown as host-asserted, not as a citation", async () => {
+  const wire = await discover();
+  assert.match(
+    wire.instructions!,
+    /shown as host-asserted, not as sourcesQL citations/,
+  );
+  const described = wire.tools.map((tool) => tool.description ?? "").join("\n");
+  assert.doesNotMatch(
+    described,
+    /Evidence arrays contain exact returned quotes/,
+  );
+  const save = wire.tools.find((tool) => tool.name === "import_research")!;
+  assert.match(
+    save.description!,
+    /host-asserted unless an engine result backs them/,
+  );
+});

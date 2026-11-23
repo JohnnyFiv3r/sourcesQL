@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -625,4 +625,75 @@ test("whole-row and whole-table refresh scopes require every field, and reject s
     seed.rows.length * seed.columns.length,
   );
   assert.ok(view.refresh?.changes.every((c) => !c.canAccept));
+});
+test("host-supplied evidence cannot make a refresh verified or conflicting", async () => {
+  for (const status of ["verified", "conflicting"] as const) {
+    const { store } = await setup(refreshSeed);
+    const request = input();
+    await store.beginResearch(request, "refresh");
+    const result = await store.appendResearch(
+      proposal(request.request_id, status, "host"),
+    );
+    const change = result.refresh!.changes[0];
+    assert.equal(change.status, "unverified");
+    assert.equal(
+      change.reason,
+      "the evidence does not match any source text sourcesQL retained.",
+    );
+    assert.equal(change.canAccept, false);
+    await assert.rejects(
+      store.reviewRefresh({
+        request_id: request.request_id,
+        row_id: "record-1",
+        field: "closes_at",
+        decision: "accept",
+        expected_revision: 0,
+      }),
+      /supported/,
+    );
+  }
+});
+test("engine-backed evidence still verifies and can be accepted", async () => {
+  const { store } = await setup(refreshSeed);
+  const request = input();
+  await store.beginResearch(request, "refresh");
+  const result = await store.appendResearch(proposal(request.request_id));
+  const change = result.refresh!.changes[0];
+  assert.equal(change.status, "changed");
+  assert.equal(change.reason, undefined);
+  assert.equal(change.canAccept, true);
+});
+test("a verified assessment stored before this rule reads as unverified without rewriting the file", async () => {
+  const { store, directory } = await setup(refreshSeed);
+  const request = input();
+  await store.beginResearch(request, "refresh");
+  await store.appendResearch(
+    proposal(request.request_id, "unverified", "host"),
+  );
+  const file = join(directory, "research.json");
+  const state = JSON.parse(await readFile(file, "utf8"));
+  const saved = state.requests.find(
+    (r: { id: string }) => r.id === request.request_id,
+  );
+  // What an earlier build stored for a host snapshot: no reason, "verified".
+  saved.assessments = [
+    {
+      row_id: "record-1",
+      field: "closes_at",
+      status: "verified",
+      note: "Synthetic test observation",
+    },
+  ];
+  await writeFile(file, JSON.stringify(state, null, 2));
+  const before = await readFile(file, "utf8");
+  const reopened = await new ResearchStore(
+    directory,
+    refreshSeed,
+    trustDataRef,
+  ).open("refresh-child");
+  const change = reopened.refresh!.changes[0];
+  assert.equal(change.status, "unverified");
+  assert.equal(change.canAccept, false);
+  assert.ok(change.reason);
+  assert.equal(await readFile(file, "utf8"), before);
 });

@@ -291,6 +291,53 @@ export function createServer(
       assertionNotice: HOST_ASSERTED_NOTICE,
     };
   };
+  // The text an agent reads carries the marker in each host URL itself, while
+  // the structured copy keeps bare URLs that can be used as they are.
+  const withHostUrlText = (marked: ReturnType<typeof markHostAssertions>) => {
+    const markSources = <T extends { url: string }>(sources: T[]) =>
+      sources.map((source) => ({
+        ...source,
+        url: hostSourceText(source.url),
+      }));
+    type Marked = typeof marked.originalSnapshot;
+    const markSnapshot = (snapshot: Marked): Marked =>
+      snapshot.assertion !== "host"
+        ? snapshot
+        : {
+            ...snapshot,
+            rows: snapshot.rows.map((row) => ({
+              ...row,
+              ...(row.sourceUrl
+                ? { sourceUrl: hostSourceText(row.sourceUrl) }
+                : {}),
+              ...(row.sources ? { sources: markSources(row.sources) } : {}),
+              ...(row.cellSources
+                ? {
+                    cellSources: Object.fromEntries(
+                      Object.entries(row.cellSources).map(([field, list]) => [
+                        field,
+                        markSources(list),
+                      ]),
+                    ),
+                  }
+                : {}),
+            })),
+          };
+    return {
+      ...marked,
+      originalSnapshot: markSnapshot(marked.originalSnapshot),
+      acceptedObservationsAtRequest:
+        marked.acceptedObservationsAtRequest.map(markSnapshot),
+      selectedSources: marked.selectedSources.map((entry) => ({
+        ...entry,
+        sources: entry.sources.map((source) =>
+          source.assertion === "host"
+            ? { ...source, url: hostSourceText(source.url) }
+            : source,
+        ),
+      })),
+    };
+  };
   const hostSentence = (snapshot: Snapshot) => {
     const summary = hostAssertedSummary(snapshot);
     return summary ? ` ${summary}` : "";
@@ -885,7 +932,9 @@ export function createServer(
           authorizeSnapshot(snapshot, options.access);
         const marked = markHostAssertions(result);
         return {
-          content: [{ type: "text", text: JSON.stringify(marked) }],
+          content: [
+            { type: "text", text: JSON.stringify(withHostUrlText(marked)) },
+          ],
           structuredContent: marked,
         };
       }),
