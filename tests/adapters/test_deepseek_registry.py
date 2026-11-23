@@ -147,12 +147,15 @@ def test_real_sql_keeps_metadata_only_hits_and_good_fetch_neighbors(tmp_path, mo
         profile="deepseek",
         source_mode="allow_excerpt",
         budgets={"max_cost_microusd": 100_000},
-        query="SELECT url,content FROM WEB_FETCH('https://public.example/good','https://public.example/pdf','https://public.example/last') ORDER BY url",
+        query="SELECT url,content,fetch_status FROM WEB_FETCH('https://public.example/good','https://public.example/pdf','https://public.example/last') ORDER BY url",
     )
-    assert [row["url"] for row in fetched["rows"]] == [
-        "https://public.example/good",
-        "https://public.example/last",
+    # A failed URL stays as a failed row without content instead of vanishing.
+    assert [(row["url"], row["fetch_status"]) for row in fetched["rows"]] == [
+        ("https://public.example/good", "ok"),
+        ("https://public.example/last", "ok"),
+        ("https://public.example/pdf", "failed"),
     ]
+    assert fetched["rows"][2]["content"] is None
     assert fetched["receipt"]["status"] == "partial"
     assert fetched["receipt"]["errors"][0]["stage"] == "fetch"
     before = len(calls)
