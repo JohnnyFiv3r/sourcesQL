@@ -68,6 +68,8 @@ export interface ResearchEngine {
     args: Record<string, unknown>,
     imports?: Record<string, EffectiveMaterialization>,
   ): Promise<Record<string, unknown> | undefined>;
+  /** Profiles fixed at construction, when the engine can know them without a call. */
+  readonly staticProfiles?: readonly { name: string; mode: string }[];
   readonly supportsExplain?: boolean;
   readonly supportsAsyncJobs?: boolean;
   /** True when `query` already returns the authorized first result page. */
@@ -102,6 +104,10 @@ export class PythonEngine implements ResearchEngine {
   // data_classification that store.authorize computed.
   readonly queryReturnsAuthorizedPage = true;
   private featuresPromise?: Promise<Record<string, unknown>>;
+  // bridge.py loads profiles only from SOURCESQL_PROFILES_FILE; without it
+  // Engine.__init__ has exactly the built-in fixture profile. A profiles file
+  // may redefine "fixture", so only its absence makes the list static.
+  readonly staticProfiles?: readonly { name: string; mode: string }[];
   constructor(
     private projectRoot = fileURLToPath(new URL("../../../", import.meta.url)),
     private environment: NodeJS.ProcessEnv = process.env,
@@ -113,6 +119,8 @@ export class PythonEngine implements ResearchEngine {
         processOptions.timeoutMs < 1)
     )
       throw new Error("Invalid bridge deadline");
+    if (!environment.SOURCESQL_PROFILES_FILE)
+      this.staticProfiles = [{ name: "fixture", mode: "fixture" }];
   }
   async guardLegacyRequest(
     args: Record<string, unknown>,
@@ -168,12 +176,31 @@ export class PythonEngine implements ResearchEngine {
     );
   }
   async inspectResult(params: Record<string, unknown>) {
+    if (this.featuresPromise) {
+      if (
+        (await this.features()).result_inspection !==
+        WORKER_FEATURE_CONTRACTS.result_inspection
+      )
+        return undefined;
+      return this.bridgeCall<Record<string, unknown>>("inspect_result", params);
+    }
+    // Fresh engine: ask for the contract and the page in one process. The page is
+    // discarded unless the engine declares the matching contract, as before.
+    const [capabilities, inspected] = await this.bridgeBatch([
+      { method: "capabilities", params: {} },
+      { method: "inspect_result", params },
+    ]);
+    if (!capabilities.ok) throw new Error(capabilities.message);
+    const features = declaredFeatures(
+      capabilities.result as Record<string, unknown>,
+    );
+    this.featuresPromise ??= Promise.resolve(features);
     if (
-      (await this.features()).result_inspection !==
-      WORKER_FEATURE_CONTRACTS.result_inspection
+      features.result_inspection !== WORKER_FEATURE_CONTRACTS.result_inspection
     )
       return undefined;
-    return this.bridgeCall<Record<string, unknown>>("inspect_result", params);
+    if (!inspected.ok) throw new Error(inspected.message);
+    return inspected.result as Record<string, unknown>;
   }
   async call<T = Record<string, unknown>>(
     method: string,

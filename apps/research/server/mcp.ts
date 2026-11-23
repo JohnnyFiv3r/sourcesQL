@@ -2152,9 +2152,10 @@ export function createServer(
     ): Promise<CallToolResult> => {
       // Only hosted engines report async_jobs, and only anonymous access checks
       // the profile mode, so other local calls skip an engine start.
+      const anonymous = options.access?.mode === "fixture-anonymous";
       const needsCapabilities =
         engine.supportsAsyncJobs === true ||
-        options.access?.mode === "fixture-anonymous";
+        (anonymous && !engine.staticProfiles);
       const capabilities = needsCapabilities
         ? await engine.call<{
             profiles?: { name: string; mode: string }[];
@@ -2165,11 +2166,12 @@ export function createServer(
         throw new Error(
           `Hosted ${method === "explain" ? "validation" : "execution"} requires request_id before materializing inputs or submitting work.`,
         );
+      const profiles =
+        capabilities.profiles ??
+        (anonymous ? engine.staticProfiles : undefined);
       if (
-        options.access?.mode === "fixture-anonymous" &&
-        !capabilities.profiles?.some(
-          (p) => p.name === args.profile && p.mode === "fixture",
-        )
+        anonymous &&
+        !profiles?.some((p) => p.name === args.profile && p.mode === "fixture")
       )
         throw new Error(
           "Anonymous mode only executes fixture profiles; use a configured protected endpoint for other profiles.",

@@ -186,7 +186,7 @@ test("a read after capabilities and a query starts one bridge process", async ()
   }
 });
 
-test("a first read with no earlier capabilities call pays one extra start to learn the worker's features", async () => {
+test("a first read with no earlier capabilities call starts one bridge process", async () => {
   const h = await harness();
   try {
     const query = await h.call("sourcesql_query", {
@@ -197,7 +197,10 @@ test("a first read with no earlier capabilities call pays one extra start to lea
     const first = await h.during(() =>
       h.call("sourcesql_read_result", { result_id: resultId }),
     );
-    assert.equal(first.count, 2);
+    assert.equal(first.count, 1);
+    assert.deepEqual((first.value.structuredContent as EngineResult).rows, [
+      { x: 1 },
+    ]);
   } finally {
     await h.close();
   }
@@ -226,7 +229,7 @@ test("an unknown result is refused with the same text on the read and query path
   }
 });
 
-test("anonymous mode still checks the profile through capabilities", async () => {
+test("anonymous mode refuses non-fixture profiles and starts one bridge for a fixture query", async () => {
   const h = await harness({ mode: "fixture-anonymous" } as AccessPolicy);
   try {
     const refused = await h.call("sourcesql_query", {
@@ -246,7 +249,7 @@ test("anonymous mode still checks the profile through capabilities", async () =>
       undefined,
       JSON.stringify(allowed.value.content),
     );
-    assert.equal(allowed.count, 2); // capabilities for the check, then the query
+    assert.equal(allowed.count, 1); // the gate reads the engine's static profiles
   } finally {
     await h.close();
   }
@@ -379,7 +382,7 @@ test("a crashed bridge fails one call and does not poison the feature lookup", a
   const state = join(dir, "calls");
   await writeFile(
     script,
-    `const fs=require('node:fs');let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{fs.appendFileSync(${JSON.stringify(state)},'x');if(fs.readFileSync(${JSON.stringify(state)},'utf8').length===1)process.exit(1);const r=JSON.parse(input);process.stdout.write(JSON.stringify({id:r.id,result:{worker_feature_contracts:{}}})+'\\n');});`,
+    `const fs=require('node:fs');let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{fs.appendFileSync(${JSON.stringify(state)},'x');if(fs.readFileSync(${JSON.stringify(state)},'utf8').length===1)process.exit(1);for(const line of input.trim().split('\\n')){const r=JSON.parse(line);process.stdout.write(JSON.stringify({id:r.id,result:{worker_feature_contracts:{}}})+'\\n');}});`,
   );
   const engine = new PythonEngine(
     dir,
@@ -439,5 +442,81 @@ test("repeated identical reads share one process only inside one scope and never
     assert.equal((await started()).length, 7);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("static profiles equal what a real engine reports, and a profiles file removes them", async () => {
+  const h = await harness();
+  try {
+    const capabilities = await h.engine.call<{
+      profiles: { name: string; mode: string }[];
+    }>("capabilities");
+    assert.deepEqual(
+      capabilities.profiles.map(({ name, mode }) => ({ name, mode })),
+      h.engine.staticProfiles,
+    );
+  } finally {
+    await h.close();
+  }
+  const withFile = await harness(undefined, {
+    SOURCESQL_PROFILES_FILE: "/nonexistent/profiles.json",
+  });
+  try {
+    assert.equal(withFile.engine.staticProfiles, undefined);
+  } finally {
+    await withFile.close();
+  }
+});
+
+test("anonymous mode with a profiles file that redefines fixture as live still refuses it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "sourcesql-profiles-"));
+  const profiles = join(dir, "profiles.json");
+  try {
+    await writeFile(
+      profiles,
+      JSON.stringify({ fixture: { mode: "live", provider: "fixture" } }),
+    );
+    const h = await harness({ mode: "fixture-anonymous" } as AccessPolicy, {
+      SOURCESQL_PROFILES_FILE: profiles,
+    });
+    try {
+      const refused = await h.during(() =>
+        h.call("sourcesql_query", {
+          query: "SELECT 1 AS x",
+          request_id: requestId(),
+        }),
+      );
+      assert.equal(refused.value.isError, true);
+      assert.match(
+        JSON.stringify(refused.value.content),
+        /Anonymous mode only executes fixture profiles/,
+      );
+      assert.equal(refused.count, 1); // the gate asked the engine
+    } finally {
+      await h.close();
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the static-profile gate refuses a non-fixture profile without starting a bridge", async () => {
+  const h = await harness({ mode: "fixture-anonymous" } as AccessPolicy);
+  try {
+    const refused = await h.during(() =>
+      h.call("sourcesql_query", {
+        query: "SELECT 1 AS x",
+        profile: "live_x",
+        request_id: requestId(),
+      }),
+    );
+    assert.equal(refused.value.isError, true);
+    assert.match(
+      JSON.stringify(refused.value.content),
+      /Anonymous mode only executes fixture profiles; use a configured protected endpoint for other profiles\./,
+    );
+    assert.equal(refused.count, 0);
+  } finally {
+    await h.close();
   }
 });

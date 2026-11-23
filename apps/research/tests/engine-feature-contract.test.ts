@@ -12,7 +12,7 @@ test("local compatibility uses the actual feature map rather than the 0.2.3 pack
     script = join(directory, "bridge.cjs");
   await writeFile(
     script,
-    `const fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{const request=JSON.parse(input);fs.appendFileSync(process.env.TEST_TRACE,JSON.stringify(request.method)+'\\n');const result=request.method==='capabilities'?{engine_version:'0.2.3',worker_feature_contracts:JSON.parse(process.env.TEST_FEATURES)}:{executed:request.method};process.stdout.write(JSON.stringify({id:request.id,result})+'\\n');});`,
+    `const fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{for(const line of input.trim().split('\\n')){const request=JSON.parse(line);fs.appendFileSync(process.env.TEST_TRACE,JSON.stringify(request.method)+'\\n');const result=request.method==='capabilities'?{engine_version:'0.2.3',worker_feature_contracts:JSON.parse(process.env.TEST_FEATURES)}:{executed:request.method};process.stdout.write(JSON.stringify({id:request.id,result})+'\\n');}});`,
   );
   const adapter = (features: Record<string, string>) =>
     new PythonEngine(
