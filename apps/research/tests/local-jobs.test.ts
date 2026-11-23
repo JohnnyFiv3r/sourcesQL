@@ -608,3 +608,85 @@ test("every read-only research tool runs under the short budget", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+// A saved-research read that takes 31.5 s, driven by mock timers.
+async function statusAfterStall(t: test.TestContext, engine: ResearchEngine) {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-stalled-read-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const htmlPath = join(directory, "research.html");
+  await writeFile(htmlPath, "<!doctype html><html>Synthetic widget</html>");
+  const seed = snapshotSchema.parse(sample);
+  class StalledStore extends ResearchStore {
+    async open(id?: string) {
+      await new Promise((resolve) => setTimeout(resolve, 31_500));
+      return super.open(id);
+    }
+  }
+  const server = createServer(
+    new StalledStore(join(directory, "app"), seed),
+    htmlPath,
+    { engine },
+  );
+  const client = new Client({ name: "stalled-read", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(a), client.connect(b)]);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const call = client.callTool({
+    name: "research_status",
+    arguments: { snapshot_id: seed.id },
+  });
+  for (let i = 0; i < 40; i++) {
+    t.mock.timers.tick(1000);
+    await delay(0, undefined, { ref: false }).catch(() => {});
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  return call;
+}
+
+test("a stalled saved-research read is cut off at 30 s on the local engine", async (t) => {
+  const result = await statusAfterStall(t, stub(false));
+  assert.equal(result.isError, true);
+  assert.match(
+    JSON.stringify(result.content),
+    /Engine timed out; inspect the run before retrying/,
+  );
+});
+
+test("the same stalled read is not cut off on a hosted engine", async (t) => {
+  const result = await statusAfterStall(t, stub(true));
+  assert.equal(result.isError, undefined, JSON.stringify(result.content));
+});
+
+test("no bridge process starts after the call deadline fired, even if the wall clock moves back", async () => {
+  const { directory, script } = await fakeBridge(
+    `import {writeFileSync} from "node:fs"; writeFileSync(process.argv[3], "ran"); answer({ok: true});`,
+  );
+  const marker = join(directory, "launched");
+  const realNow = Date.now;
+  try {
+    const engine = new PythonEngine(directory, process.env, {
+      command: process.execPath,
+      args: [script, marker],
+    });
+    let lateStep: Promise<unknown> | undefined;
+    await assert.rejects(
+      withLocalCallBudget(async () => {
+        await delay(55);
+        Date.now = () => realNow() - 1000;
+        lateStep = engine.call("query", {}).catch((error: Error) => error);
+        return lateStep;
+      }, 20),
+      /Engine timed out/,
+    );
+    await delay(150);
+    assert.match(String(await lateStep), /budget used up/);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+  } finally {
+    Date.now = realNow;
+    await rm(directory, { recursive: true, force: true });
+  }
+});

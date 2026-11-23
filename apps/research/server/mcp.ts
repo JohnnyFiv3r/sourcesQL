@@ -110,6 +110,11 @@ export function createServer(
 ): McpServer {
   // Job tools exist only where the engine can create jobs; local runs are synchronous.
   const jobs = options.engine?.supportsAsyncJobs === true;
+  // The local bridge limits apply only to the local engine; hosted calls keep
+  // their own deadlines and are never given the local timer.
+  const local = Boolean(options.engine) && !jobs;
+  const withinLocalBudget = <T>(run: () => Promise<T>, budgetMs?: number) =>
+    local ? withLocalCallBudget(run, budgetMs) : run();
   // Tool discovery and resources/read must reference the same immutable bundle.
   const uiHtml = readFileSync(htmlPath, "utf8");
   const resourceUri = uiResourceUri(uiHtml);
@@ -313,7 +318,7 @@ export function createServer(
   // Read-only tools do no provider work: every bridge step they start shares
   // one short limit, so the host hears back within it.
   const safeShort = (work: () => Promise<CallToolResult>) =>
-    safe(() => withLocalCallBudget(work, LOCAL_READ_LIMIT_MS));
+    safe(() => withinLocalBudget(work, LOCAL_READ_LIMIT_MS));
   const jobStates = new Set([
     "queued",
     "dispatching",
@@ -2367,7 +2372,7 @@ export function createServer(
         },
         (args) =>
           safe(() =>
-            withLocalCallBudget(() => executeQueryOperation("explain", args)),
+            withinLocalBudget(() => executeQueryOperation("explain", args)),
           ),
       );
     tools.registerTool(
@@ -2384,7 +2389,7 @@ export function createServer(
       },
       (args) =>
         safe(() =>
-          withLocalCallBudget(() => executeQueryOperation("query", args)),
+          withinLocalBudget(() => executeQueryOperation("query", args)),
         ),
     );
     tools.registerTool(
@@ -2784,7 +2789,7 @@ export function createServer(
     );
   }
   // A cached tool list may still name a job tool; the SDK would only say "not found".
-  if (options.engine && !jobs) interceptLocalJobTools(server);
+  if (local) interceptLocalJobTools(server);
   return server;
 }
 

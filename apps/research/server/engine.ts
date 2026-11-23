@@ -92,15 +92,18 @@ export const LOCAL_CALL_BUDGET_MS =
   (LOCAL_DISPATCH_DEADLINE_SECONDS + 30) * 1000;
 // `active` counts bridge processes in flight: each has its own timer at or
 // before the deadline and reports its own timeout and cleanup outcome.
+// `expired` is set when the deadline fires, so no step can start afterwards
+// whatever the wall clock does; the deadline itself uses the monotonic clock.
 const callBudget = new AsyncLocalStorage<{
   deadline: number;
   active: number;
+  expired: boolean;
 }>();
 const CALL_TIMED_OUT = "Engine timed out; inspect the run before retrying.";
 /** Time left in the tool call's shared budget, or undefined outside one. */
 export const remainingLocalCallBudgetMs = (): number | undefined => {
   const budget = callBudget.getStore();
-  return budget && budget.deadline - Date.now();
+  return budget && budget.deadline - performance.now();
 };
 /**
  * Runs a tool call so that its bridge processes share one total time budget,
@@ -111,12 +114,17 @@ export const withLocalCallBudget = <T>(
   run: () => Promise<T>,
   budgetMs = LOCAL_CALL_BUDGET_MS,
 ): Promise<T> => {
-  const budget = { deadline: Date.now() + budgetMs, active: 0 };
+  const budget = {
+    deadline: performance.now() + budgetMs,
+    active: 0,
+    expired: false,
+  };
   return callBudget.run(
     budget,
     () =>
       new Promise<T>((resolve, reject) => {
         const timer = setTimeout(() => {
+          budget.expired = true;
           if (budget.active === 0) reject(new Error(CALL_TIMED_OUT));
         }, budgetMs);
         Promise.resolve()
@@ -280,9 +288,9 @@ export class PythonEngine implements ResearchEngine {
           : (this.processOptions.readTimeoutMs ?? LOCAL_READ_LIMIT_MS));
       const budget = callBudget.getStore();
       const limitMs = budget
-        ? Math.min(ownLimitMs, budget.deadline - Date.now())
+        ? Math.min(ownLimitMs, budget.deadline - performance.now())
         : ownLimitMs;
-      if (limitMs <= 0)
+      if (limitMs <= 0 || budget?.expired)
         return reject(
           new Error(
             "Engine call budget used up before this step started; inspect the run before retrying.",
