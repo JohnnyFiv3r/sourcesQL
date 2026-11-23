@@ -19,6 +19,7 @@ import sample from "../fixtures/water-procurement.json";
 
 const seed = snapshotSchema.parse(sample);
 class JobEngine implements ResearchEngine {
+  readonly supportsAsyncJobs = true;
   state = "queued";
   cancellationRequested = false;
   unsettledCancellation = false;

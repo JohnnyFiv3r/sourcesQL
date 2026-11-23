@@ -132,3 +132,101 @@ export const SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS = {
   budgets:
     "Finite engine budget overrides within the selected profile's advertised limits and existing approval. A final SQL LIMIT does not bound search, fetch or model work; never raise caps to evade a refusal.",
 } as const;
+
+const LOCAL_SYNCHRONOUS_GUIDANCE =
+  "Local queries are synchronous: the result, or an error, comes back in the same call. There are no job tools.";
+
+// Local text is derived from the hosted constants, so the two cannot drift and
+// a changed hosted sentence fails loudly here instead of leaking into local.
+function replaceOnce(text: string, from: string, to: string): string {
+  if (text.split(from).length !== 2)
+    throw new Error(`Guidance text changed; update the local variant: ${from}`);
+  return text.replace(from, () => to);
+}
+
+export function serverInstructions(jobs: boolean): string {
+  if (jobs) return SOURCESQL_SERVER_INSTRUCTIONS;
+  const start = "Complete the durable workflow. Hosted sourcesql_query";
+  const end = "A local backend may complete synchronously. ";
+  const from = SOURCESQL_SERVER_INSTRUCTIONS.indexOf(start);
+  const to = SOURCESQL_SERVER_INSTRUCTIONS.indexOf(end);
+  if (from < 0 || to < from)
+    throw new Error("Guidance text changed; update the local variant");
+  const dropped = SOURCESQL_SERVER_INSTRUCTIONS.slice(from, to + end.length);
+  // The sentence about request_id recovery is still true locally.
+  const recovery =
+    "Use the same request_id and identical arguments to recover a lost response. Never automatically resubmit submission_unknown work or create a new request ID to recover it. ";
+  if (!dropped.includes(recovery))
+    throw new Error("Guidance text changed; update the local variant");
+  let text =
+    SOURCESQL_SERVER_INSTRUCTIONS.slice(0, from) +
+    `Complete the workflow. ${LOCAL_SYNCHRONOUS_GUIDANCE} ${recovery}` +
+    SOURCESQL_SERVER_INSTRUCTIONS.slice(to + end.length);
+  text = replaceOnce(text, "sourcesql_job_status reads hosted progress; ", "");
+  // Job-ID directions stay for hosted callers; locally they would send an
+  // agent after a handle that does not exist.
+  for (const [hostedSentence, qualified] of HOSTED_ONLY_SENTENCES)
+    text = replaceOnce(text, hostedSentence, qualified);
+  return text;
+}
+
+const HOSTED_ONLY_SENTENCES: [string, string][] = [
+  [
+    "A real provider refusal is shown through open_research with its saved job_id;",
+    "Hosted execution only: a real provider refusal is shown through open_research with its saved job_id;",
+  ],
+  [
+    "For a saved job blocked by capacity, open_research with its job_id",
+    "Hosted execution only: for a saved job blocked by capacity, open_research with its job_id",
+  ],
+  [
+    "Preserve completed result_id handles and the failed or blocked job_id. When that job_id exists, call",
+    "Preserve completed result_id handles. Hosted execution only: preserve the failed or blocked job_id and, when it exists, call",
+  ],
+  [
+    "Check the existing job with its original handle, retain uncertain work",
+    "Hosted execution only: check the existing job with its original handle. Locally, check the run with sourcesql_run_status. Retain uncertain work",
+  ],
+  [
+    "Poll the same job until its preflight output is available;",
+    "Hosted execution only: poll the same job until its preflight output is available;",
+  ],
+];
+
+export function recoverRunDescription(jobs: boolean, hosted: string): string {
+  return jobs
+    ? hosted
+    : replaceOnce(
+        hosted,
+        " Poll any pending job and repeat the same arguments to recover its result.",
+        "",
+      );
+}
+
+export function queryDescription(jobs: boolean): string {
+  if (jobs) return SOURCESQL_QUERY_DESCRIPTION;
+  return replaceOnce(
+    SOURCESQL_QUERY_DESCRIPTION,
+    "Hosted execution requires a new request_id UUID and may return a durable job. Poll sourcesql_job_status; resume queued work through sourcesql_start_job. Identical arguments and the same request_id recover a lost submission response. Local execution may finish synchronously.",
+    "Identical arguments and the same request_id recover a lost submission response. Local execution is synchronous: the result comes back in the same call.",
+  );
+}
+
+export function openResearchDescription(jobs: boolean): string {
+  if (jobs) return SOURCESQL_OPEN_RESEARCH_DESCRIPTION;
+  let text = replaceOnce(
+    SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+    ", reopen a saved table, or show a hosted job/capacity notice.",
+    " or reopen a saved table.",
+  );
+  text = replaceOnce(
+    text,
+    " bounded v1/v2 snapshot or job_id.",
+    " or bounded v1/v2 snapshot.",
+  );
+  return replaceOnce(
+    text,
+    "; job display reads status without starting research.",
+    ".",
+  );
+}

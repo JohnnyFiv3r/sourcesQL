@@ -1,3 +1,4 @@
+import { testPython } from "./python.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -385,9 +386,7 @@ for (const provider of ["brave", "serper", "deepseek"] as const) {
     ];
     const root = fileURLToPath(new URL("../../../", import.meta.url));
     const result = spawnSync(
-      process.env.SOURCESQL_TEST_PYTHON ??
-        process.env.SOURCESQL_PYTHON ??
-        join(root, "local/python312/venv/bin/python"),
+      testPython(),
       [
         "-B",
         "-c",
