@@ -230,6 +230,9 @@ test(
       } finally {
         globalThis.setTimeout = realSetTimeout;
       }
+      // A child that dies early rejects `outcome` while the PID poll is still
+      // pending; mark it handled now and judge it only after the poll.
+      outcome.catch(() => undefined);
       childPid = await waitForPid(pidFile, STARTUP_ALLOWANCE_MS);
       assert.ok(
         fireKillTimer,
@@ -237,7 +240,7 @@ test(
       );
       fireKillTimer();
       if (childPid === undefined) {
-        await outcome;
+        await outcome.catch(() => undefined);
         assert.fail(
           `The test child process did not start within ${STARTUP_ALLOWANCE_MS} ms, so the process-group check could not run. This is a startup failure, not a kill failure. Rerun the test; if it keeps happening, check machine load.`,
         );
