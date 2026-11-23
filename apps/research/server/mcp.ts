@@ -10,6 +10,7 @@ import { buildMaterializationPayload } from "./materialization.js";
 import { authorizeSnapshot, type AccessPolicy } from "./access.js";
 import {
   resolveResult,
+  withEngineReadScope,
   boundedPreview,
   resultSnapshot,
   type ResearchEngine,
@@ -263,7 +264,7 @@ export function createServer(
     work: () => Promise<CallToolResult>,
   ): Promise<CallToolResult> => {
     try {
-      const result = await work();
+      const result = await withEngineReadScope(work);
       if (
         options.responseByteLimit &&
         Buffer.byteLength(JSON.stringify(result)) > options.responseByteLimit &&

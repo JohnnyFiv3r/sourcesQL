@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -77,6 +78,18 @@ export interface ResearchEngine {
     params?: Record<string, unknown>,
   ): Promise<T>;
 }
+const declaredFeatures = (
+  capabilities: Record<string, unknown>,
+): Record<string, unknown> => {
+  const declared = capabilities.worker_feature_contracts;
+  return declared && typeof declared === "object" && !Array.isArray(declared)
+    ? (declared as Record<string, unknown>)
+    : {};
+};
+const readMemo = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
+/** Scopes repeated identical result reads inside one tool call to one process. */
+export const withEngineReadScope = <T>(run: () => Promise<T>): Promise<T> =>
+  readMemo.run(new Map(), run);
 export type BridgeProcessOptions = {
   timeoutMs?: number;
   command?: string;
@@ -148,12 +161,9 @@ export class PythonEngine implements ResearchEngine {
     return this.featuresPromise;
   }
   private async loadFeatures(): Promise<Record<string, unknown>> {
-    const capabilities =
-      await this.bridgeCall<Record<string, unknown>>("capabilities");
-    const declared = capabilities.worker_feature_contracts;
-    return declared && typeof declared === "object" && !Array.isArray(declared)
-      ? (declared as Record<string, unknown>)
-      : {};
+    return declaredFeatures(
+      await this.bridgeCall<Record<string, unknown>>("capabilities"),
+    );
   }
   async inspectResult(params: Record<string, unknown>) {
     if (
@@ -190,7 +200,27 @@ export class PythonEngine implements ResearchEngine {
           "unsupported_capability: Update the local worker to support this citation/materialization contract before retrying",
         );
     }
-    return this.bridgeCall<T>(method, params);
+    const memo = readMemo.getStore();
+    if (method !== "read_result") memo?.clear();
+    else if (memo) {
+      // Results are immutable, so one tool call that reads the same page twice
+      // (resolving a reference, then verifying it on save) starts one process.
+      const key = JSON.stringify(params);
+      let page = memo.get(key);
+      if (!page) {
+        page = this.bridgeCall<T>(method, params);
+        memo.set(key, page);
+        page.catch(() => memo.delete(key));
+      }
+      return structuredClone(await (page as Promise<T>));
+    }
+    const result = await this.bridgeCall<T>(method, params);
+    // An ordinary capabilities call already carries the feature map.
+    if (method === "capabilities" && !this.featuresPromise)
+      this.featuresPromise = Promise.resolve(
+        declaredFeatures(result as Record<string, unknown>),
+      );
+    return result;
   }
   private bridgeCall<T = Record<string, unknown>>(
     method: string,
