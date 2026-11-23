@@ -427,9 +427,6 @@ test("MCP stdio handshake, UI resource, correction, import and follow-up round t
         "sourcesql_read_result",
         "sourcesql_inspect_evidence",
         "sourcesql_cancel",
-        "sourcesql_job_status",
-        "sourcesql_cancel_job",
-        "sourcesql_start_job",
       ].sort(),
     );
     const openTool = tools.find((t) => t.name === "open_research")!;

@@ -12,6 +12,9 @@ import {
   resolveResult,
   boundedPreview,
   resultSnapshot,
+  localJobsUnavailable,
+  withLocalCallBudget,
+  LOCAL_READ_LIMIT_MS,
   type ResearchEngine,
   type ResultReference,
   type EngineResult,
@@ -87,11 +90,12 @@ import {
   safeFailureContext,
 } from "./execution-errors.js";
 import {
-  SOURCESQL_SERVER_INSTRUCTIONS,
-  SOURCESQL_QUERY_DESCRIPTION,
+  serverInstructions,
+  queryDescription,
+  recoverRunDescription,
   SOURCESQL_CAPABILITIES_DESCRIPTION,
   SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS,
-  SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+  openResearchDescription,
   SOURCESQL_OPEN_RESEARCH_HANDOFF,
 } from "./agent-guidance.js";
 
@@ -111,6 +115,13 @@ export function createServer(
     oauth?: { scopes: string[] };
   } = {},
 ): McpServer {
+  // Job tools exist only where the engine can create jobs; local runs are synchronous.
+  const jobs = options.engine?.supportsAsyncJobs === true;
+  // The local bridge limits apply only to the local engine; hosted calls keep
+  // their own deadlines and are never given the local timer.
+  const local = Boolean(options.engine) && !jobs;
+  const withinLocalBudget = <T>(run: () => Promise<T>, budgetMs?: number) =>
+    local ? withLocalCallBudget(run, budgetMs) : run();
   // Tool discovery and resources/read must reference the same immutable bundle.
   const uiHtml = readFileSync(htmlPath, "utf8");
   const resourceUri = uiResourceUri(uiHtml);
@@ -128,7 +139,7 @@ export function createServer(
         },
       ],
     },
-    { instructions: SOURCESQL_SERVER_INSTRUCTIONS },
+    { instructions: serverInstructions(jobs) },
   );
   const oauthScopes = options.oauth && [...options.oauth.scopes];
   if (
@@ -471,6 +482,10 @@ export function createServer(
       };
     }
   };
+  // Read-only tools do no provider work: every bridge step they start shares
+  // one short limit, so the host hears back within it.
+  const safeShort = (work: () => Promise<CallToolResult>) =>
+    safe(() => withinLocalBudget(work, LOCAL_READ_LIMIT_MS));
   const jobStates = new Set([
     "queued",
     "dispatching",
@@ -664,7 +679,7 @@ export function createServer(
     "open_research",
     {
       title: "Open research",
-      description: SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+      description: openResearchDescription(jobs),
       inputSchema: z
         .object({
           snapshot_id: id.optional(),
@@ -750,7 +765,11 @@ export function createServer(
           : snapshot
             ? (authorizeSnapshot(snapshot, options.access),
               await store.import(snapshot))
-            : await store.open(snapshot_id);
+            : // Opening saved research is a read: it gets the short local limit.
+              await withinLocalBudget(
+                () => store.open(snapshot_id),
+                LOCAL_READ_LIMIT_MS,
+              );
         if (
           !result_ref &&
           !snapshot &&
@@ -920,7 +939,7 @@ export function createServer(
       },
     },
     (args) =>
-      safe(async () => {
+      safeShort(async () => {
         if (args.snapshot_id) authorizeView(await store.open(args.snapshot_id));
         const result = await store.findRows(args, (view) => {
           try {
@@ -989,7 +1008,7 @@ export function createServer(
       },
     },
     ({ request_id }) =>
-      safe(async () => {
+      safeShort(async () => {
         const result = await store.researchContext(request_id);
         authorizeSnapshot(
           {
@@ -1069,7 +1088,7 @@ export function createServer(
       },
     },
     ({ snapshot_id }) =>
-      safe(async () => viewResult(await store.open(snapshot_id))),
+      safeShort(async () => viewResult(await store.open(snapshot_id))),
   );
   tools.registerTool(
     "finish_research",
@@ -1136,7 +1155,7 @@ export function createServer(
       },
     },
     (args) =>
-      safe(async () => {
+      safeShort(async () => {
         const full = await store.open(args.snapshot_id);
         const offset = args.row_id
           ? full.snapshot.rows.findIndex((r) => r.id === args.row_id)
@@ -1252,7 +1271,7 @@ export function createServer(
       },
     },
     ({ request_id }) =>
-      safe(async () => {
+      safeShort(async () => {
         const result = await updateResult(request_id);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -1654,7 +1673,7 @@ export function createServer(
       },
     },
     ({ checkpoint_id }) =>
-      safe(async () => {
+      safeShort(async () => {
         const saved = await store.readCheckpoint(checkpoint_id);
         const result = await inspectCheckpoint(saved.checkpoint);
         return {
@@ -1707,7 +1726,7 @@ export function createServer(
       },
     },
     (args) =>
-      safe(async () => {
+      safeShort(async () => {
         const bundle = await store.exportBundle(args.snapshot_id);
         for (const snapshot of bundle.state.snapshots)
           authorizeSnapshot(snapshot, options.access);
@@ -1734,8 +1753,9 @@ export function createServer(
     "import_research_bundle",
     {
       title: "Import research bundle",
-      description:
-        "Restore originals, separate amendments and research tree from a bundle. Conflicting identities are refused. Engine results are reauthorized before attachment. Hosted engine import can return a pending materialization job: poll sourcesql_job_status, then repeat import_research_bundle with the SAME bundle after completion. App state is not written while dependencies are pending.",
+      description: jobs
+        ? "Restore originals, separate amendments and research tree from a bundle. Conflicting identities are refused. Engine results are reauthorized before attachment. Hosted engine import can return a pending materialization job: poll sourcesql_job_status, then repeat import_research_bundle with the SAME bundle after completion. App state is not written while dependencies are pending."
+        : "Restore originals, separate amendments and research tree from a bundle. Conflicting identities are refused. Engine results are reauthorized before attachment.",
       inputSchema: z
         .object({ bundle: z.record(z.string(), z.unknown()) })
         .strict(),
@@ -2486,7 +2506,8 @@ export function createServer(
           openWorldHint: false,
         },
       },
-      () => safe(async () => engineResult(await engine.call("capabilities"))),
+      () =>
+        safeShort(async () => engineResult(await engine.call("capabilities"))),
     );
     if (engine.supportsUsageReporting)
       tools.registerTool(
@@ -2510,7 +2531,7 @@ export function createServer(
           },
         },
         (args) =>
-          safe(async () => {
+          safeShort(async () => {
             if (options.access?.mode === "fixture-anonymous")
               throw new Error(
                 "Usage reports require authenticated owner access",
@@ -2522,8 +2543,9 @@ export function createServer(
       tools.registerTool(
         "sourcesql_explain",
         {
-          description:
-            "Admit and explain a bounded query without search/model dispatch. Exact effective-view inputs are materialized first when needed. Hosted execution requires request_id and returns async materialization/validation jobs: poll sourcesql_job_status and repeat this tool with the same request_id after materialization. On-demand Flights consume configured capacity. Local validation is synchronous. Validation never authorizes later execution or raises its limits.",
+          description: jobs
+            ? "Admit and explain a bounded query without search/model dispatch. Exact effective-view inputs are materialized first when needed. Hosted execution requires request_id and returns async materialization/validation jobs: poll sourcesql_job_status and repeat this tool with the same request_id after materialization. On-demand Flights consume configured capacity. Local validation is synchronous. Validation never authorizes later execution or raises its limits."
+            : "Admit and explain a bounded query without search/model dispatch. Exact effective-view inputs are materialized first when needed. Local validation is synchronous. Validation never authorizes later execution or raises its limits.",
           inputSchema: querySchema,
           annotations: {
             readOnlyHint: false,
@@ -2531,12 +2553,15 @@ export function createServer(
             openWorldHint: false,
           },
         },
-        (args) => safe(() => executeQueryOperation("explain", args)),
+        (args) =>
+          safe(() =>
+            withinLocalBudget(() => executeQueryOperation("explain", args)),
+          ),
       );
     tools.registerTool(
       "sourcesql_query",
       {
-        description: SOURCESQL_QUERY_DESCRIPTION,
+        description: queryDescription(jobs),
         inputSchema: querySchema,
         annotations: {
           readOnlyHint: false,
@@ -2545,13 +2570,18 @@ export function createServer(
           openWorldHint: true,
         },
       },
-      (args) => safe(() => executeQueryOperation("query", args)),
+      (args) =>
+        safe(() =>
+          withinLocalBudget(() => executeQueryOperation("query", args)),
+        ),
     );
     tools.registerTool(
       "sourcesql_recover_run",
       {
-        description:
+        description: recoverRunDescription(
+          jobs,
           "Recover a bounded page of successful source acquisitions retained by a stopped or partial run. No search or model calls. Hosted recovery can start a provider-free Flight and consume configured Flight capacity. The result is explicitly incomplete input data; author corrected SQL over it and do not present raw recovery as finished research. Poll any pending job and repeat the same arguments to recover its result.",
+        ),
         inputSchema: z
           .object({
             run_id: id,
@@ -2639,7 +2669,9 @@ export function createServer(
           return engineResult(result);
         }),
     );
-    for (const method of ["job_status", "cancel_job", "start_job"] as const)
+    for (const method of jobs
+      ? (["job_status", "cancel_job", "start_job"] as const)
+      : [])
       tools.registerTool(
         `sourcesql_${method}`,
         {
@@ -2679,7 +2711,7 @@ export function createServer(
         },
       },
       (args) =>
-        safe(async () => {
+        safeShort(async () => {
           const projected = await engine.inspectResult?.({
             ...args,
             mode: "rows",
@@ -2732,7 +2764,7 @@ export function createServer(
         },
       },
       (args) =>
-        safe(async () => {
+        safeShort(async () => {
           if (args.collection && args.record_index === undefined)
             throw new Error("record_index is required for chunk inspection");
           if (
@@ -2853,7 +2885,7 @@ export function createServer(
           },
         },
         (args) =>
-          safe(async () => {
+          safeShort(async () => {
             const receipt = await engine.call(method, args);
             authorizeRunReceipt(receipt);
             if (typeof receipt.result_id === "string") {
@@ -2939,5 +2971,34 @@ export function createServer(
         uiResource(uri.href, await readArchivedUiBundle(htmlPath, uri.href)),
     );
   }
+  // A cached tool list may still name a job tool; the SDK would only say "not found".
+  if (local) interceptLocalJobTools(server);
   return server;
+}
+
+function interceptLocalJobTools(server: McpServer) {
+  const protocol = server.server as unknown as {
+    _getRequestHandler(
+      method: string,
+    ):
+      ((request: unknown, ctx: unknown) => Promise<CallToolResult>) | undefined;
+  };
+  const inner = protocol._getRequestHandler("tools/call");
+  if (!inner) throw new Error("MCP SDK no longer registers tools/call");
+  server.server.setRequestHandler("tools/call", (request, ctx) => {
+    const name = request.params.name;
+    return ["job_status", "cancel_job", "start_job"].some(
+      (method) => name === `sourcesql_${method}`,
+    )
+      ? ({
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: localJobsUnavailable(name),
+            },
+          ],
+        } satisfies CallToolResult)
+      : inner(request, ctx);
+  });
 }
