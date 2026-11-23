@@ -1,0 +1,4 @@
+# The maintainer is the only code owner, so with the "Main: contributor
+# reviews" ruleset's code-owner review on, only @JohnnyFiv3r's approval
+# satisfies a contributor PR. This file is itself covered by `*`.
+* @JohnnyFiv3r
