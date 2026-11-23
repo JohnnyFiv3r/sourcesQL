@@ -2,7 +2,6 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE_SUFFIXES = (".py", ".ts", ".tsx", ".mjs")
 
 
 def not_measured_entries():
@@ -22,9 +21,8 @@ def test_not_measured_files_and_their_checks_exist():
     assert entries, "The not-measured list is empty."
     for path, checked_by in entries:
         assert (ROOT / path).is_file(), f"Not-measured file is missing: {path}"
-        for check in (part.strip() for part in checked_by.split(",")):
-            if check.endswith(SOURCE_SUFFIXES):
-                assert (ROOT / check).is_file(), f"{path} names a missing check: {check}"
+        for check in re.findall(r"[\w./-]+\.(?:py|ts|tsx|mjs)\b", checked_by):
+            assert (ROOT / check).is_file(), f"{path} names a missing check: {check}"
 
 
 def test_every_unmeasured_area_named_by_the_spec_is_listed():

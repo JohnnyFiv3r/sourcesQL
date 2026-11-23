@@ -8,9 +8,9 @@ on the same commit should agree within about one point.
 | Suite | Command, from the repository root | Reports written |
 |---|---|---|
 | Python engine and Flight | `uv run --frozen python scripts/coverage_python.py` | `coverage/python/index.html`, `coverage/python/coverage.json` |
-| Research app | `npm run coverage --prefix apps/research` | `apps/research/coverage/lcov.info`, `apps/research/coverage/summary.txt` |
+| Research app | `npm run build --prefix apps/research && npm run coverage --prefix apps/research` | `apps/research/coverage/index.html`, `apps/research/coverage/coverage-summary.json`, plus `lcov.info` and `summary.txt` |
 
-The app command needs the same `SOURCESQL_PYTHON` as `npm test`.
+The app command needs the same `SOURCESQL_PYTHON` as `npm test`, and the build first: some tests start the built app, and fail without `apps/research/dist`.
 
 ## Not measured
 
@@ -23,9 +23,9 @@ file exists.
 ```not-measured
 src/sourcesql/execution/linux_sandbox.py | tests/security/test_linux_worker_isolation.py
 src/sourcesql/execution/linux_syscalls.py | tests/security/test_linux_worker_isolation.py
-src/sourcesql/bridge.py | apps/research/tests/bridge.test.ts, apps/research/tests/safety.test.ts
-src/sourcesql/execution/worker_process.py | tests/security/test_engine_boundaries.py
-hosted/flight/runner.py | hosted/flight/tests/test_runner_validation.py
+src/sourcesql/bridge.py | apps/research/tests/sourcesql.test.ts (its JSON-lines bridge tests start the real bridge)
+src/sourcesql/execution/worker_process.py | tests/integration/test_engine_plans.py (its actual-worker test starts the real worker loop)
+hosted/flight/runner.py | no automated check of the main entrypoint (hosted/flight/tests/test_runner_validation.py runs its validation functions in-process)
 apps/research/src/app.tsx | no automated check; manual browser QA at release
 ```
 

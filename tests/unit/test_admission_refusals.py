@@ -102,6 +102,13 @@ CASES = [
         "LEFT joins require ON or USING",
     ),
     (
+        "reserved_planner_namespace",
+        "SELECT __wql1 FROM input.a",
+        None,
+        "invalid_query",
+        "Identifier uses a reserved planner namespace",
+    ),
+    (
         "struct_field",
         "SELECT {'a b': 1} AS s",
         None,
