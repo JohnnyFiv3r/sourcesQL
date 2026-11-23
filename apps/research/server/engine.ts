@@ -86,6 +86,8 @@ const declaredFeatures = (
     ? (declared as Record<string, unknown>)
     : {};
 };
+type BridgeReply =
+  { ok: true; result: unknown } | { ok: false; message: string };
 const readMemo = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
 /** Scopes repeated identical result reads inside one tool call to one process. */
 export const withEngineReadScope = <T>(run: () => Promise<T>): Promise<T> =>
@@ -222,12 +224,20 @@ export class PythonEngine implements ResearchEngine {
       );
     return result;
   }
-  private bridgeCall<T = Record<string, unknown>>(
+  private async bridgeCall<T = Record<string, unknown>>(
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
+    const [reply] = await this.bridgeBatch([{ method, params }]);
+    if (!reply.ok) throw new Error(reply.message);
+    return reply.result as T;
+  }
+  /** One process answers every request; replies are matched by id, not order. */
+  private bridgeBatch(
+    requests: { method: string; params: Record<string, unknown> }[],
+  ): Promise<BridgeReply[]> {
     return new Promise((resolve, reject) => {
-      const id = randomUUID();
+      const ids = requests.map(() => randomUUID());
       const child = spawn(
         this.processOptions.command ??
           this.environment.SOURCESQL_PYTHON ??
@@ -242,7 +252,7 @@ export class PythonEngine implements ResearchEngine {
       );
       let output = "",
         settled = false;
-      const finish = (error: Error | null, result?: T) => {
+      const finish = (error: Error | null, result?: BridgeReply[]) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -291,24 +301,39 @@ export class PythonEngine implements ResearchEngine {
       child.on("close", () => {
         try {
           const lines = output.trim().split("\n");
-          if (lines.length !== 1) throw new Error();
-          const result = JSON.parse(lines[0]);
-          if (result.id !== id) throw new Error();
-          if (result.error)
-            finish(
-              new Error(
-                `${String(result.error.code)}: ${String(result.error.message)}`,
-              ),
-            );
-          else if (Object.hasOwn(result, "result"))
-            finish(null, result.result as T);
-          else throw new Error();
+          if (lines.length !== ids.length) throw new Error();
+          const byId = new Map<string, Record<string, any>>();
+          for (const line of lines) {
+            const reply = JSON.parse(line);
+            if (!ids.includes(reply.id) || byId.has(reply.id))
+              throw new Error();
+            byId.set(reply.id, reply);
+          }
+          finish(
+            null,
+            ids.map((id): BridgeReply => {
+              const reply = byId.get(id)!;
+              if (reply.error)
+                return {
+                  ok: false,
+                  message: `${String(reply.error.code)}: ${String(reply.error.message)}`,
+                };
+              if (!Object.hasOwn(reply, "result")) throw new Error();
+              return { ok: true, result: reply.result };
+            }),
+          );
         } catch {
           finish(new Error("Invalid engine bridge response."));
         }
       });
       child.stdin.on("error", () => {});
-      child.stdin.end(JSON.stringify({ id, method, params }) + "\n");
+      child.stdin.end(
+        requests
+          .map(({ method, params }, i) =>
+            JSON.stringify({ id: ids[i], method, params }),
+          )
+          .join("\n") + "\n",
+      );
     });
   }
 }
