@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -84,6 +85,16 @@ export const LOCAL_DISPATCH_LIMIT_MS = Math.min(
   240_000,
 );
 export const LOCAL_READ_LIMIT_MS = 30_000;
+// One tool call can start several bridge processes (materialize an input, then
+// query). This total stays under the 240 s cap of claude.ai and Desktop, so the
+// host gets an answer even when each process is within its own limit.
+export const LOCAL_CALL_BUDGET_MS = 235_000;
+const callBudget = new AsyncLocalStorage<{ deadline: number }>();
+/** Runs a tool call so that its bridge processes share one total time budget. */
+export const withLocalCallBudget = <T>(
+  run: () => Promise<T>,
+  budgetMs = LOCAL_CALL_BUDGET_MS,
+): Promise<T> => callBudget.run({ deadline: Date.now() + budgetMs }, run);
 // Bridge methods that can dispatch providers or do heavy materialization;
 // every other method gets the short limit.
 const LOCAL_DISPATCH_METHODS = new Set([
@@ -221,6 +232,21 @@ export class PythonEngine implements ResearchEngine {
   ): Promise<T> {
     return new Promise((resolve, reject) => {
       const id = randomUUID();
+      const ownLimitMs =
+        this.processOptions.timeoutMs ??
+        (LOCAL_DISPATCH_METHODS.has(method)
+          ? (this.processOptions.dispatchTimeoutMs ?? LOCAL_DISPATCH_LIMIT_MS)
+          : (this.processOptions.readTimeoutMs ?? LOCAL_READ_LIMIT_MS));
+      const budget = callBudget.getStore();
+      const limitMs = budget
+        ? Math.min(ownLimitMs, budget.deadline - Date.now())
+        : ownLimitMs;
+      if (limitMs <= 0)
+        return reject(
+          new Error(
+            "Engine call budget used up before this step started; inspect the run before retrying.",
+          ),
+        );
       const child = spawn(
         this.processOptions.command ??
           this.environment.SOURCESQL_PYTHON ??
@@ -251,11 +277,6 @@ export class PythonEngine implements ResearchEngine {
         }
         return true;
       };
-      const limitMs =
-        this.processOptions.timeoutMs ??
-        (LOCAL_DISPATCH_METHODS.has(method)
-          ? (this.processOptions.dispatchTimeoutMs ?? LOCAL_DISPATCH_LIMIT_MS)
-          : (this.processOptions.readTimeoutMs ?? LOCAL_READ_LIMIT_MS));
       const timer = setTimeout(() => {
         const stopped = terminateOwnedGroup();
         finish(

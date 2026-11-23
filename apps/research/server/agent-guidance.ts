@@ -171,6 +171,10 @@ const HOSTED_ONLY_SENTENCES: [string, string][] = [
     "Preserve completed result_id handles. Hosted execution only: preserve the failed or blocked job_id and, when it exists, call",
   ],
   [
+    "Check the existing job with its original handle, retain uncertain work",
+    "Hosted execution only: check the existing job with its original handle. Locally, check the run with sourcesql_run_status. Retain uncertain work",
+  ],
+  [
     "Poll the same job until its preflight output is available;",
     "Hosted execution only: poll the same job until its preflight output is available;",
   ],
@@ -192,5 +196,24 @@ export function queryDescription(jobs: boolean): string {
     SOURCESQL_QUERY_DESCRIPTION,
     "Hosted execution requires a new request_id UUID and may return a durable job. Poll sourcesql_job_status; resume queued work through sourcesql_start_job. Identical arguments and the same request_id recover a lost submission response. Local execution may finish synchronously.",
     "Identical arguments and the same request_id recover a lost submission response. Local execution is synchronous: the result comes back in the same call.",
+  );
+}
+
+export function openResearchDescription(jobs: boolean): string {
+  if (jobs) return SOURCESQL_OPEN_RESEARCH_DESCRIPTION;
+  let text = replaceOnce(
+    SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+    ", reopen a saved table, or show a hosted job/capacity notice.",
+    " or reopen a saved table.",
+  );
+  text = replaceOnce(
+    text,
+    " bounded v1/v2 snapshot or job_id.",
+    " or bounded v1/v2 snapshot.",
+  );
+  return replaceOnce(
+    text,
+    "; job display reads status without starting research.",
+    ".",
   );
 }

@@ -12,6 +12,8 @@ import {
   LOCAL_DISPATCH_DEADLINE_SECONDS,
   LOCAL_DISPATCH_LIMIT_MS,
   LOCAL_READ_LIMIT_MS,
+  LOCAL_CALL_BUDGET_MS,
+  withLocalCallBudget,
   type ResearchEngine,
 } from "../server/engine.js";
 import {
@@ -279,6 +281,55 @@ test("exactly the documented methods get the long limit", async () => {
   }
 });
 
+test("one tool call's bridge processes share a total budget under the host cap", async () => {
+  assert.ok(LOCAL_CALL_BUDGET_MS <= 240_000);
+  assert.ok(LOCAL_CALL_BUDGET_MS >= LOCAL_DISPATCH_LIMIT_MS);
+  const { directory, script } = await fakeBridge(
+    `await new Promise((r) => setTimeout(r, 600)); answer({ok: request.method});`,
+  );
+  try {
+    const engine = new PythonEngine(directory, process.env, {
+      command: process.execPath,
+      args: [script],
+      dispatchTimeoutMs: 5000,
+    });
+    // Each step is within its own limit, but together they pass the budget.
+    await assert.rejects(
+      withLocalCallBudget(async () => {
+        await engine.call("import_table", {});
+        return engine.call("query", {});
+      }, 900),
+      /Engine timed out; inspect the run before retrying/,
+    );
+    // Without a budget, the same two steps both finish.
+    await engine.call("import_table", {});
+    assert.deepEqual(await engine.call("query", {}), { ok: "query" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a step is not started once the call budget is used up", async () => {
+  const { directory, script } = await fakeBridge(
+    `answer({ok: request.method});`,
+  );
+  try {
+    const engine = new PythonEngine(directory, process.env, {
+      command: process.execPath,
+      args: [script],
+    });
+    await assert.rejects(
+      withLocalCallBudget(async () => {
+        await delay(30);
+        return engine.call("query", {});
+      }, 10),
+      /budget used up before this step started; inspect the run before retrying/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 async function processStopped(pid: number) {
   try {
     process.kill(pid, 0);
@@ -384,6 +435,17 @@ test("local text never mentions job tools; hosted text is unchanged", async () =
     /job_id/.test(text),
   ))
     assert.match(sentence, /[Hh]osted/, sentence);
+  // Other ways to say "go and look at a job" also need the hosted label.
+  for (const sentence of texts
+    .flatMap(sentences)
+    .filter((text) =>
+      /existing job|its job_id|the job_id|job display/i.test(text),
+    ))
+    assert.match(sentence, /[Hh]osted/, sentence);
+  const openResearch = local.tools.find(
+    (tool) => tool.name === "open_research",
+  )!;
+  assert.doesNotMatch(String(openResearch.description), /job/i);
   const hosted = await listing(stub(true));
   assert.equal(hosted.instructions, SOURCESQL_SERVER_INSTRUCTIONS);
   assert.equal(

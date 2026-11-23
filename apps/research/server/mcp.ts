@@ -13,6 +13,7 @@ import {
   boundedPreview,
   resultSnapshot,
   localJobsUnavailable,
+  withLocalCallBudget,
   type ResearchEngine,
   type ResultReference,
   type EngineResult,
@@ -86,7 +87,7 @@ import {
   recoverRunDescription,
   SOURCESQL_CAPABILITIES_DESCRIPTION,
   SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS,
-  SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+  openResearchDescription,
   SOURCESQL_OPEN_RESEARCH_HANDOFF,
 } from "./agent-guidance.js";
 
@@ -501,7 +502,7 @@ export function createServer(
     "open_research",
     {
       title: "Open research",
-      description: SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
+      description: openResearchDescription(jobs),
       inputSchema: z
         .object({
           snapshot_id: id.optional(),
@@ -2358,7 +2359,10 @@ export function createServer(
             openWorldHint: false,
           },
         },
-        (args) => safe(() => executeQueryOperation("explain", args)),
+        (args) =>
+          safe(() =>
+            withLocalCallBudget(() => executeQueryOperation("explain", args)),
+          ),
       );
     tools.registerTool(
       "sourcesql_query",
@@ -2372,7 +2376,10 @@ export function createServer(
           openWorldHint: true,
         },
       },
-      (args) => safe(() => executeQueryOperation("query", args)),
+      (args) =>
+        safe(() =>
+          withLocalCallBudget(() => executeQueryOperation("query", args)),
+        ),
     );
     tools.registerTool(
       "sourcesql_recover_run",
