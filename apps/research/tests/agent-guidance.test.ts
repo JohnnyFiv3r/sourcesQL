@@ -11,6 +11,8 @@ import {
   SOURCESQL_ANSWER_REVIEW_GUIDANCE,
   SOURCESQL_CAPABILITIES_DESCRIPTION,
   SOURCESQL_EXTRACTION_BATCH_GUIDANCE,
+  SOURCESQL_FETCH_EXAMPLE,
+  SOURCESQL_HOST_SEARCH_GUIDANCE,
   SOURCESQL_RECOVERY_GUIDANCE,
   SOURCESQL_QUERY_DESCRIPTION,
   SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
@@ -350,8 +352,9 @@ test("MCP initialize preserves failure identity and requires approved fallback o
   assert.ok(instructions.includes(SOURCESQL_RECOVERY_GUIDANCE));
   assert.match(
     instructions,
-    /Do not fall back to ChatGPT web search.*unless the user explicitly approves/,
+    /When a sourcesQL search provider is configured and working, do not fall back to ChatGPT web search.*unless the user explicitly approves/,
   );
+  assert.doesNotMatch(instructions, /Keep recovery inside sourcesQL\. Do not fall back/);
   assert.match(
     instructions,
     /including after validation errors, timeouts, provider failures or capacity blocks/,
@@ -373,6 +376,25 @@ test("MCP initialize preserves failure identity and requires approved fallback o
     /remote_outcome_unknown or submission_unknown, do not automatically replay/,
   );
   assert.match(instructions, /stop for explicit recovery authorization/);
+  assert.deepEqual(wire.calls, []);
+});
+
+test("MCP initialize documents the host-search fetch route and treats host results as leads", async () => {
+  const wire = await discover();
+  const instructions = wire.instructions!;
+  assert.ok(instructions.includes(SOURCESQL_HOST_SEARCH_GUIDANCE));
+  assert.ok(instructions.includes(SOURCESQL_FETCH_EXAMPLE));
+  assert.match(instructions, /host_search_route\.available/);
+  assert.match(instructions, /leads, not citations/);
+  assert.match(instructions, /do not split the job/);
+  assert.match(instructions, /tell the user which URLs you left out/);
+  assert.match(instructions, /use WEB_SEARCH instead unless the user asks/);
+  assert.match(instructions, /imported snapshot has no sources or citations/);
+  assert.match(SOURCESQL_FETCH_EXAMPLE, /WEB_FETCH\(\$u1/);
+  assert.doesNotMatch(SOURCESQL_FETCH_EXAMPLE, /VALUES/);
+  for (const tool of wire.tools) {
+    assert.ok(!tool.description!.includes(SOURCESQL_HOST_SEARCH_GUIDANCE));
+  }
   assert.deepEqual(wire.calls, []);
 });
 
