@@ -42,6 +42,7 @@ const report = {
 };
 
 class MeterOnlyEngine implements ResearchEngine {
+  readonly supportsAsyncJobs = true;
   readonly supportsUsageReporting = true;
   readonly supportsExplain = false;
   calls: { method: string; params: Record<string, unknown> }[] = [];

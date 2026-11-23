@@ -1,3 +1,4 @@
+import { testPython } from "./python.js";
 import { WORKER_FEATURE_CONTRACTS } from "../server/feature-contracts.js";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -8,10 +9,7 @@ import { z } from "zod";
 import { curatedCitationsSchema } from "../server/citation-contract.js";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const python =
-  process.env.SOURCESQL_TEST_PYTHON ??
-  process.env.SOURCESQL_PYTHON ??
-  join(root, "local/python312/venv/bin/python");
+const python = testPython();
 const base = {
   match: { product: "Aurora" },
   column_key: "claim",
