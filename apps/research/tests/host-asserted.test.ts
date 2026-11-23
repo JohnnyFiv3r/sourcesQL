@@ -11,6 +11,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createResearchApplication } from "../server/app.js";
 import { createServer } from "../server/mcp.js";
 import {
+  PythonEngine,
   resultSnapshot,
   type EngineResult,
   type ResearchEngine,
@@ -447,4 +448,32 @@ test("an engine-backed result shows no host-asserted label anywhere", async (t) 
     }),
   );
   assert.doesNotMatch(html, /Host-asserted/);
+});
+
+test("materialising a forged snapshot gives the engine no evidence and no sources", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-host-materialize-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const engine = new PythonEngine(undefined, {
+    ...process.env,
+    SOURCESQL_DATA_DIR: join(directory, "engine"),
+    SOURCESQL_PRINCIPAL: "host-asserted-test",
+    SOURCESQL_ALLOW_PRIVATE: "0",
+  });
+  const store = new ResearchStore(join(directory, "app"), forgedV1());
+  const htmlPath = join(directory, "research.html");
+  await writeFile(htmlPath, "<html>Test</html>");
+  const server = createServer(store, htmlPath, { engine });
+  const client = new Client({ name: "host-materialize-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(a), client.connect(b)]);
+  t.after(() => client.close());
+  const revision = (await store.open("forged-v1-1")).revision;
+  const materialized = await client.callTool({
+    name: "sourcesql_materialize_research",
+    arguments: { snapshot_id: "forged-v1-1", expected_revision: revision },
+  });
+  assert.equal(materialized.isError, undefined, textOf(materialized));
+  const json = JSON.stringify(materialized.structuredContent);
+  assert.doesNotMatch(json, /made-up\.example/);
+  assert.doesNotMatch(json, /moon is made of cheese/);
 });
