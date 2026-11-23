@@ -94,8 +94,82 @@ const readMemo = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
 /** Scopes repeated identical result reads inside one tool call to one process. */
 export const withEngineReadScope = <T>(run: () => Promise<T>): Promise<T> =>
   readMemo.run(new Map(), run);
+/** Mirrors DEFAULT_LIMITS["dispatch_deadline_seconds"] in src/sourcesql/contracts.py. */
+export const LOCAL_DISPATCH_DEADLINE_SECONDS = 180;
+// Above the engine's own deadline so it can answer cleanly first, and below
+// the 240 s per-call cap of claude.ai and Desktop.
+export const LOCAL_DISPATCH_LIMIT_MS = Math.min(
+  (LOCAL_DISPATCH_DEADLINE_SECONDS + 20) * 1000,
+  240_000,
+);
+export const LOCAL_READ_LIMIT_MS = 30_000;
+// One tool call can start several bridge processes (materialize an input, then
+// query). The whole call may exceed the engine's reported dispatch deadline by
+// at most 30 s, which is also under the 240 s cap of claude.ai and Desktop.
+export const LOCAL_CALL_BUDGET_MS =
+  (LOCAL_DISPATCH_DEADLINE_SECONDS + 30) * 1000;
+// `active` counts bridge processes in flight: each has its own timer at or
+// before the deadline and reports its own timeout and cleanup outcome.
+// `expired` is set when the deadline fires, so no step can start afterwards
+// whatever the wall clock does; the deadline itself uses the monotonic clock.
+const callBudget = new AsyncLocalStorage<{
+  deadline: number;
+  active: number;
+  expired: boolean;
+}>();
+const CALL_TIMED_OUT = "Engine timed out; inspect the run before retrying.";
+/** Time left in the tool call's shared budget, or undefined outside one. */
+export const remainingLocalCallBudgetMs = (): number | undefined => {
+  const budget = callBudget.getStore();
+  return budget && budget.deadline - performance.now();
+};
+/**
+ * Runs a tool call so that its bridge processes share one total time budget,
+ * and replies when the budget ends even if app-store work is still pending.
+ * Late bridge steps are refused; work already in flight is left to finish.
+ */
+export const withLocalCallBudget = <T>(
+  run: () => Promise<T>,
+  budgetMs = LOCAL_CALL_BUDGET_MS,
+): Promise<T> => {
+  const budget = {
+    deadline: performance.now() + budgetMs,
+    active: 0,
+    expired: false,
+  };
+  return callBudget.run(
+    budget,
+    () =>
+      new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          budget.expired = true;
+          if (budget.active === 0) reject(new Error(CALL_TIMED_OUT));
+        }, budgetMs);
+        Promise.resolve()
+          .then(run)
+          .then(resolve, reject)
+          .finally(() => clearTimeout(timer));
+      }),
+  );
+};
+// Bridge methods that can dispatch providers or do heavy materialization;
+// every other method gets the short limit.
+const LOCAL_DISPATCH_METHODS = new Set([
+  "query",
+  "explain",
+  "resume_run",
+  "recover_run",
+  "import_table",
+  "import",
+]);
+const LOCAL_JOB_METHODS = new Set(["job_status", "start_job", "cancel_job"]);
+export const localJobsUnavailable = (toolName: string) =>
+  `invalid_request: This sourcesQL server runs queries synchronously and has no jobs, so ${toolName} is not available. A query returns its result in the same call. To check or recover a run, use sourcesql_run_status or sourcesql_recover_run with the run handle.`;
 export type BridgeProcessOptions = {
   timeoutMs?: number;
+  /** Tests only: shorten the per-method limits. */
+  dispatchTimeoutMs?: number;
+  readTimeoutMs?: number;
   command?: string;
   args?: string[];
 };
@@ -206,6 +280,8 @@ export class PythonEngine implements ResearchEngine {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
+    if (LOCAL_JOB_METHODS.has(method))
+      throw new Error(localJobsUnavailable(`sourcesql_${method}`));
     if (
       params.citations !== undefined &&
       !curatedCitationsSchema.safeParse(params.citations).success
@@ -244,12 +320,22 @@ export class PythonEngine implements ResearchEngine {
       return structuredClone(await (page as Promise<T>));
     }
     const result = await this.bridgeCall<T>(method, params);
+    if (method !== "capabilities") return result;
     // An ordinary capabilities call already carries the feature map.
-    if (method === "capabilities" && !this.featuresPromise)
+    if (!this.featuresPromise)
       this.featuresPromise = Promise.resolve(
         declaredFeatures(result as Record<string, unknown>),
       );
-    return result;
+    return {
+      ...result,
+      execution: {
+        mode: "synchronous",
+        jobs: false,
+        note: "Queries return their result in the same call. There are no jobs to poll.",
+        dispatch_deadline_seconds: LOCAL_DISPATCH_DEADLINE_SECONDS,
+        enforced_limit_seconds: LOCAL_DISPATCH_LIMIT_MS / 1000,
+      },
+    } as T;
   }
   private async bridgeCall<T = Record<string, unknown>>(
     method: string,
@@ -263,8 +349,32 @@ export class PythonEngine implements ResearchEngine {
   private bridgeBatch(
     requests: { method: string; params: Record<string, unknown> }[],
   ): Promise<BridgeReply[]> {
+    const budget = callBudget.getStore();
+    if (budget) budget.active++;
+    return this.runBridge(requests).finally(() => {
+      if (budget) budget.active--;
+    });
+  }
+  private runBridge(
+    requests: { method: string; params: Record<string, unknown> }[],
+  ): Promise<BridgeReply[]> {
     return new Promise((resolve, reject) => {
       const ids = requests.map(() => randomUUID());
+      const ownLimitMs =
+        this.processOptions.timeoutMs ??
+        (requests.some(({ method }) => LOCAL_DISPATCH_METHODS.has(method))
+          ? (this.processOptions.dispatchTimeoutMs ?? LOCAL_DISPATCH_LIMIT_MS)
+          : (this.processOptions.readTimeoutMs ?? LOCAL_READ_LIMIT_MS));
+      const budget = callBudget.getStore();
+      const limitMs = budget
+        ? Math.min(ownLimitMs, budget.deadline - performance.now())
+        : ownLimitMs;
+      if (limitMs <= 0 || budget?.expired)
+        return reject(
+          new Error(
+            "Engine call budget used up before this step started; inspect the run before retrying.",
+          ),
+        );
       const child = spawn(
         this.processOptions.command ??
           this.environment.SOURCESQL_PYTHON ??
@@ -301,10 +411,10 @@ export class PythonEngine implements ResearchEngine {
           new Error(
             stopped === false
               ? "Engine timed out; owned process cleanup failed. Inspect the run before retrying."
-              : "Engine timed out; inspect the run before retrying.",
+              : CALL_TIMED_OUT,
           ),
         );
-      }, this.processOptions.timeoutMs ?? 30000);
+      }, limitMs);
       child.stdout.on("data", (chunk) => {
         output += String(chunk);
         if (Buffer.byteLength(output) > 8 * 1024 * 1024) {
@@ -327,25 +437,29 @@ export class PythonEngine implements ResearchEngine {
       );
       child.on("close", () => {
         try {
-          const lines = output.trim().split("\n");
-          if (lines.length !== ids.length) throw new Error();
           const byId = new Map<string, Record<string, any>>();
-          for (const line of lines) {
+          for (const line of output.trim().split("\n")) {
             const reply = JSON.parse(line);
             if (!ids.includes(reply.id) || byId.has(reply.id))
               throw new Error();
             byId.set(reply.id, reply);
           }
+          // A reply the engine never wrote fails only its own request, so a
+          // complete refusal in another reply is still reported as itself.
           finish(
             null,
             ids.map((id): BridgeReply => {
-              const reply = byId.get(id)!;
-              if (reply.error)
+              const reply = byId.get(id);
+              if (reply?.error)
                 return {
                   ok: false,
                   message: `${String(reply.error.code)}: ${String(reply.error.message)}`,
                 };
-              if (!Object.hasOwn(reply, "result")) throw new Error();
+              if (!reply || !Object.hasOwn(reply, "result"))
+                return {
+                  ok: false,
+                  message: "Invalid engine bridge response.",
+                };
               return { ok: true, result: reply.result };
             }),
           );

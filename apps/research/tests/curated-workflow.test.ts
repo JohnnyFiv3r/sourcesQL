@@ -15,11 +15,12 @@ import {
 import { createServer } from "../server/mcp.js";
 import { ResearchStore } from "../server/store.js";
 import type { ResearchView } from "../src/schema.js";
+import { testEnv } from "./python.js";
 
 test("actual MCP/Python curation keeps a quotation through correction and effective SQL reuse", async () => {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-cited-workflow-"));
   const engine = new PythonEngine(undefined, {
-    ...process.env,
+    ...testEnv(),
     SOURCESQL_DATA_DIR: join(directory, "engine"),
     SOURCESQL_PRINCIPAL: "curation-fixture-owner",
     SOURCESQL_ALLOW_PRIVATE: "0",

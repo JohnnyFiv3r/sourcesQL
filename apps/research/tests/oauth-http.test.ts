@@ -173,7 +173,13 @@ test("OAuth discovery and denied identities never open storage; the sole owner c
     ]) {
       const listed = await send(server, "/mcp", authorization);
       assert.equal(listed.status, 200);
-      assert.equal(listed.json.result.tools.length, 39);
+      // A local engine has no jobs, so the three job tools are not listed.
+      assert.equal(listed.json.result.tools.length, 36);
+      assert.ok(
+        !listed.json.result.tools.some((tool: any) =>
+          /_job_status$|_start_job$|_cancel_job$/.test(tool.name),
+        ),
+      );
       assert.ok(
         listed.json.result.tools.every(
           (tool: any) =>

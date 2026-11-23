@@ -27,8 +27,8 @@ import {
   type ResearchStateBackend,
 } from "../server/store.js";
 import { effectiveValue, type Snapshot } from "../src/schema.js";
+import { testPython } from "../tests/python.js";
 
-const root = fileURLToPath(new URL("../../../", import.meta.url));
 const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 export const workspaceLimits = {
@@ -76,10 +76,7 @@ export class WorkspaceHarness {
   readonly backend: MotherDuckStateBackend;
   private constructor(directory: string) {
     this.directory = directory;
-    const python =
-      process.env.SOURCESQL_TEST_PYTHON ??
-      process.env.SOURCESQL_PYTHON ??
-      join(root, "local/python312/venv/bin/python");
+    const python = testPython();
     this.child = spawn(
       python,
       [

@@ -19,11 +19,11 @@ process.stdin.on('end',()=>{
     const request=JSON.parse(line);
     fs.appendFileSync(process.env.TEST_TRACE,request.method+'\\n');
     if(request.method==='capabilities'){
-      if(mode==='capfail')return {id:request.id,error:{code:'storage_unavailable',message:'caps down'}};
+      if(mode==='capfail'||mode==='capfailshort')return {id:request.id,error:{code:'storage_unavailable',message:'caps down'}};
       return {id:request.id,result:{worker_feature_contracts:JSON.parse(process.env.TEST_FEATURES)}};}
     return {id:request.id,result:{marker:'inspected'}};});
   if(mode==='reverse')replies.reverse();
-  if(mode==='short')replies.pop();
+  if(mode==='short'||mode==='capfailshort')replies.pop();
   if(mode==='dupe')replies[1]=replies[0];
   for(const reply of replies)process.stdout.write(JSON.stringify(reply)+'\\n');
 });`;
@@ -32,6 +32,7 @@ async function setup(
   mode: string,
   features: Record<string, string> = WORKER_FEATURE_CONTRACTS,
   timeoutMs?: number,
+  limits: { dispatchTimeoutMs?: number; readTimeoutMs?: number } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "sourcesql-batch-"));
   const script = join(dir, "bridge.cjs");
@@ -48,7 +49,7 @@ async function setup(
       TEST_PIDS: pids,
       TEST_FEATURES: JSON.stringify(features),
     },
-    { command: process.execPath, args: [script], timeoutMs },
+    { command: process.execPath, args: [script], timeoutMs, ...limits },
   );
   return {
     engine,
@@ -97,6 +98,47 @@ test("a failing capabilities reply wins and is not cached", async () => {
       (await h.calls()).filter((method) => method === "capabilities").length,
       2,
     );
+  } finally {
+    await h.done();
+  }
+});
+
+test("a complete capabilities refusal is reported even when the inspection reply is missing", async () => {
+  const h = await setup("capfailshort");
+  try {
+    await assert.rejects(
+      h.engine.inspectResult(params),
+      /^Error: storage_unavailable: caps down$/,
+    );
+  } finally {
+    await h.done();
+  }
+});
+
+test("a missing inspection reply is ignored when the contract does not match", async () => {
+  const h = await setup("short", {
+    ...WORKER_FEATURE_CONTRACTS,
+    result_inspection: "wrong",
+  });
+  try {
+    assert.equal(await h.engine.inspectResult(params), undefined);
+  } finally {
+    await h.done();
+  }
+});
+
+test("a first-read batch gets the short read limit, not the dispatch limit", async () => {
+  const h = await setup("hang", WORKER_FEATURE_CONTRACTS, undefined, {
+    readTimeoutMs: 400,
+    dispatchTimeoutMs: 20_000,
+  });
+  const started = performance.now();
+  try {
+    await assert.rejects(
+      h.engine.inspectResult(params),
+      /Engine timed out; inspect the run before retrying\./,
+    );
+    assert.ok(performance.now() - started < 5_000);
   } finally {
     await h.done();
   }
