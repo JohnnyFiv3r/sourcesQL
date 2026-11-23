@@ -8,9 +8,9 @@ on the same commit should agree within about one point.
 | Suite | Command, from the repository root | Reports written |
 |---|---|---|
 | Python engine and Flight | `uv run --frozen python scripts/coverage_python.py` | `coverage/python/index.html`, `coverage/python/coverage.json` |
-| Research app | `npm run build --prefix apps/research && npm run coverage --prefix apps/research` | `apps/research/coverage/index.html`, `apps/research/coverage/coverage-summary.json`, plus `lcov.info` and `summary.txt` |
+| Research app | `npm run coverage --prefix apps/research` | `apps/research/coverage/index.html`, `apps/research/coverage/coverage-summary.json`, plus `lcov.info` and `summary.txt` |
 
-The app command needs the same `SOURCESQL_PYTHON` as `npm test`, and the build first: some tests start the built app, and fail without `apps/research/dist`.
+The app command runs the same prerequisite check as `npm test`: it needs the same `SOURCESQL_PYTHON`, and it builds `apps/research/dist` once if that is missing, because some tests start the built app. Run `npm run build --prefix apps/research` yourself only to measure code changed since the last build. If the check fails, the command exits before the tests and removes any earlier report, so no old figures look current.
 
 ## Not measured
 

@@ -102,6 +102,13 @@ function notMeasured(): string[] {
 mkdirSync(join(appRoot, "coverage"), { recursive: true });
 // A launch that never reaches the test runner must not leave an earlier run's figures looking current.
 for (const stale of [lcovPath, summaryPath, jsonPath, htmlPath]) rmSync(stale, { force: true });
+// The same prerequisite check `npm test` runs. It comes after the cleanup so a failed
+// check leaves no earlier figures behind.
+const preflight = spawnSync(process.execPath, ["--import", "tsx", "tests/preflight.ts"], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (preflight.status !== 0) process.exit(preflight.status || 1);
 const run = spawnSync(
   process.execPath,
   [
