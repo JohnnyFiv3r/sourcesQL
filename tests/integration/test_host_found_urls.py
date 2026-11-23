@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import json
+import pathlib
+import re
+import socket
+from urllib.parse import urlsplit
+
+import httpx
 
 import pytest
 
 from sourcesql.contracts import Column, SourcesQLError, Table
 from sourcesql.engine import Engine
 from sourcesql.execution.worker_process import evaluate
+from sourcesql.providers import FixtureProvider, ProviderRegistry, SafeFetcher
+from sourcesql.providers.fixture import DOCUMENTS
 from sourcesql.sql.admission import SOURCE_COLUMNS
 
 
@@ -236,3 +244,138 @@ def test_fixture_profile_advertises_the_host_route_so_it_runs_offline(tmp_path):
     assert entry["host_search_route"]["available"] is True
     assert entry["search"] == {"configured": True}
     assert entry["provider"] == "fixture"
+
+
+GUIDANCE = pathlib.Path(__file__).parents[2] / "apps/research/server/agent-guidance.ts"
+
+
+def test_documented_fetch_example_runs_in_fixture_mode(tmp_path):
+    match = re.search(r"SOURCESQL_FETCH_EXAMPLE = `(.*?)`;", GUIDANCE.read_text(), re.DOTALL)
+    assert match, "SOURCESQL_FETCH_EXAMPLE not found in agent-guidance.ts"
+    result = make(tmp_path).query(query=match.group(1), parameters=urls(AURORA, BIRCH, VENDOR))
+    assert [r["fetch_status"] for r in result["rows"]] == ["ok"] * 3
+    assert [r["source_url"] for r in result["rows"]] == [AURORA, BIRCH, VENDOR]
+
+
+def live_engine(tmp_path, monkeypatch, reply, **changes):
+    def resolve(host, port, **kwargs):
+        address = "10.0.0.2" if host == "private.example" else "93.184.216.34"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    original = ProviderRegistry.__init__
+
+    def configured(self, profile=None):
+        original(self, profile)
+        # MockTransport is the only HTTP path; the profile itself stays plain data.
+        self.profile["resolver"] = resolve
+        self.fetch_provider = SafeFetcher(
+            client=httpx.Client(transport=httpx.MockTransport(reply), trust_env=False),
+            resolver=resolve,
+        )
+        self.semantic_provider = FixtureProvider("t1")
+
+    monkeypatch.setattr(ProviderRegistry, "__init__", configured)
+    profile = {
+        "mode": "live",
+        "provider": "brave",
+        "allow_live": True,
+        "approved_cost_microusd": 50_000,
+        "metering_policy": "estimated",
+        "allow_public_source_hosts": True,
+        **changes,
+    }
+    return Engine(tmp_path / "live", profiles={"hostfetch": profile}, worker=reference_worker)
+
+
+def serve_fixture_text(requests):
+    texts = {
+        urlsplit(d["url"]).hostname: d["text"] for d in DOCUMENTS if d["version"] in {"t1", "both"}
+    }
+
+    def reply(request):
+        requests.append(request.headers["host"])
+        host = request.headers["host"]
+        if host == "pdf.example":
+            return httpx.Response(200, headers={"content-type": "application/pdf"}, content=b"%PDF")
+        if host == "big.example":
+            return httpx.Response(
+                200, headers={"content-type": "text/html"}, content=b"x" * 2_200_000
+            )
+        if host == "gone.example":
+            return httpx.Response(404, headers={"content-type": "text/html"}, text="gone")
+        return httpx.Response(200, headers={"content-type": "text/plain"}, text=texts[host])
+
+    return reply
+
+
+LIVE_BUDGET = {"max_cost_microusd": 1}
+
+
+def test_live_fetch_only_profile_gives_cited_cells_and_three_source_versions(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    seen = []
+    engine = live_engine(tmp_path, monkeypatch, serve_fixture_text(seen))
+    result = engine.query(
+        query=EXTRACT,
+        parameters=urls(AURORA, BIRCH, VENDOR),
+        profile="hostfetch",
+        budgets=LIVE_BUDGET,
+    )
+    assert seen == ["aurora.example", "birch.example", "vendor.example"]
+    assert [r["fetch_status"] for r in result["rows"]] == ["ok"] * 3
+    assert [e for e in result["evidence"] if e.get("row_id")]
+    texts = {s["source_version_id"]: s["content"] for s in result["source_versions"]}
+    assert len(texts) == 3
+    for item in result["evidence"]:
+        for quote in item.get("support") or []:
+            assert quote["quote"] in texts[quote["source_version_id"]]
+
+
+def test_web_search_without_provider_is_refused_before_any_dispatch(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    seen = []
+    engine = live_engine(tmp_path, monkeypatch, serve_fixture_text(seen))
+    with pytest.raises(SourcesQLError) as refused:
+        engine.query(
+            query="SELECT url FROM WEB_SEARCH($q)",
+            parameters={"q": "aurora"},
+            profile="hostfetch",
+            budgets=LIVE_BUDGET,
+        )
+    assert (refused.value.code, refused.value.stage) == ("provider_unavailable", "acquisition")
+    assert refused.value.safe_message.startswith("No search provider is configured")
+    assert "pass the URLs to WEB_FETCH" in refused.value.safe_message
+    assert seen == []
+
+
+@pytest.mark.parametrize(
+    ("host", "reason"),
+    [
+        ("pdf.example", "unsupported_type"),
+        ("big.example", "too_large"),
+        ("private.example", "blocked_host"),
+        ("gone.example", "http_error"),
+    ],
+)
+def test_live_failures_stay_as_failed_rows_and_the_job_completes(
+    tmp_path, monkeypatch, host, reason
+):
+    seen = []
+    engine = live_engine(tmp_path, monkeypatch, serve_fixture_text(seen))
+    result = engine.query(
+        query="""SELECT url AS source_url, fetch_status, fetch_failure,
+          SEM_EXTRACT(content, 'project facts', evidence := true, project := 'project name') AS fact
+        FROM WEB_FETCH($u1, $u2)""",
+        parameters=urls(AURORA, f"https://{host}/doc"),
+        profile="hostfetch",
+        budgets=LIVE_BUDGET,
+    )
+    good, bad = result["rows"]
+    assert good["fetch_status"] == "ok"
+    assert (bad["fetch_status"], bad["fetch_failure"], bad["fact"]) == ("failed", reason, None)
+    assert not [e for e in result["evidence"] if e.get("row_id") == result["row_ids"][1]]
+    assert [e for e in result["evidence"] if e.get("row_id") == result["row_ids"][0]]
+    assert result["receipt"]["status"] == "partial"
+    assert result["receipt"]["fetch_failed"] == 1
+    if host == "private.example":
+        assert "private.example" not in seen
