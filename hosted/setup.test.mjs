@@ -111,7 +111,7 @@ test("explicit model and embedding setup matches the gateway and Flight research
   const python =
     process.env.SOURCESQL_TEST_PYTHON ??
     process.env.SOURCESQL_PYTHON ??
-    join(import.meta.dirname, "../local/python312/venv/bin/python");
+    join(import.meta.dirname, "../.venv/bin/python");
   const result = spawnSync(
     python,
     [
@@ -319,7 +319,7 @@ for (const provider of ["brave", "serper", "deepseek"]) {
     const result = spawnSync(
       process.env.SOURCESQL_TEST_PYTHON ??
         process.env.SOURCESQL_PYTHON ??
-        join(import.meta.dirname, "../local/python312/venv/bin/python"),
+        join(import.meta.dirname, "../.venv/bin/python"),
       [
         "-B",
         "-c",
