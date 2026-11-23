@@ -1,7 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,4 +133,24 @@ test("preflight is silent when the interpreter resolves", async () => {
     assert.equal(result.status, 0);
     assert.equal(result.stdout + result.stderr, "");
   });
+});
+
+test("no test or script falls back to the removed interpreter path", async () => {
+  // Built from parts so this file does not match itself.
+  const removed = ["local", "python312"].join("/");
+  for (const directory of ["tests", "scripts"]) {
+    for (const entry of await readdir(join(appDirectory, directory), {
+      withFileTypes: true,
+    })) {
+      if (!entry.isFile()) continue;
+      const text = await readFile(
+        join(appDirectory, directory, entry.name),
+        "utf8",
+      );
+      assert.ok(
+        !text.includes(removed),
+        `${directory}/${entry.name} still uses ${removed}`,
+      );
+    }
+  }
 });
