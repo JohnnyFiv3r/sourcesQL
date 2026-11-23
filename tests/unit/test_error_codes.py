@@ -17,7 +17,35 @@ DYNAMIC_SITES = {
     "src/sourcesql/engine.py": "stored or bridged failure codes, filtered by stages._ERROR_CODES",
     "src/sourcesql/storage/motherduck.py": "stored job error code, filtered by HOSTED_CODES",
     "src/sourcesql/sql/admission.py": "refuse() default and callers pass literals checked below",
+    "hosted/flight/runner.py": "fail_job forwards the code of a SourcesQLError, checked where it is raised",
 }
+
+
+def scan(source: str, relative: str, literal: dict[str, list[str]], dynamic: list[str]) -> None:
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        name = (
+            function.id
+            if isinstance(function, ast.Name)
+            else function.attr
+            if isinstance(function, ast.Attribute)
+            else None
+        )
+        candidates = []
+        keyword = [k.value for k in node.keywords if k.arg == "code"]
+        if name in {"SourcesQLError", "AdmissionRefusal"}:
+            candidates = node.args[:1] + keyword
+        elif name == "refuse":
+            candidates = keyword + node.args[1:2]
+        elif name == "fail_job":
+            candidates = node.args[2:3] + keyword
+        for candidate in candidates:
+            if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
+                literal.setdefault(candidate.value, []).append(f"{relative}:{node.lineno}")
+            elif name != "refuse":
+                dynamic.append(relative)
 
 
 def raised_codes() -> tuple[dict[str, list[str]], list[str]]:
@@ -27,30 +55,32 @@ def raised_codes() -> tuple[dict[str, list[str]], list[str]]:
         for path in sorted((ROOT / base).rglob("*.py")):
             if "tests" in path.parts:
                 continue
-            relative = path.relative_to(ROOT).as_posix()
-            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-                if not isinstance(node, ast.Call):
-                    continue
-                function = node.func
-                name = (
-                    function.id
-                    if isinstance(function, ast.Name)
-                    else function.attr
-                    if isinstance(function, ast.Attribute)
-                    else None
-                )
-                candidates = []
-                if name in {"SourcesQLError", "AdmissionRefusal"} and node.args:
-                    candidates = [node.args[0]]
-                elif name == "refuse":
-                    candidates = [k.value for k in node.keywords if k.arg == "code"]
-                    candidates += node.args[1:2]
-                for candidate in candidates:
-                    if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
-                        literal.setdefault(candidate.value, []).append(f"{relative}:{node.lineno}")
-                    elif name != "refuse":
-                        dynamic.append(relative)
+            scan(path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix(), literal, dynamic)
     return literal, dynamic
+
+
+def test_scan_reads_positional_and_keyword_codes():
+    literal: dict[str, list[str]] = {}
+    dynamic: list[str] = []
+    scan(
+        "raise SourcesQLError('a_positional', 'm', 'admission')\n"
+        "raise SourcesQLError(code='a_keyword', safe_message='m', stage='admission')\n"
+        "raise AdmissionRefusal(code='an_admission', safe_message='m')\n"
+        "store.fail_job(job, token, 'a_failed_job', 'm')\n"
+        "store.fail_job(job, token, code='a_failed_keyword', safe_message='m')\n"
+        "raise SourcesQLError(code=variable, safe_message='m')\n",
+        "probe.py",
+        literal,
+        dynamic,
+    )
+    assert set(literal) == {
+        "a_positional",
+        "a_keyword",
+        "an_admission",
+        "a_failed_job",
+        "a_failed_keyword",
+    }
+    assert dynamic == ["probe.py"]
 
 
 def test_every_raised_code_is_in_the_table():
