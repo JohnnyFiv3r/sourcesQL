@@ -28,6 +28,38 @@ DYNAMIC_SITES = {
 }
 
 
+def leaves(expression: ast.AST) -> list[str]:
+    """The string literals an expression can evaluate to, not those it only compares."""
+    if isinstance(expression, ast.Constant):
+        return [expression.value] if isinstance(expression.value, str) else []
+    if isinstance(expression, ast.IfExp):
+        return leaves(expression.body) + leaves(expression.orelse)
+    if isinstance(expression, ast.BoolOp):
+        return [value for operand in expression.values for value in leaves(operand)]
+    if isinstance(expression, ast.Call) and getattr(expression.func, "attr", "") == "get":
+        return leaves(expression.args[1]) if len(expression.args) > 1 else []
+    return []
+
+
+def flowing_literals(candidate: ast.AST, scope: ast.AST) -> list[str]:
+    """Literals a variable code can hold: its own branches, its assignments and its default."""
+    names = {node.id for node in ast.walk(candidate) if isinstance(node, ast.Name)}
+    found = leaves(candidate)
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if node.value and any(isinstance(t, ast.Name) and t.id in names for t in targets):
+                found += leaves(node.value)
+        elif isinstance(node, ast.arguments):
+            positional = node.posonlyargs + node.args
+            pairs = list(zip(positional[len(positional) - len(node.defaults) :], node.defaults))
+            pairs += [(a, d) for a, d in zip(node.kwonlyargs, node.kw_defaults) if d is not None]
+            for argument, default in pairs:
+                if argument.arg in names:
+                    found += leaves(default)
+    return found
+
+
 def scan(source: str, relative: str, literal: dict[str, list[str]], dynamic: list[str]) -> None:
     tree = ast.parse(source)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
@@ -61,6 +93,8 @@ def scan(source: str, relative: str, literal: dict[str, list[str]], dynamic: lis
                 literal.setdefault(candidate.value, []).append(f"{relative}:{node.lineno}")
             else:
                 dynamic.append(f"{relative}::{scope}::{ast.unparse(candidate)}")
+                for value in flowing_literals(candidate, enclosing):
+                    literal.setdefault(value, []).append(f"{relative}:{node.lineno}")
 
 
 def raised_codes() -> tuple[dict[str, list[str]], list[str]]:
@@ -117,6 +151,27 @@ def test_scan_tracks_each_variable_site_by_function_even_in_known_files():
         "src/sourcesql/engine.py::added::code",
         "src/sourcesql/engine.py::added::other",
     ]
+
+
+def test_scan_reads_defaults_and_assignments_behind_a_variable_code():
+    literal: dict[str, list[str]] = {}
+    scan(
+        "def refuse(message, code='a_default'):\n    raise AdmissionRefusal(code, message)\n"
+        "def limit(x):\n    code = 'an_assigned'\n"
+        "    if x:\n        code = 'a_branch' if x > 1 else 'another_branch'\n"
+        "    raise SourcesQLError(code, 'm', 'admission')\n"
+        "def pick(failure):\n    raise SourcesQLError(failure.get('code', 'a_fallback'), 'm', 's')\n",
+        "probe.py",
+        literal,
+        [],
+    )
+    assert set(literal) == {
+        "a_default",
+        "an_assigned",
+        "a_branch",
+        "another_branch",
+        "a_fallback",
+    }
 
 
 def test_every_raised_code_is_in_the_table():
