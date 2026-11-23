@@ -69,6 +69,8 @@ export interface ResearchEngine {
   ): Promise<Record<string, unknown> | undefined>;
   readonly supportsExplain?: boolean;
   readonly supportsAsyncJobs?: boolean;
+  /** True when `query` already returns the authorized first result page. */
+  readonly queryReturnsAuthorizedPage?: boolean;
   readonly supportsUsageReporting?: boolean;
   call<T = Record<string, unknown>>(
     method: string,
@@ -81,6 +83,10 @@ export type BridgeProcessOptions = {
   args?: string[];
 };
 export class PythonEngine implements ResearchEngine {
+  // Engine.query returns read_result(result_id), including the
+  // data_classification that store.authorize computed.
+  readonly queryReturnsAuthorizedPage = true;
+  private featuresPromise?: Promise<Record<string, unknown>>;
   constructor(
     private projectRoot = fileURLToPath(new URL("../../../", import.meta.url)),
     private environment: NodeJS.ProcessEnv = process.env,
@@ -131,7 +137,17 @@ export class PythonEngine implements ResearchEngine {
             receipt: await this.call("run_status", { run_id: prior.run_id }),
           };
   }
-  private async features(): Promise<Record<string, unknown>> {
+  // Worker feature contracts are fixed by the installed engine, so one lookup
+  // serves the app's lifetime; a replaced engine is picked up on restart. A
+  // failed lookup is not cached, so a crashed worker cannot poison later calls.
+  private features(): Promise<Record<string, unknown>> {
+    this.featuresPromise ??= this.loadFeatures().catch((error: unknown) => {
+      this.featuresPromise = undefined;
+      throw error;
+    });
+    return this.featuresPromise;
+  }
+  private async loadFeatures(): Promise<Record<string, unknown>> {
     const capabilities =
       await this.bridgeCall<Record<string, unknown>>("capabilities");
     const declared = capabilities.worker_feature_contracts;

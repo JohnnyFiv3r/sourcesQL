@@ -2149,10 +2149,17 @@ export function createServer(
       method: "query" | "explain",
       args: z.infer<typeof querySchema>,
     ): Promise<CallToolResult> => {
-      const capabilities = await engine.call<{
-        profiles?: { name: string; mode: string }[];
-        execution_mode?: string;
-      }>("capabilities");
+      // Only hosted engines report async_jobs, and only anonymous access checks
+      // the profile mode, so other local calls skip an engine start.
+      const needsCapabilities =
+        engine.supportsAsyncJobs === true ||
+        options.access?.mode === "fixture-anonymous";
+      const capabilities = needsCapabilities
+        ? await engine.call<{
+            profiles?: { name: string; mode: string }[];
+            execution_mode?: string;
+          }>("capabilities")
+        : {};
       if (capabilities.execution_mode === "async_jobs" && !args.request_id)
         throw new Error(
           `Hosted ${method === "explain" ? "validation" : "execution"} requires request_id before materializing inputs or submitting work.`,
@@ -2242,11 +2249,16 @@ export function createServer(
       const result = await engine.call(method, { ...args, inputs });
       if (Object.hasOwn(result, "job_id")) return jobResult(result);
       if (method === "query" && typeof result.result_id === "string") {
-        const page = await engine.call<EngineResult>("read_result", {
-          result_id: result.result_id,
-          offset: 0,
-          limit: 1,
-        });
+        // Fail safe: without a classification on the query's own page, read it.
+        const page =
+          engine.queryReturnsAuthorizedPage &&
+          typeof result.data_classification === "string"
+            ? (result as EngineResult)
+            : await engine.call<EngineResult>("read_result", {
+                result_id: result.result_id,
+                offset: 0,
+                limit: 1,
+              });
         authorizeSnapshot(resultSnapshotForAccess(page), options.access);
       }
       return engineResult(result);
