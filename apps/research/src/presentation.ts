@@ -1,4 +1,20 @@
-import type { Snapshot } from "./schema.js";
+import {
+  snapshotAssertion,
+  sourcesForSelection,
+  type Snapshot,
+} from "./schema.js";
+
+export const HOST_ASSERTED_LABEL = "Host-asserted";
+export const HOST_ASSERTED_TITLE =
+  "Host-asserted: the agent that saved this research supplied this source. sourcesQL has not fetched or checked it.";
+export { snapshotAssertion, type Assertion } from "./schema.js";
+export const HOST_ASSERTED_NOTICE =
+  'Sources and quotes in a snapshot marked assertion "host" were supplied by the agent that saved it: sourcesQL has not fetched or checked them.';
+export const HOST_EVIDENCE_REASON =
+  "the evidence does not match any source text sourcesQL retained.";
+export const hostSourceText = (url: string) => `${url} (host-asserted)`;
+export const hostQuoteText = (quote: string) =>
+  `"${quote}" (host-asserted, not checked against fetched text)`;
 
 export function nextTableSort(
   current: { field: string; ascending: boolean } | undefined,
@@ -117,4 +133,20 @@ export function formatSourceUrl(value: string): string {
   } catch {
     return value;
   }
+}
+
+/** One sentence for agent text: how many sources a host-asserted snapshot supplies. */
+export function hostAssertedSummary(snapshot: Snapshot): string {
+  if (snapshotAssertion(snapshot) !== "host") return "";
+  const urls = new Set<string>();
+  let rows = 0;
+  for (const row of snapshot.rows) {
+    const sources = sourcesForSelection(row);
+    if (!sources.length) continue;
+    rows++;
+    for (const source of sources) urls.add(source.url);
+  }
+  return urls.size
+    ? `${urls.size} sources on ${rows} rows are host-asserted: sourcesQL has not fetched or checked them.`
+    : "";
 }

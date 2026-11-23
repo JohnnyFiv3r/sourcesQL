@@ -760,9 +760,11 @@ test("v2 tracked expansion and refresh preserve request binding, review races an
       }),
       /changed|Reload|revision/i,
     );
+    // The inline snapshot's quotes are the host's word, so the host's
+    // "verified" is shown as unverified, never as a conflict.
     assert.equal(
       (await store.open(proposal.id)).refresh!.changes[0].status,
-      "conflicting",
+      "unverified",
     );
     assert.equal(
       (await new ResearchStore(dir, seed).open(child.id)).snapshot

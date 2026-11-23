@@ -621,12 +621,29 @@ export type RefreshChange = {
   proposed: z.infer<typeof cell>;
   status: "new" | "changed" | "unchanged" | "conflicting" | "unverified";
   note: string;
+  reason?: string;
   decision?: "accept" | "keep";
   canAccept: boolean;
+};
+export type Assertion = "engine" | "host";
+
+/**
+ * A snapshot with a dataRef is re-resolved against the engine on every save and
+ * import, and its rows must equal the canonical engine rows, so its sources and
+ * quotes were observed by the engine. Every other snapshot is the host's word.
+ */
+export function snapshotAssertion(snapshot: Snapshot): Assertion {
+  return snapshot.dataRef ? "engine" : "host";
+}
+
+export type AssertedSource = z.infer<typeof source> & {
+  assertion?: Assertion;
 };
 export type ResearchView = {
   usageNotices?: import("./usage.js").UsageNotice[];
   snapshot: Snapshot;
+  /** Computed on read from the snapshot; never stored. */
+  assertion?: Assertion;
   preview?: {
     offset: number;
     returned: number;
@@ -639,7 +656,7 @@ export type ResearchView = {
   revision: number;
   snapshots: SnapshotOption[];
   requests: ResearchRequestSummary[];
-  acceptedSources?: Record<string, Record<string, z.infer<typeof source>[]>>;
+  acceptedSources?: Record<string, Record<string, AssertedSource[]>>;
   update?: {
     requestId: string;
     parentSnapshotId: string;
@@ -699,7 +716,8 @@ export function sourcesForSelection(
   return [...unique.values()];
 }
 
-export function sourcesForViewSelection(
+/** Sources for display, each marked with who vouches for it. */
+export function assertedSourcesForViewSelection(
   view: ResearchView,
   row: Row,
   field?: string,
@@ -708,6 +726,33 @@ export function sourcesForViewSelection(
   const extra = field
     ? (accepted?.[field] ?? [])
     : Object.values(accepted ?? {}).flat();
-  const sources = [...extra, ...sourcesForSelection(row, field)];
-  return [...new Map(sources.map((s) => [s.url, s])).values()];
+  const sources: AssertedSource[] = [
+    ...extra,
+    ...sourcesForSelection(row, field).map((s) => ({
+      ...s,
+      assertion: view.assertion ?? snapshotAssertion(view.snapshot),
+    })),
+  ];
+  const unique = new Map<string, AssertedSource>();
+  for (const candidate of sources) {
+    const existing = unique.get(candidate.url);
+    // The cautious label wins when one URL is both observed and asserted.
+    if (
+      !existing ||
+      (candidate.assertion === "host" && existing.assertion !== "host")
+    )
+      unique.set(candidate.url, candidate);
+  }
+  return [...unique.values()];
+}
+
+/** Plain sources, safe to write back into snapshots: no assertion key. */
+export function sourcesForViewSelection(
+  view: ResearchView,
+  row: Row,
+  field?: string,
+): z.infer<typeof source>[] {
+  return assertedSourcesForViewSelection(view, row, field).map(
+    ({ assertion: _assertion, ...plain }) => plain,
+  );
 }

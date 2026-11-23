@@ -18,6 +18,13 @@ import {
 } from "./engine.js";
 import { originForSnapshot } from "../src/schema.js";
 import {
+  hostAssertedSummary,
+  hostQuoteText,
+  hostSourceText,
+  HOST_ASSERTED_NOTICE,
+  snapshotAssertion,
+} from "../src/presentation.js";
+import {
   McpServer,
   ResourceTemplate,
   type CallToolResult,
@@ -247,13 +254,54 @@ export function createServer(
       },
     });
   };
+  // Saved snapshots with no engine result behind them carry the host's own
+  // sources and quotes. Return copies so stored rows are never altered.
+  const markHostAssertions = (
+    context: Awaited<ReturnType<ResearchStore["researchContext"]>>,
+  ) => {
+    const markSnapshot = <T extends Snapshot>(snapshot: T) =>
+      snapshotAssertion(snapshot) === "host"
+        ? {
+            ...snapshot,
+            assertion: "host" as const,
+            rows: snapshot.rows.map((row) => ({
+              ...row,
+              evidence: Object.fromEntries(
+                Object.entries(row.evidence).map(([field, quotes]) => [
+                  field,
+                  quotes.map(hostQuoteText),
+                ]),
+              ),
+            })),
+          }
+        : { ...snapshot, assertion: "engine" as const };
+    const hostSnapshot = snapshotAssertion(context.originalSnapshot) === "host";
+    return {
+      ...context,
+      originalSnapshot: markSnapshot(context.originalSnapshot),
+      acceptedObservationsAtRequest:
+        context.acceptedObservationsAtRequest.map(markSnapshot),
+      selectedSources: context.selectedSources.map((entry) => ({
+        ...entry,
+        sources: entry.sources.map((source) => ({
+          ...source,
+          assertion: hostSnapshot ? ("host" as const) : ("engine" as const),
+        })),
+      })),
+      assertionNotice: HOST_ASSERTED_NOTICE,
+    };
+  };
+  const hostSentence = (snapshot: Snapshot) => {
+    const summary = hostAssertedSummary(snapshot);
+    return summary ? ` ${summary}` : "";
+  };
   const viewResult = (fullView: ResearchView, offset = 0): CallToolResult => {
     const view = presentation(fullView, offset);
     return {
       content: [
         {
           type: "text",
-          text: `${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.`,
+          text: `${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.${hostSentence(fullView.snapshot)}`,
         },
       ],
       structuredContent: view,
@@ -618,7 +666,7 @@ export function createServer(
     {
       title: "Save research results",
       description:
-        "Save an intermediate or final research result without rendering an app component. Accepts exactly one canonical result_ref:{result_id,snapshot_id,title} or bounded immutable v1/v2 snapshot. Retains source observations, types, nullable fields and capture precision; corrections are separate records. Returns the saved snapshot_id. open_research displays a saved table. import_research_bundle restores an exported research tree.",
+        "Save an intermediate or final research result without rendering an app component. Accepts exactly one canonical result_ref:{result_id,snapshot_id,title} or bounded immutable v1/v2 snapshot. Sources and evidence in a snapshot you supply are shown as host-asserted unless an engine result backs them. Retains source observations, types, nullable fields and capture precision; corrections are separate records. Returns the saved snapshot_id. open_research displays a saved table. import_research_bundle restores an exported research tree.",
       inputSchema: z
         .object({
           snapshot: snapshotSchema.optional(),
@@ -647,7 +695,7 @@ export function createServer(
         result.content = [
           {
             type: "text",
-            text: `Research saved as snapshot_id: ${saved.id}. This save does not render a new component. open_research displays the saved table.`,
+            text: `Research saved as snapshot_id: ${saved.id}. This save does not render a new component. open_research displays the saved table.${hostSentence(saved)}`,
           },
         ];
         return result;
@@ -763,8 +811,17 @@ export function createServer(
             return false;
           }
         });
+        // The text an agent reads carries the marker in the URL itself.
+        const text = {
+          ...result,
+          matches: result.matches.map((match) =>
+            match.assertion === "host" && match.source_url
+              ? { ...match, source_url: hostSourceText(match.source_url) }
+              : match,
+          ),
+        };
         return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
+          content: [{ type: "text", text: JSON.stringify(text) }],
           structuredContent: result,
         };
       }),
@@ -826,9 +883,10 @@ export function createServer(
         );
         for (const snapshot of result.acceptedObservationsAtRequest)
           authorizeSnapshot(snapshot, options.access);
+        const marked = markHostAssertions(result);
         return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          structuredContent: result,
+          content: [{ type: "text", text: JSON.stringify(marked) }],
+          structuredContent: marked,
         };
       }),
   );
@@ -837,7 +895,7 @@ export function createServer(
     {
       title: "Return completed research",
       description:
-        "Complete a tracked pending expansion or refresh with its exact request_id and either result_ref:{result_id,snapshot_id,title} or a bounded v1/v2 snapshot. The server binds the saved parent and resolves canonical engine data. Call open_research with the saved snapshot.id after success to render it; retry rendering without rerunning the query. Identical completions are safe; changed payloads conflict and cancelled/failed requests reject late results. Refresh preserves exact requested row IDs and parent columns, with assessments for each scoped field. For engine refresh, project the saved IDs as an explicit identity column and pass row_id_column to sourcesql_query; the engine validates unique IDs against authorized input rows and removes that column from the published schema. The tracked request still requires its exact row scope and parent columns. Never guess or implicitly align URL/name matches; verified/conflicting assessments require returned textual evidence and only an explicit review_refresh accepts changes.",
+        "Complete a tracked pending expansion or refresh with its exact request_id and either result_ref:{result_id,snapshot_id,title} or a bounded v1/v2 snapshot. The server binds the saved parent and resolves canonical engine data. Call open_research with the saved snapshot.id after success to render it; retry rendering without rerunning the query. Identical completions are safe; changed payloads conflict and cancelled/failed requests reject late results. Refresh preserves exact requested row IDs and parent columns, with assessments for each scoped field. For engine refresh, project the saved IDs as an explicit identity column and pass row_id_column to sourcesql_query; the engine validates unique IDs against authorized input rows and removes that column from the published schema. The tracked request still requires its exact row scope and parent columns. Never guess or implicitly align URL/name matches; verified/conflicting assessments require returned textual evidence, and evidence in an inline snapshot is host-asserted unless an engine result backs it, so those assessments are stored as unverified; only an explicit review_refresh accepts changes.",
       inputSchema: z
         .object({
           request_id: z.string().uuid(),
