@@ -1,3 +1,4 @@
+import { testPython } from "./python.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -15,13 +16,10 @@ import {
 type Row = Record<string, unknown>;
 const size = (value: unknown) =>
   Buffer.byteLength(JSON.stringify(value), "utf8");
-const root = fileURLToPath(new URL("../../../", import.meta.url));
 async function sqlFixture(metadata: Row, rows: Row[] = []) {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-inspection-"));
   const child = spawn(
-    process.env.SOURCESQL_TEST_PYTHON ??
-      process.env.SOURCESQL_PYTHON ??
-      join(root, "local/python312/venv/bin/python"),
+    testPython(),
     [
       fileURLToPath(
         new URL("./helpers/motherduck-sql-server.py", import.meta.url),

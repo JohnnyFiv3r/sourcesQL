@@ -170,6 +170,25 @@ async function processStopped(pid: number) {
     throw error;
   }
 }
+const STARTUP_ALLOWANCE_MS = 10_000;
+// An unusual value, so only the engine's own kill timer is recognised.
+const BRIDGE_KILL_TIMER_MS = 600_017;
+async function waitForPid(
+  file: string,
+  allowanceMs: number,
+): Promise<number | undefined> {
+  const deadline = Date.now() + allowanceMs;
+  while (Date.now() < deadline) {
+    try {
+      const pid = Number(await readFile(file, "utf8"));
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await delay(25);
+  }
+  return undefined;
+}
 test(
   "bridge timeout stops its owned process group including a sleeping child",
   { skip: process.platform === "win32" },
@@ -186,14 +205,50 @@ test(
       const engine = new PythonEngine(directory, process.env, {
         command: process.execPath,
         args: [script, pidFile],
-        timeoutMs: 700,
+        timeoutMs: BRIDGE_KILL_TIMER_MS,
       });
-      await assert.rejects(engine.call("capabilities"), /Engine timed out/);
-      childPid = Number(await readFile(pidFile, "utf8"));
-      assert.ok(Number.isSafeInteger(childPid) && childPid > 0);
+      // The engine arms its kill timer at spawn, so a short timeout races the
+      // child's startup. Capture the timer's callback and fire it only after
+      // the child's PID is observed: startup gets a generous allowance and the
+      // kill still goes through the engine's own timeout path.
+      let fireKillTimer: (() => void) | undefined;
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((
+        callback: () => void,
+        delayMs?: number,
+        ...rest: unknown[]
+      ) => {
+        if (delayMs === BRIDGE_KILL_TIMER_MS) fireKillTimer = callback;
+        return realSetTimeout(callback, delayMs, ...rest);
+      }) as typeof setTimeout;
+      let outcome: Promise<void>;
+      try {
+        outcome = assert.rejects(
+          engine.call("capabilities"),
+          /Engine timed out/,
+        );
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+      // A child that dies early rejects `outcome` while the PID poll is still
+      // pending; mark it handled now and judge it only after the poll.
+      outcome.catch(() => undefined);
+      childPid = await waitForPid(pidFile, STARTUP_ALLOWANCE_MS);
+      assert.ok(
+        fireKillTimer,
+        "The engine must arm its kill timer when it spawns",
+      );
+      fireKillTimer();
+      if (childPid === undefined) {
+        await outcome.catch(() => undefined);
+        assert.fail(
+          `The test child process did not start within ${STARTUP_ALLOWANCE_MS} ms, so the process-group check could not run. This is a startup failure, not a kill failure. Rerun the test; if it keeps happening, check machine load.`,
+        );
+      }
+      await outcome;
       for (
         let retry = 0;
-        retry < 30 && !(await processStopped(childPid));
+        retry < 80 && !(await processStopped(childPid));
         retry++
       )
         await delay(25);

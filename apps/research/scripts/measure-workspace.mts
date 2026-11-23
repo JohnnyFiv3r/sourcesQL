@@ -13,6 +13,7 @@ import {
   workspaceLimits,
 } from "./workspace-measurement.js";
 import { workspaceStorageDecision } from "./workspace-report.js";
+import { testPython } from "../tests/python.js";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const output = resolve(
@@ -45,10 +46,7 @@ const sourceFiles = async () =>
     ),
   );
 const sourceFilesAtStart = await sourceFiles();
-const python =
-  process.env.SOURCESQL_TEST_PYTHON ??
-  process.env.SOURCESQL_PYTHON ??
-  resolve(root, "local/python312/venv/bin/python");
+const python = testPython();
 const pythonEnvironment = JSON.parse(
   execFileSync(
     python,
