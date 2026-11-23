@@ -610,7 +610,11 @@ test("every read-only research tool runs under the short budget", async () => {
 });
 
 // A saved-research read that takes 31.5 s, driven by mock timers.
-async function statusAfterStall(t: test.TestContext, engine: ResearchEngine) {
+async function statusAfterStall(
+  t: test.TestContext,
+  engine: ResearchEngine,
+  tool = "research_status",
+) {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-stalled-read-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const htmlPath = join(directory, "research.html");
@@ -636,7 +640,7 @@ async function statusAfterStall(t: test.TestContext, engine: ResearchEngine) {
   });
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const call = client.callTool({
-    name: "research_status",
+    name: tool,
     arguments: { snapshot_id: seed.id },
   });
   for (let i = 0; i < 40; i++) {
@@ -649,6 +653,15 @@ async function statusAfterStall(t: test.TestContext, engine: ResearchEngine) {
 
 test("a stalled saved-research read is cut off at 30 s on the local engine", async (t) => {
   const result = await statusAfterStall(t, stub(false));
+  assert.equal(result.isError, true);
+  assert.match(
+    JSON.stringify(result.content),
+    /Engine timed out; inspect the run before retrying/,
+  );
+});
+
+test("opening a saved snapshot is cut off at 30 s on the local engine", async (t) => {
+  const result = await statusAfterStall(t, stub(false), "open_research");
   assert.equal(result.isError, true);
   assert.match(
     JSON.stringify(result.content),

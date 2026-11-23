@@ -598,7 +598,11 @@ export function createServer(
           : snapshot
             ? (authorizeSnapshot(snapshot, options.access),
               await store.import(snapshot))
-            : await store.open(snapshot_id);
+            : // Opening saved research is a read: it gets the short local limit.
+              await withinLocalBudget(
+                () => store.open(snapshot_id),
+                LOCAL_READ_LIMIT_MS,
+              );
         if (
           !result_ref &&
           !snapshot &&
