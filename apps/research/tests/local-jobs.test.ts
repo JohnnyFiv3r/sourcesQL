@@ -499,3 +499,74 @@ test("read-only tools share one short budget across their bridge steps; query ge
     assert.ok(query > LOCAL_READ_LIMIT_MS && query <= LOCAL_CALL_BUDGET_MS);
   });
 });
+
+test("every read-only research tool runs under the short budget", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-local-jobs-"));
+  const htmlPath = join(directory, "research.html");
+  await writeFile(htmlPath, "<!doctype html><html>Synthetic widget</html>");
+  const real = new ResearchStore(
+    join(directory, "unused"),
+    snapshotSchema.parse(sample),
+  );
+  // The budget in force when a tool first touches the store, which every one of them does
+  // before any bridge call.
+  let first: number | undefined;
+  const store = new Proxy(real, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        first ??= remainingLocalCallBudgetMs();
+        return value.apply(target, args);
+      };
+    },
+  });
+  const engine: ResearchEngine = {
+    async call<T>(): Promise<T> {
+      throw new Error("No engine work expected");
+    },
+  };
+  const server = createServer(store, htmlPath, { engine });
+  const client = new Client({ name: "local-jobs-check", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  try {
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const snapshot_id = sample.id;
+    const readOnly = (await client.listTools()).tools.filter(
+      (tool) => tool.annotations?.readOnlyHint,
+    );
+    const args: Record<string, Record<string, unknown>> = {
+      find_research_row: { snapshot_id },
+      get_research_request: { request_id: JOB_ID },
+      get_research_update: { request_id: JOB_ID },
+      resume_research_checkpoint: { checkpoint_id: JOB_ID },
+      export_research: { snapshot_id },
+      research_page: { snapshot_id },
+      research_status: { snapshot_id },
+      sourcesql_capabilities: {},
+      sourcesql_read_result: { result_id: "wq_1" },
+      sourcesql_run_status: { run_id: JOB_ID },
+      sourcesql_inspect_evidence: { result_id: "wq_1", mode: "receipt" },
+    };
+    for (const tool of readOnly) {
+      if (!(tool.name in args)) continue;
+      first = undefined;
+      await client.callTool({ name: tool.name, arguments: args[tool.name] });
+      const engineTool = tool.name.startsWith("sourcesql_");
+      if (engineTool) continue; // Covered by the previous test; they may not touch the store.
+      assert.ok(
+        first !== undefined,
+        `${tool.name} ran outside the short call budget`,
+      );
+      assert.ok(first <= LOCAL_READ_LIMIT_MS, tool.name);
+    }
+    const untested = readOnly
+      .map((tool) => tool.name)
+      .filter((name) => !(name in args));
+    assert.deepEqual(untested, [], "a read-only tool has no budget check");
+  } finally {
+    await client.close();
+    await server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

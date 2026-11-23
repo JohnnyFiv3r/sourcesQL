@@ -763,7 +763,7 @@ export function createServer(
       },
     },
     (args) =>
-      safe(async () => {
+      safeShort(async () => {
         if (args.snapshot_id) authorizeView(await store.open(args.snapshot_id));
         const result = await store.findRows(args, (view) => {
           try {
@@ -823,7 +823,7 @@ export function createServer(
       },
     },
     ({ request_id }) =>
-      safe(async () => {
+      safeShort(async () => {
         const result = await store.researchContext(request_id);
         authorizeSnapshot(
           {
@@ -900,7 +900,7 @@ export function createServer(
       },
     },
     ({ snapshot_id }) =>
-      safe(async () => viewResult(await store.open(snapshot_id))),
+      safeShort(async () => viewResult(await store.open(snapshot_id))),
   );
   tools.registerTool(
     "finish_research",
@@ -967,7 +967,7 @@ export function createServer(
       },
     },
     (args) =>
-      safe(async () => {
+      safeShort(async () => {
         const full = await store.open(args.snapshot_id);
         const offset = args.row_id
           ? full.snapshot.rows.findIndex((r) => r.id === args.row_id)
@@ -1083,7 +1083,7 @@ export function createServer(
       },
     },
     ({ request_id }) =>
-      safe(async () => {
+      safeShort(async () => {
         const result = await updateResult(request_id);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -1485,7 +1485,7 @@ export function createServer(
       },
     },
     ({ checkpoint_id }) =>
-      safe(async () => {
+      safeShort(async () => {
         const saved = await store.readCheckpoint(checkpoint_id);
         const result = await inspectCheckpoint(saved.checkpoint);
         return {
@@ -1538,7 +1538,7 @@ export function createServer(
       },
     },
     (args) =>
-      safe(async () => {
+      safeShort(async () => {
         const bundle = await store.exportBundle(args.snapshot_id);
         for (const snapshot of bundle.state.snapshots)
           authorizeSnapshot(snapshot, options.access);
