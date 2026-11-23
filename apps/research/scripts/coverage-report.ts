@@ -126,7 +126,7 @@ const files = parseLcov(readFileSync(lcovPath, "utf8"));
 const report = [
   table(files),
   "",
-  "Not measured (runs in child processes or is never loaded by a test):",
+  "Not measured (runs in Python child processes or is never loaded by a test):",
   ...notMeasured(),
   footer,
 ].join("\n");

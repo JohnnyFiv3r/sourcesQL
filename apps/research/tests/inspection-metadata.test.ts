@@ -1,17 +1,12 @@
+import { testPython } from "./python.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { join } from "node:path";
 import { readInspectionMetadata } from "../server/inspection-metadata.js";
 import type { InspectionSqlClient } from "../server/inspection-records.js";
 
 type Row = Record<string, unknown>;
-const root = fileURLToPath(new URL("../../../", import.meta.url));
-const python =
-  process.env.SOURCESQL_TEST_PYTHON ??
-  process.env.SOURCESQL_PYTHON ??
-  join(root, "local/python312/venv/bin/python");
+const python = testPython();
 const size = (value: unknown) =>
   Buffer.byteLength(JSON.stringify(value), "utf8");
 const script = `import duckdb,json,sys

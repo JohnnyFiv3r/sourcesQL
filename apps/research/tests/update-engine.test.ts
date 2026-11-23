@@ -18,13 +18,14 @@ import { ResearchStore } from "../server/store.js";
 import { createServer } from "../server/mcp.js";
 import { effectiveValue, type ResearchView } from "../src/schema.js";
 import type { UpdateChange } from "../server/updates.js";
+import { testEnv } from "./python.js";
 
 // Actual Python engine and OS-isolated SQL worker, fictional fixture provider only.
 // This checks metadata, evidence, identities and continuation; it measures no live semantic quality.
 test("actual fixture engine supports fresh manual claims and SQL continuation after reviewed publication", async () => {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-update-engine-"));
   const python = new PythonEngine(undefined, {
-    ...process.env,
+    ...testEnv(),
     SOURCESQL_DATA_DIR: join(directory, "engine"),
     SOURCESQL_PRINCIPAL: "manual-update-fixture-owner",
     SOURCESQL_ALLOW_PRIVATE: "0",

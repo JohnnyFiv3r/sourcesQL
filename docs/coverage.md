@@ -14,8 +14,12 @@ The app command needs the same `SOURCESQL_PYTHON` as `npm test`, and the build f
 
 ## Not measured
 
-Coverage traces one process. Code that only runs in a child process, or that no
-test loads, shows 0% or is missing from the tables. That means not measured,
+Each command measures the test run's own process. The app command also measures
+Node child processes, because Node's coverage collector is inherited: the stdio
+test that starts `server/main.ts` is counted. Python child processes are outside
+both commands: the pytest run traces pytest's process only, and the app's Python
+bridge and worker are separate interpreters. Code that only runs there, or that
+no test loads, shows 0% or is missing from the tables. That means not measured,
 not untested. Each line below is `path | checked by`; both commands print this
 list from here, and `tests/unit/test_coverage_docs.py` checks that every named
 file exists.

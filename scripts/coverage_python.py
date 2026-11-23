@@ -79,7 +79,7 @@ def main() -> int:
     print()
     print(table(json.loads(REPORT.read_text())))
     print()
-    print("Not measured (runs in child processes or is never loaded by a test):")
+    print("Not measured (runs in Python child processes or is never loaded by a test):")
     for path, checked_by in not_measured(ROOT / "docs" / "coverage.md", ("src/", "hosted/")):
         print(f"  {path}  checked by: {checked_by}")
     print(NOT_MEASURED_FOOTER)

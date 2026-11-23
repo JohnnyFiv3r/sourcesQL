@@ -28,7 +28,7 @@ npm run build --prefix apps/research && npm run coverage --prefix apps/research
 
 Each command runs its suite and prints line and branch coverage by module with
 a total. Two runs on the same commit agree within about one point. Code that
-runs only in child processes, or that no test loads, cannot be measured; the
+runs only in Python child processes, or that no test loads, cannot be measured; the
 commands list it, and [docs/coverage.md](docs/coverage.md) says how each file is
 checked instead. There is no coverage threshold; the figures are a baseline,
 not a gate.
