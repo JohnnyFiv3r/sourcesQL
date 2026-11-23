@@ -12,7 +12,7 @@ import {
   rmdir,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   snapshotSchema,
   originForSnapshot,
@@ -209,15 +209,23 @@ function withExportedAssessments(request: ResearchRequest): ResearchRequest {
   };
 }
 
+const completionDigest = (completion: AppendResearchInput) =>
+  createHash("sha256").update(canonicalJson(completion)).digest("hex");
+
 /**
- * A completion replayed against a stored one. Exact equality, or, when the
- * stored one came from an export (already downgraded), equality once the
- * replay is downgraded too: the export dropped the submitted status.
+ * Whether a replay is the completion the request already holds. An export
+ * downgrades the stored payload, so a restored request is compared by the
+ * digest of what was submitted; requests saved before digests existed fall
+ * back to the stored payload, and with neither nothing can be identical.
  */
 function sameCompletion(
-  stored: AppendResearchInput,
+  request: ResearchRequest,
   replay: AppendResearchInput,
 ): boolean {
+  if (request.completionDigest)
+    return request.completionDigest === completionDigest(replay);
+  const stored = request.completion;
+  if (!stored) return false;
   if (canonicalJson(stored) === canonicalJson(replay)) return true;
   return (
     canonicalJson(withHostEvidenceDowngrade(stored)) ===
@@ -702,7 +710,7 @@ export class ResearchStore {
           "Research request not found. Return the original request_id.",
         );
       if (request.status === "completed") {
-        if (!sameCompletion(request.completion!, result))
+        if (!sameCompletion(request, result))
           throw new Error(
             "This request already has different results. Start a new request.",
           );
@@ -802,6 +810,7 @@ export class ResearchStore {
       // different status still conflicts; the assessments are what is shown.
       request.assessments = withHostEvidenceDowngrade(result).assessments;
       request.completion = result;
+      request.completionDigest = completionDigest(result);
       await this.write(state);
       return this.view(state, result.snapshot.id);
     });
@@ -1454,6 +1463,11 @@ export class ResearchStore {
         )
       )
         throw new Error("Invalid bundle request status");
+      if (
+        request.completionDigest !== undefined &&
+        !/^[0-9a-f]{64}$/.test(request.completionDigest)
+      )
+        throw new Error("Invalid bundle request digest");
       if (
         request.status === "completed" &&
         !bundle.state.snapshots.some(

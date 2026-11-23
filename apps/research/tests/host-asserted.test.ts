@@ -784,6 +784,18 @@ for (const status of ["verified", "conflicting"] as const) {
     await fresh.importBundle(JSON.parse(JSON.stringify(bundle)));
     const replayed = await fresh.appendResearch(structuredClone(append));
     assert.equal(replayed.snapshot.id, "refreshed-1");
+    // Only the submitted status changed: the export dropped it, so the
+    // request's digest of the original payload is what tells them apart.
+    const other = status === "verified" ? "conflicting" : "verified";
+    await assert.rejects(
+      fresh.appendResearch({
+        ...structuredClone(append),
+        assessments: [
+          { row_id: "claim-1", field: "claim", status: other, note: "n" },
+        ],
+      }),
+      /different results/,
+    );
     // A different completion still conflicts after the restore.
     await assert.rejects(
       fresh.appendResearch({
@@ -796,3 +808,51 @@ for (const status of ["verified", "conflicting"] as const) {
     );
   });
 }
+
+test("a restored completed request with no completion payload answers a retry with the conflict, not an exception", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-no-completion-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ResearchStore(join(directory, "a"), forgedV1());
+  const request_id = randomUUID();
+  await store.beginResearch(
+    {
+      request_id,
+      snapshot_id: "forged-v1-1",
+      row_id: "claim-1",
+      question: "Is this still true?",
+    },
+    "expand",
+  );
+  const append = {
+    request_id,
+    snapshot: snapshotSchema.parse({
+      id: "expanded-1",
+      title: "Expanded",
+      sourceResultSetId: "r0000000000e",
+      capturedAt: "2026-11-24",
+      coverage: "Host-written test data",
+      columns: [{ key: "claim", label: "Claim" }],
+      rows: [
+        {
+          id: "claim-1",
+          values: { claim: "The moon is rock" },
+          sourceUrl: FORGED_URL,
+          evidence: {},
+          verificationNote: "n",
+        },
+      ],
+    }),
+  };
+  await store.appendResearch(append);
+  const bundle = JSON.parse(
+    JSON.stringify(await store.exportBundle("expanded-1")),
+  );
+  delete bundle.state.requests[0].completion;
+  delete bundle.state.requests[0].completionDigest;
+  const fresh = new ResearchStore(join(directory, "b"), forgedV1());
+  await fresh.importBundle(bundle);
+  await assert.rejects(
+    fresh.appendResearch(structuredClone(append)),
+    /already has different results/,
+  );
+});

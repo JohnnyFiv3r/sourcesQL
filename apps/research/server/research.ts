@@ -21,6 +21,8 @@ export type ResearchRequest = ResearchRequestSummary & {
   })[];
   decisions?: Record<string, "accept" | "keep">;
   completion?: AppendResearchInput;
+  /** SHA-256 of the payload as submitted; survives export, which downgrades `completion`. */
+  completionDigest?: string;
 };
 export const changeKey = (rowId: string, field: string) => `${rowId}:${field}`;
 export function createRequest(
