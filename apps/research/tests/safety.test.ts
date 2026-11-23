@@ -170,6 +170,23 @@ async function processStopped(pid: number) {
     throw error;
   }
 }
+const STARTUP_ALLOWANCE_MS = 5_000;
+async function waitForPid(
+  file: string,
+  allowanceMs: number,
+): Promise<number | undefined> {
+  const deadline = Date.now() + allowanceMs;
+  while (Date.now() < deadline) {
+    try {
+      const pid = Number(await readFile(file, "utf8"));
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await delay(25);
+  }
+  return undefined;
+}
 test(
   "bridge timeout stops its owned process group including a sleeping child",
   { skip: process.platform === "win32" },
@@ -186,14 +203,25 @@ test(
       const engine = new PythonEngine(directory, process.env, {
         command: process.execPath,
         args: [script, pidFile],
-        timeoutMs: 700,
+        timeoutMs: STARTUP_ALLOWANCE_MS,
       });
-      await assert.rejects(engine.call("capabilities"), /Engine timed out/);
-      childPid = Number(await readFile(pidFile, "utf8"));
-      assert.ok(Number.isSafeInteger(childPid) && childPid > 0);
+      // The engine's timer starts at spawn, so the test waits for the child's
+      // PID while the call is pending instead of racing a short timeout.
+      const outcome = assert.rejects(
+        engine.call("capabilities"),
+        /Engine timed out/,
+      );
+      childPid = await waitForPid(pidFile, STARTUP_ALLOWANCE_MS);
+      if (childPid === undefined) {
+        await outcome;
+        assert.fail(
+          `The test child process did not start within ${STARTUP_ALLOWANCE_MS} ms, so the process-group check could not run. This is a startup failure, not a kill failure. Rerun the test; if it keeps happening, check machine load.`,
+        );
+      }
+      await outcome;
       for (
         let retry = 0;
-        retry < 30 && !(await processStopped(childPid));
+        retry < 80 && !(await processStopped(childPid));
         retry++
       )
         await delay(25);
