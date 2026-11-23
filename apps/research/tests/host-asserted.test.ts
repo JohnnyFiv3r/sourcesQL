@@ -856,3 +856,210 @@ test("a restored completed request with no completion payload answers a retry wi
     /already has different results/,
   );
 });
+
+async function beginRefresh(store: ResearchStore, snapshot_id = "forged-v1-1") {
+  const request_id = randomUUID();
+  await store.beginResearch(
+    {
+      request_id,
+      snapshot_id,
+      row_id: "claim-1",
+      field: "claim",
+      question: "Is this still true?",
+    },
+    "refresh",
+  );
+  return request_id;
+}
+
+const refreshColumns = [
+  { key: "claim", label: "Claim" },
+  { key: "status", label: "Status" },
+];
+
+test("an export of a request saved before digests existed still tells a changed status from a retry", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-legacy-digest-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ResearchStore(join(directory, "a"), forgedV1());
+  const request_id = await beginRefresh(store);
+  const append = {
+    request_id,
+    snapshot: snapshotSchema.parse({
+      id: "refreshed-1",
+      title: "Refreshed",
+      sourceResultSetId: "r0000000000e",
+      capturedAt: "2026-11-24",
+      coverage: "Host-written test data",
+      columns: refreshColumns,
+      rows: [
+        {
+          id: "claim-1",
+          values: { claim: "The moon is rock", status: "supported" },
+          sourceUrl: FORGED_URL,
+          evidence: { claim: ["Host-written quote"] },
+          verificationNote: "verified",
+        },
+      ],
+    }),
+    assessments: [
+      { row_id: "claim-1", field: "claim", status: "verified", note: "n" },
+    ],
+  };
+  await store.appendResearch(append);
+  // Rewrite the stored request as the previous release saved it: the
+  // submitted payload and no digest.
+  const file = join(directory, "a", "research.json");
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  delete saved.requests[0].completionDigest;
+  await writeFile(file, JSON.stringify(saved));
+  const bundle = await new ResearchStore(
+    join(directory, "a"),
+    forgedV1(),
+  ).exportBundle("refreshed-1");
+  assert.match(
+    bundle.state.requests![0].completionDigest ?? "",
+    /^[0-9a-f]{64}$/,
+  );
+  const fresh = new ResearchStore(join(directory, "b"), forgedV1());
+  await fresh.importBundle(JSON.parse(JSON.stringify(bundle)));
+  assert.equal(
+    (await fresh.appendResearch(structuredClone(append))).snapshot.id,
+    "refreshed-1",
+  );
+  await assert.rejects(
+    fresh.appendResearch({
+      ...structuredClone(append),
+      assessments: [
+        { row_id: "claim-1", field: "claim", status: "conflicting", note: "n" },
+      ],
+    }),
+    /different results/,
+  );
+});
+
+test("a completion digest that is not a 64-character hex string is refused on import", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-bad-digest-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ResearchStore(join(directory, "a"), forgedV1());
+  const request_id = await beginRefresh(store);
+  await store.appendResearch({
+    request_id,
+    snapshot: snapshotSchema.parse({
+      id: "refreshed-1",
+      title: "Refreshed",
+      sourceResultSetId: "r0000000000e",
+      capturedAt: "2026-11-24",
+      coverage: "Host-written test data",
+      columns: refreshColumns,
+      rows: [
+        {
+          id: "claim-1",
+          values: { claim: "The moon is rock", status: "supported" },
+          sourceUrl: FORGED_URL,
+          evidence: {},
+          verificationNote: "n",
+        },
+      ],
+    }),
+    assessments: [
+      { row_id: "claim-1", field: "claim", status: "unverified", note: "n" },
+    ],
+  });
+  const bundle = JSON.parse(
+    JSON.stringify(await store.exportBundle("refreshed-1")),
+  );
+  const digest = bundle.state.requests[0].completionDigest;
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  bundle.state.requests[0].completionDigest = [digest];
+  await assert.rejects(
+    new ResearchStore(join(directory, "b"), forgedV1()).importBundle(bundle),
+    /Invalid bundle request digest/,
+  );
+});
+
+test("an engine-backed refresh replays after a restore maps its result to a new id", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-remap-digest-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const engineChild = (resultId: string, capturedAt: string) =>
+    snapshotSchema.parse({
+      schemaVersion: 2,
+      id: "refreshed-1",
+      title: "Refreshed",
+      origin: { engine: "sourcesql", resultId, runId: `run_${resultId}` },
+      capturedAt,
+      capturePrecision: "instant",
+      captureBasis: "run_completed_at",
+      dataClassification: "public_web",
+      coverage: { planComplete: true, corpusComplete: "unknown", notes: [] },
+      columns: forgedV2().columns,
+      rowCount: 1,
+      rows: [
+        {
+          id: "claim-1",
+          values: { claim: "The moon is rock" },
+          sourceUrl: FORGED_URL,
+          evidence: { claim: ["Engine quote"] },
+          verificationNote: "n",
+        },
+      ],
+      dataRef: { resultId, contentSha256: "a".repeat(64) },
+    });
+  // The app's resolver rebinds the saved snapshot to the engine result and keeps its parent.
+  const resolveAs =
+    (resultId: string, capturedAt: string) => async (saved: Snapshot) => ({
+      ...engineChild(resultId, capturedAt),
+      parentSnapshotId: saved.parentSnapshotId,
+    });
+  const store = new ResearchStore(
+    join(directory, "a"),
+    forgedV2(),
+    resolveAs("wq_origin", "2026-11-24T10:00:00.000Z"),
+  );
+  const request_id = await beginRefresh(store, "forged-v2-1");
+  const append = {
+    request_id,
+    snapshot: engineChild("wq_origin", "2026-11-24T10:00:00.000Z"),
+    assessments: [
+      { row_id: "claim-1", field: "claim", status: "verified", note: "n" },
+    ],
+  };
+  await store.appendResearch(append);
+  const bundle = JSON.parse(
+    JSON.stringify(await store.exportBundle("refreshed-1")),
+  );
+  // What the app's import does: the completion is rebound to the local result.
+  const local = engineChild("wq_restore_1", "2026-11-25T09:00:00.000Z");
+  bundle.state.snapshots = bundle.state.snapshots.map((s: Snapshot) =>
+    s.id === local.id ? { ...local, parentSnapshotId: s.parentSnapshotId } : s,
+  );
+  bundle.state.requests[0].completion.snapshot = {
+    ...local,
+    parentSnapshotId:
+      bundle.state.requests[0].completion.snapshot.parentSnapshotId,
+  };
+  const fresh = new ResearchStore(
+    join(directory, "b"),
+    forgedV2(),
+    resolveAs("wq_restore_1", "2026-11-25T09:00:00.000Z"),
+  );
+  await fresh.importBundle(bundle);
+  assert.equal(
+    (
+      await fresh.appendResearch({
+        ...structuredClone(append),
+        snapshot: local,
+      })
+    ).snapshot.id,
+    "refreshed-1",
+  );
+  await assert.rejects(
+    fresh.appendResearch({
+      ...structuredClone(append),
+      snapshot: local,
+      assessments: [
+        { row_id: "claim-1", field: "claim", status: "conflicting", note: "n" },
+      ],
+    }),
+    /different results/,
+  );
+});

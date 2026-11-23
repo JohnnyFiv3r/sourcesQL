@@ -202,15 +202,40 @@ function withHostEvidenceDowngrade(
 function withExportedAssessments(request: ResearchRequest): ResearchRequest {
   if (!request.completion) return request;
   const completion = withHostEvidenceDowngrade(request.completion);
+  // A request saved before digests existed still holds the submitted status.
+  // The downgrade is about to drop it from the copy, so the copy carries the
+  // digest of the original for a restored store to tell retries apart.
+  const lostStatus =
+    !request.completionDigest &&
+    canonicalJson(completion) !== canonicalJson(request.completion);
   return {
     ...request,
+    ...(lostStatus
+      ? { completionDigest: completionDigest(request.completion) }
+      : {}),
     completion,
     ...(request.assessments ? { assessments: completion.assessments } : {}),
   };
 }
 
-const completionDigest = (completion: AppendResearchInput) =>
-  createHash("sha256").update(canonicalJson(completion)).digest("hex");
+/**
+ * An engine-backed result is named by its id and content hash only: a restore
+ * maps it to a new result id and read time, which must not change the digest.
+ * A host-written snapshot has no engine identity, so all of it counts.
+ */
+const completionDigest = (completion: AppendResearchInput) => {
+  const { snapshot } = completion;
+  const identified = snapshot.dataRef
+    ? {
+        ...completion,
+        snapshot: {
+          id: snapshot.id,
+          contentSha256: snapshot.dataRef.contentSha256,
+        },
+      }
+    : completion;
+  return createHash("sha256").update(canonicalJson(identified)).digest("hex");
+};
 
 /**
  * Whether a replay is the completion the request already holds. An export
@@ -1465,7 +1490,10 @@ export class ResearchStore {
         throw new Error("Invalid bundle request status");
       if (
         request.completionDigest !== undefined &&
-        !/^[0-9a-f]{64}$/.test(request.completionDigest)
+        !(
+          typeof request.completionDigest === "string" &&
+          /^[0-9a-f]{64}$/.test(request.completionDigest)
+        )
       )
         throw new Error("Invalid bundle request digest");
       if (
