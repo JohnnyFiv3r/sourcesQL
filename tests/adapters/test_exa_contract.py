@@ -303,12 +303,13 @@ def test_contents_cannot_replace_the_approved_source_url(returned):
 
 
 @pytest.mark.parametrize("url", ["https://unapproved.example/a", "http://127.0.0.1/a"])
-def test_registry_refuses_unapproved_exa_fetch_before_disclosing_url(url):
+def test_registry_reports_unapproved_exa_fetch_as_blocked_row_without_dispatch(url):
     registry = ProviderRegistry(profile(client(lambda _: pytest.fail("unexpected dispatch"))))
     budget = Budget({"max_cost_microusd": 10000})
-    with pytest.raises(SourcesQLError) as error:
-        registry.fetch([url], {}, budget)
-    assert error.value.code == "unauthorized"
+    rows = registry.fetch([url], {}, budget)
+    assert [(r["status"], r["failure_reason"], r["content"]) for r in rows] == [
+        ("fetch_failed", "blocked_host", None)
+    ]
     assert budget.counts == {} and registry.events == []
 
 

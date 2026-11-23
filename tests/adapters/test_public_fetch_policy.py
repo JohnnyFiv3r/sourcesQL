@@ -117,7 +117,7 @@ def test_public_sources_require_the_exact_operator_grant_before_dns_or_disclosur
         ("https://empty.example/source", []),
     ],
 )
-def test_public_grant_still_refuses_private_mixed_or_nonstandard_destinations_before_dispatch(
+def test_public_grant_reports_private_mixed_or_nonstandard_destinations_as_blocked_rows(
     url, addresses
 ):
     resolved = []
@@ -127,13 +127,14 @@ def test_public_grant_still_refuses_private_mixed_or_nonstandard_destinations_be
         registry = ProviderRegistry(profile(client, dns(addresses, resolved)))
         allowance = Budget({"max_cost_microusd": 50_000})
         registry.preflight({"WEB_FETCH"}, allowance)
-        with pytest.raises(SourcesQLError) as error:
-            registry.fetch([url], {}, allowance)
-    assert error.value.code == "unauthorized"
+        rows = registry.fetch([url], {}, allowance)
+    assert [(r["status"], r["failure_reason"], r["content"]) for r in rows] == [
+        ("fetch_failed", "blocked_host", None)
+    ]
     assert allowance.counts == {} and registry.events == []
 
 
-def test_every_url_is_authorized_before_any_batch_member_is_sent_to_exa():
+def test_only_authorized_urls_are_sent_to_exa_and_the_rest_are_blocked_rows():
     resolved = []
 
     def resolve(host, port, **kwargs):
@@ -141,17 +142,28 @@ def test_every_url_is_authorized_before_any_batch_member_is_sent_to_exa():
             host, port, **kwargs
         )
 
-    with httpx.Client(
-        transport=httpx.MockTransport(lambda _: pytest.fail("Partial batch disclosure"))
-    ) as client:
+    sent = []
+
+    def respond(request):
+        sent.extend(json.loads(request.content)["urls"])
+        return httpx.Response(
+            200,
+            json={
+                "results": [{"url": sent[-1], "text": "Public text."}],
+                "statuses": [{"status": "success"}],
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
         registry = ProviderRegistry(profile(client, resolve))
-        allowance = Budget({"max_cost_microusd": 50_000})
-        with pytest.raises(SourcesQLError):
-            registry.fetch(
-                ["https://public.example/source", "https://private.example/source"], {}, allowance
-            )
-    assert resolved == [("public.example", 443), ("private.example", 443)]
-    assert allowance.counts == {} and registry.events == []
+        allowance = Budget({"max_cost_microusd": 50_000, "max_fetches": 2})
+        rows = registry.fetch(
+            ["https://public.example/source", "https://private.example/source"], {}, allowance
+        )
+    assert sent == ["https://public.example/source"]
+    assert [r["status"] for r in rows] == ["acquired", "fetch_failed"]
+    assert rows[1]["failure_reason"] == "blocked_host"
+    assert resolved[:2] == [("public.example", 443), ("private.example", 443)]
 
 
 @pytest.mark.parametrize("source_mode", ["allow_excerpt", "require_document"])
