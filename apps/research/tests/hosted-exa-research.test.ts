@@ -1,3 +1,4 @@
+import { testPython } from "./python.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -115,10 +116,7 @@ test("gateway and credential-bearing Flight produce identical legacy and researc
     },
   );
   const root = fileURLToPath(new URL("../../../", import.meta.url));
-  const python =
-    process.env.SOURCESQL_TEST_PYTHON ??
-    process.env.SOURCESQL_PYTHON ??
-    join(root, "local/python312/venv/bin/python");
+  const python = testPython();
   const result = spawnSync(
     python,
     [

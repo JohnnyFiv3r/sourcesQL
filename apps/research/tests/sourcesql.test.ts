@@ -27,12 +27,13 @@ import { ResearchStore } from "../server/store.js";
 import { createServer } from "../server/mcp.js";
 import { authorizeSnapshot, bearerMatches } from "../server/access.js";
 import sample from "../fixtures/water-procurement.json";
+import { testEnv } from "./python.js";
 const seed = snapshotSchema.parse(sample);
 
 test("discovery and save stay headless until the final filtered result is explicitly presented", async () => {
   const dir = await mkdtemp(join(tmpdir(), "sourcesql-final-presentation-"));
   const engine = new PythonEngine(undefined, {
-    ...process.env,
+    ...testEnv(),
     SOURCESQL_DATA_DIR: join(dir, "engine"),
     SOURCESQL_PRINCIPAL: "presentation-owner",
     SOURCESQL_ALLOW_PRIVATE: "0",
@@ -508,7 +509,7 @@ test("JSON-lines bridge returns bounded capabilities and safe admission errors",
   const dir = await mkdtemp(join(tmpdir(), "sourcesql-python-"));
   try {
     const engine = new PythonEngine(undefined, {
-      ...process.env,
+      ...testEnv(),
       SOURCESQL_DATA_DIR: dir,
       SOURCESQL_PRINCIPAL: "app-test",
     });
@@ -531,7 +532,7 @@ test("actual engine bridge completes 205-row SQL and app reference lifecycle", a
   const dir = await mkdtemp(join(tmpdir(), "sourcesql-actual-lifecycle-"));
   try {
     const engine = new PythonEngine(undefined, {
-      ...process.env,
+      ...testEnv(),
       SOURCESQL_DATA_DIR: join(dir, "engine"),
       SOURCESQL_PRINCIPAL: "actual-app-test",
       SOURCESQL_ALLOW_PRIVATE: "0",
@@ -778,7 +779,7 @@ test("actual bridge separates principals and refuses private imports, reads, exp
   const dir = await mkdtemp(join(tmpdir(), "sourcesql-bridge-private-"));
   try {
     const owner = new PythonEngine(undefined, {
-      ...process.env,
+      ...testEnv(),
       SOURCESQL_DATA_DIR: dir,
       SOURCESQL_PRINCIPAL: "private-test-owner",
       SOURCESQL_ALLOW_PRIVATE: "1",
@@ -790,13 +791,13 @@ test("actual bridge separates principals and refuses private imports, reads, exp
       data_classification: "private_local",
     });
     const anonymous = new PythonEngine(undefined, {
-      ...process.env,
+      ...testEnv(),
       SOURCESQL_DATA_DIR: dir,
       SOURCESQL_PRINCIPAL: "fixture-anonymous",
       SOURCESQL_ALLOW_PRIVATE: "0",
     });
     const restricted = new PythonEngine(undefined, {
-      ...process.env,
+      ...testEnv(),
       SOURCESQL_DATA_DIR: dir,
       SOURCESQL_PRINCIPAL: "private-test-owner",
       SOURCESQL_ALLOW_PRIVATE: "0",
@@ -935,7 +936,7 @@ test("actual engine bundle remaps foreign results and restores full app correcti
   };
   try {
     const origin = new PythonEngine(undefined, {
-      ...process.env,
+      ...testEnv(),
       SOURCESQL_DATA_DIR: join(dir, "origin-engine"),
       SOURCESQL_PRINCIPAL: "bundle-owner",
       SOURCESQL_ALLOW_PRIVATE: "0",
@@ -986,7 +987,7 @@ test("actual engine bundle remaps foreign results and restores full app correcti
       await first.server.close();
     }
     const target = new PythonEngine(undefined, {
-      ...process.env,
+      ...testEnv(),
       SOURCESQL_DATA_DIR: join(dir, "target-engine"),
       SOURCESQL_PRINCIPAL: "bundle-owner",
       SOURCESQL_ALLOW_PRIVATE: "0",
@@ -1090,7 +1091,7 @@ test("actual refresh query preserves explicit scoped row identity through result
   const dir = await mkdtemp(join(tmpdir(), "sourcesql-explicit-refresh-"));
   try {
     const engine = new PythonEngine(undefined, {
-      ...process.env,
+      ...testEnv(),
       SOURCESQL_DATA_DIR: join(dir, "engine"),
       SOURCESQL_PRINCIPAL: "refresh-owner",
       SOURCESQL_ALLOW_PRIVATE: "0",
