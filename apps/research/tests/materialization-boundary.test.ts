@@ -10,6 +10,7 @@ import {
   type EngineResult,
   type ResearchEngine,
 } from "../server/engine.js";
+import { testEnv } from "./python.js";
 function fixture(id: string, value: string): EngineResult {
   return {
     result_id: id,
@@ -145,7 +146,7 @@ test("local MCP replay compares Python-native captured identity before any new i
   const { PythonEngine } = await import("../server/engine.js");
   const dir = await mkdtemp(join(tmpdir(), "sourcesql-native-promotion-"));
   const native = new PythonEngine(undefined, {
-    ...process.env,
+    ...testEnv(),
     SOURCESQL_DATA_DIR: dir,
     SOURCESQL_PRINCIPAL: "materialization-fixture",
   });

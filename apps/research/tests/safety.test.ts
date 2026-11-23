@@ -170,7 +170,9 @@ async function processStopped(pid: number) {
     throw error;
   }
 }
-const STARTUP_ALLOWANCE_MS = 5_000;
+const STARTUP_ALLOWANCE_MS = 10_000;
+// An unusual value, so only the engine's own kill timer is recognised.
+const BRIDGE_KILL_TIMER_MS = 600_017;
 async function waitForPid(
   file: string,
   allowanceMs: number,
@@ -203,15 +205,37 @@ test(
       const engine = new PythonEngine(directory, process.env, {
         command: process.execPath,
         args: [script, pidFile],
-        timeoutMs: STARTUP_ALLOWANCE_MS,
+        timeoutMs: BRIDGE_KILL_TIMER_MS,
       });
-      // The engine's timer starts at spawn, so the test waits for the child's
-      // PID while the call is pending instead of racing a short timeout.
-      const outcome = assert.rejects(
-        engine.call("capabilities"),
-        /Engine timed out/,
-      );
+      // The engine arms its kill timer at spawn, so a short timeout races the
+      // child's startup. Capture the timer's callback and fire it only after
+      // the child's PID is observed: startup gets a generous allowance and the
+      // kill still goes through the engine's own timeout path.
+      let fireKillTimer: (() => void) | undefined;
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((
+        callback: () => void,
+        delayMs?: number,
+        ...rest: unknown[]
+      ) => {
+        if (delayMs === BRIDGE_KILL_TIMER_MS) fireKillTimer = callback;
+        return realSetTimeout(callback, delayMs, ...rest);
+      }) as typeof setTimeout;
+      let outcome: Promise<void>;
+      try {
+        outcome = assert.rejects(
+          engine.call("capabilities"),
+          /Engine timed out/,
+        );
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
       childPid = await waitForPid(pidFile, STARTUP_ALLOWANCE_MS);
+      assert.ok(
+        fireKillTimer,
+        "The engine must arm its kill timer when it spawns",
+      );
+      fireKillTimer();
       if (childPid === undefined) {
         await outcome;
         assert.fail(

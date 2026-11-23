@@ -8,13 +8,14 @@ import {
   readdir,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureBuilt } from "./ensure-built.js";
-import { resolveTestPython } from "./python.js";
+import { resolveTestPython, testEnv } from "./python.js";
 
 const appDirectory = fileURLToPath(new URL("..", import.meta.url));
 
@@ -200,5 +201,44 @@ test("ensureBuilt does nothing when dist already exists", async () => {
       0,
     );
     assert.equal(builds, 0);
+  });
+});
+
+test("a directory is not an interpreter, but a symlink to one is", async () => {
+  await withRoot(async (root) => {
+    const real = await fakeInterpreter(join(root, "real/python"));
+    await symlink(real, join(root, "link"));
+    assert.deepEqual(
+      resolveTestPython({ SOURCESQL_TEST_PYTHON: join(root, "link") }, root),
+      {
+        python: join(root, "link"),
+      },
+    );
+    const refused = resolveTestPython({ SOURCESQL_TEST_PYTHON: root }, root);
+    assert.ok("message" in refused);
+    assert.match(
+      refused.message,
+      /SOURCESQL_TEST_PYTHON +.*\(not executable\)/,
+    );
+  });
+});
+
+test("the environment handed to a real engine pins the interpreter the resolver chose", async () => {
+  await withRoot(async (root) => {
+    const first = await fakeInterpreter(join(root, "a/python"));
+    const env = testEnv(
+      {
+        SOURCESQL_TEST_PYTHON: first,
+        SOURCESQL_PYTHON: join(root, "missing"),
+        KEEP: "1",
+      },
+      root,
+    );
+    assert.equal(env.SOURCESQL_PYTHON, first);
+    assert.equal(env.KEEP, "1");
+    assert.throws(
+      () => testEnv({ SOURCESQL_PYTHON: join(root, "missing") }, root),
+      /SOURCESQL_PYTHON +.*\(missing\)/,
+    );
   });
 });

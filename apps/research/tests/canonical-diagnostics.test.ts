@@ -14,6 +14,7 @@ import {
 } from "../server/engine.js";
 import { effectiveValue, snapshotSchema } from "../src/schema.js";
 import { decodeResearchView } from "../src/view-wire.js";
+import { testEnv } from "./python.js";
 
 const reference = {
   result_id: "wq_canonical_diagnostics",
@@ -200,7 +201,7 @@ test("actual fixture extraction with toString alias opens, corrects and exports/
   const create = async (name: string) => {
     const app = await createResearchApplication({
       environment: {
-        ...process.env,
+        ...testEnv(),
         RESEARCH_DATA_DIR: join(directory, name + "-app"),
         SOURCESQL_DATA_DIR: join(directory, name + "-engine"),
         SOURCESQL_ALLOW_PRIVATE: "0",

@@ -1,4 +1,4 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,9 @@ export type PythonResolution = { python: string } | { message: string };
 
 function problem(path: string): "missing" | "not executable" | undefined {
   try {
+    // statSync follows symlinks, so an interpreter symlink passes and a
+    // directory (which is "executable" to access()) does not.
+    if (!statSync(path).isFile()) return "not executable";
     accessSync(path, constants.X_OK);
     return undefined;
   } catch (error) {
@@ -59,8 +62,19 @@ export function resolveTestPython(
   };
 }
 
-export function testPython(): string {
-  const resolved = resolveTestPython();
+export function testPython(
+  env: NodeJS.ProcessEnv = process.env,
+  root: string = repoRoot,
+): string {
+  const resolved = resolveTestPython(env, root);
   if ("message" in resolved) throw new Error(resolved.message);
   return resolved.python;
+}
+
+/** process.env with SOURCESQL_PYTHON pinned to the interpreter the resolver chose, for a real PythonEngine. */
+export function testEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  root: string = repoRoot,
+): NodeJS.ProcessEnv {
+  return { ...env, SOURCESQL_PYTHON: testPython(env, root) };
 }
