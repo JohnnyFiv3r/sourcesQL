@@ -90,17 +90,42 @@ export const LOCAL_READ_LIMIT_MS = 30_000;
 // at most 30 s, which is also under the 240 s cap of claude.ai and Desktop.
 export const LOCAL_CALL_BUDGET_MS =
   (LOCAL_DISPATCH_DEADLINE_SECONDS + 30) * 1000;
-const callBudget = new AsyncLocalStorage<{ deadline: number }>();
+// `active` counts bridge processes in flight: each has its own timer at or
+// before the deadline and reports its own timeout and cleanup outcome.
+const callBudget = new AsyncLocalStorage<{
+  deadline: number;
+  active: number;
+}>();
+const CALL_TIMED_OUT = "Engine timed out; inspect the run before retrying.";
 /** Time left in the tool call's shared budget, or undefined outside one. */
 export const remainingLocalCallBudgetMs = (): number | undefined => {
   const budget = callBudget.getStore();
   return budget && budget.deadline - Date.now();
 };
-/** Runs a tool call so that its bridge processes share one total time budget. */
+/**
+ * Runs a tool call so that its bridge processes share one total time budget,
+ * and replies when the budget ends even if app-store work is still pending.
+ * Late bridge steps are refused; work already in flight is left to finish.
+ */
 export const withLocalCallBudget = <T>(
   run: () => Promise<T>,
   budgetMs = LOCAL_CALL_BUDGET_MS,
-): Promise<T> => callBudget.run({ deadline: Date.now() + budgetMs }, run);
+): Promise<T> => {
+  const budget = { deadline: Date.now() + budgetMs, active: 0 };
+  return callBudget.run(
+    budget,
+    () =>
+      new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (budget.active === 0) reject(new Error(CALL_TIMED_OUT));
+        }, budgetMs);
+        Promise.resolve()
+          .then(run)
+          .then(resolve, reject)
+          .finally(() => clearTimeout(timer));
+      }),
+  );
+};
 // Bridge methods that can dispatch providers or do heavy materialization;
 // every other method gets the short limit.
 const LOCAL_DISPATCH_METHODS = new Set([
@@ -236,6 +261,16 @@ export class PythonEngine implements ResearchEngine {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
+    const budget = callBudget.getStore();
+    if (budget) budget.active++;
+    return this.runBridge<T>(method, params).finally(() => {
+      if (budget) budget.active--;
+    });
+  }
+  private runBridge<T>(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
       const id = randomUUID();
       const ownLimitMs =
@@ -289,7 +324,7 @@ export class PythonEngine implements ResearchEngine {
           new Error(
             stopped === false
               ? "Engine timed out; owned process cleanup failed. Inspect the run before retrying."
-              : "Engine timed out; inspect the run before retrying.",
+              : CALL_TIMED_OUT,
           ),
         );
       }, limitMs);

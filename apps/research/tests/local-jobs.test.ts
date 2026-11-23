@@ -314,21 +314,59 @@ test("one tool call's bridge processes share a total budget under the host cap",
   }
 });
 
-test("a step is not started once the call budget is used up", async () => {
+test("a step started after the call budget ends is never dispatched", async () => {
   const { directory, script } = await fakeBridge(
-    `answer({ok: request.method});`,
+    `import {writeFileSync} from "node:fs"; writeFileSync(process.argv[3], "ran"); answer({ok: request.method});`,
+  );
+  const marker = join(directory, "dispatched");
+  try {
+    const engine = new PythonEngine(directory, process.env, {
+      command: process.execPath,
+      args: [script, marker],
+    });
+    let lateStep: Promise<unknown> | undefined;
+    await assert.rejects(
+      withLocalCallBudget(async () => {
+        await delay(60);
+        lateStep = engine.call("query", {}).catch((error: Error) => error);
+        return lateStep;
+      }, 10),
+      /Engine timed out; inspect the run before retrying/,
+    );
+    await delay(120);
+    assert.match(
+      String(await lateStep),
+      /budget used up before this step started; inspect the run before retrying/,
+    );
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a stalled app-side step ends the call at its budget, with no bridge process running", async () => {
+  const started = Date.now();
+  await assert.rejects(
+    withLocalCallBudget(() => new Promise<never>(() => {}), 150),
+    /Engine timed out; inspect the run before retrying/,
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 140 && elapsed < 1000, `replied after ${elapsed} ms`);
+});
+
+test("a bridge process still running at the budget reports its own timeout and cleanup", async () => {
+  const { directory, script } = await fakeBridge(
+    `setInterval(() => {}, 1000);`,
   );
   try {
     const engine = new PythonEngine(directory, process.env, {
       command: process.execPath,
       args: [script],
+      dispatchTimeoutMs: 5000,
     });
     await assert.rejects(
-      withLocalCallBudget(async () => {
-        await delay(30);
-        return engine.call("query", {});
-      }, 10),
-      /budget used up before this step started; inspect the run before retrying/,
+      withLocalCallBudget(() => engine.call("query", {}), 200),
+      /Engine timed out; inspect the run before retrying\.$/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
