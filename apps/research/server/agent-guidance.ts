@@ -145,13 +145,45 @@ export function serverInstructions(jobs: boolean): string {
     "Use the same request_id and identical arguments to recover a lost response. Never automatically resubmit submission_unknown work or create a new request ID to recover it. ";
   if (!dropped.includes(recovery))
     throw new Error("Guidance text changed; update the local variant");
-  return replaceOnce(
+  let text =
     SOURCESQL_SERVER_INSTRUCTIONS.slice(0, from) +
-      `Complete the workflow. ${LOCAL_SYNCHRONOUS_GUIDANCE} ${recovery}` +
-      SOURCESQL_SERVER_INSTRUCTIONS.slice(to + end.length),
-    "sourcesql_job_status reads hosted progress; ",
-    "",
-  );
+    `Complete the workflow. ${LOCAL_SYNCHRONOUS_GUIDANCE} ${recovery}` +
+    SOURCESQL_SERVER_INSTRUCTIONS.slice(to + end.length);
+  text = replaceOnce(text, "sourcesql_job_status reads hosted progress; ", "");
+  // Job-ID directions stay for hosted callers; locally they would send an
+  // agent after a handle that does not exist.
+  for (const [hostedSentence, qualified] of HOSTED_ONLY_SENTENCES)
+    text = replaceOnce(text, hostedSentence, qualified);
+  return text;
+}
+
+const HOSTED_ONLY_SENTENCES: [string, string][] = [
+  [
+    "A real provider refusal is shown through open_research with its saved job_id;",
+    "Hosted execution only: a real provider refusal is shown through open_research with its saved job_id;",
+  ],
+  [
+    "For a saved job blocked by capacity, open_research with its job_id",
+    "Hosted execution only: for a saved job blocked by capacity, open_research with its job_id",
+  ],
+  [
+    "Preserve completed result_id handles and the failed or blocked job_id. When that job_id exists, call",
+    "Preserve completed result_id handles. Hosted execution only: preserve the failed or blocked job_id and, when it exists, call",
+  ],
+  [
+    "Poll the same job until its preflight output is available;",
+    "Hosted execution only: poll the same job until its preflight output is available;",
+  ],
+];
+
+export function recoverRunDescription(jobs: boolean, hosted: string): string {
+  return jobs
+    ? hosted
+    : replaceOnce(
+        hosted,
+        " Poll any pending job and repeat the same arguments to recover its result.",
+        "",
+      );
 }
 
 export function queryDescription(jobs: boolean): string {

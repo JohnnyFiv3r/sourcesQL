@@ -33,6 +33,48 @@ const RUN_TOOLS = [
   "sourcesql_recover_run",
   "sourcesql_resume_run",
 ];
+// The full hosted inventory, so a tool added or dropped fails here by name.
+const HOSTED_TOOLS = [
+  "amend_observation",
+  "append_research",
+  "append_research_updates",
+  "check_research_updates",
+  "expand_research",
+  "export_research",
+  "find_research_row",
+  "finish_research",
+  "finish_research_update",
+  "get_research_request",
+  "get_research_update",
+  "import_research",
+  "import_research_bundle",
+  "import_research_checkpoint",
+  "open_research",
+  "publish_research_update",
+  "refresh_research",
+  "remove_research",
+  "rename_research",
+  "research_page",
+  "research_status",
+  "restore_research",
+  "resume_research_checkpoint",
+  "review_refresh",
+  "review_research_update",
+  "save_research_checkpoint",
+  "sourcesql_cancel",
+  "sourcesql_cancel_job",
+  "sourcesql_capabilities",
+  "sourcesql_explain",
+  "sourcesql_inspect_evidence",
+  "sourcesql_job_status",
+  "sourcesql_materialize_research",
+  "sourcesql_query",
+  "sourcesql_read_result",
+  "sourcesql_recover_run",
+  "sourcesql_resume_run",
+  "sourcesql_run_status",
+  "sourcesql_start_job",
+];
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
 
 async function withClient<T>(
@@ -78,15 +120,16 @@ test("local listing omits job tools because the engine has no jobs, not because 
   const names = tools.map((tool) => tool.name);
   for (const name of JOB_TOOLS) assert.ok(!names.includes(name), name);
   for (const name of RUN_TOOLS) assert.ok(names.includes(name), name);
-  assert.equal(names.length, 36);
+  assert.deepEqual(
+    [...names].sort(),
+    HOSTED_TOOLS.filter((name) => !JOB_TOOLS.includes(name)),
+  );
 });
 
 test("hosted listing keeps all three job tools", async () => {
   const { tools } = await listing(stub(true));
   const names = tools.map((tool) => tool.name);
-  for (const name of [...JOB_TOOLS, ...RUN_TOOLS])
-    assert.ok(names.includes(name), name);
-  assert.equal(names.length, 39);
+  assert.deepEqual([...names].sort(), HOSTED_TOOLS);
 });
 
 test("stale job-tool call gets the synchronous no-jobs error and the engine is not called", async () => {
@@ -209,6 +252,33 @@ test("query outlives the read limit while reads are still cut short", async () =
   }
 });
 
+test("exactly the documented methods get the long limit", async () => {
+  const { directory, script } = await fakeBridge(
+    `await new Promise((r) => setTimeout(r, 600)); answer({ok: request.method});`,
+  );
+  try {
+    const engine = new PythonEngine(directory, process.env, {
+      command: process.execPath,
+      args: [script],
+      readTimeoutMs: 200,
+      dispatchTimeoutMs: 5000,
+    });
+    for (const method of [
+      "query",
+      "explain",
+      "resume_run",
+      "recover_run",
+      "import_table",
+      "import",
+    ])
+      assert.deepEqual(await engine.call(method, {}), { ok: method }, method);
+    for (const method of ["capabilities", "read_result", "run_status"])
+      await assert.rejects(engine.call(method, {}), /Engine timed out/, method);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 async function processStopped(pid: number) {
   try {
     process.kill(pid, 0);
@@ -298,6 +368,22 @@ test("local text never mentions job tools; hosted text is unchanged", async () =
   assert.match(local.instructions!, /Local queries are synchronous/);
   for (const tool of local.tools)
     assert.doesNotMatch(String(tool.description ?? ""), mentions, tool.name);
+  // No local text may tell an agent to poll, and the instructions may not
+  // send it after a job_id, unless the sentence says it is for hosted
+  // execution. (open_research still names job_id as an argument.)
+  const sentences = (text: string) => text.split(/(?<=[.;])\s+/);
+  const texts = [
+    local.instructions!,
+    ...local.tools.map((tool) => String(tool.description ?? "")),
+  ];
+  for (const sentence of texts
+    .flatMap(sentences)
+    .filter((text) => /\bpoll (any|the|a|sourcesql_)/i.test(text)))
+    assert.match(sentence, /[Hh]osted/, sentence);
+  for (const sentence of sentences(local.instructions!).filter((text) =>
+    /job_id/.test(text),
+  ))
+    assert.match(sentence, /[Hh]osted/, sentence);
   const hosted = await listing(stub(true));
   assert.equal(hosted.instructions, SOURCESQL_SERVER_INSTRUCTIONS);
   assert.equal(

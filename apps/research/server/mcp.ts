@@ -83,6 +83,7 @@ import {
 import {
   serverInstructions,
   queryDescription,
+  recoverRunDescription,
   SOURCESQL_CAPABILITIES_DESCRIPTION,
   SOURCESQL_QUERY_PARAMETER_DESCRIPTIONS,
   SOURCESQL_OPEN_RESEARCH_DESCRIPTION,
@@ -2376,8 +2377,10 @@ export function createServer(
     tools.registerTool(
       "sourcesql_recover_run",
       {
-        description:
+        description: recoverRunDescription(
+          jobs,
           "Recover a bounded page of successful source acquisitions retained by a stopped or partial run. No search or model calls. Hosted recovery can start a provider-free Flight and consume configured Flight capacity. The result is explicitly incomplete input data; author corrected SQL over it and do not present raw recovery as finished research. Poll any pending job and repeat the same arguments to recover its result.",
+        ),
         inputSchema: z
           .object({
             run_id: id,
