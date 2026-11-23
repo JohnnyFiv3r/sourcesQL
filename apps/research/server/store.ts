@@ -174,6 +174,30 @@ function effectiveClassification(
   }
   return snapshot.dataClassification;
 }
+/**
+ * Host-written evidence cannot back "verified" or "conflicting". Applied to
+ * the replay payload as well as the review view, so no copy of an assessment
+ * (stored, exported or compared) states a status the app does not stand
+ * behind. Idempotent, and a no-op for engine-backed results.
+ */
+function withHostEvidenceDowngrade(
+  result: AppendResearchInput,
+): AppendResearchInput {
+  if (result.snapshot.dataRef || !result.assessments) return result;
+  return {
+    ...result,
+    assessments: result.assessments.map((assessment) =>
+      assessment.status === "unverified"
+        ? assessment
+        : {
+            ...assessment,
+            status: "unverified" as const,
+            reason: HOST_EVIDENCE_REASON,
+          },
+    ),
+  };
+}
+
 export class ResearchStore {
   private queue: Promise<unknown> = Promise.resolve();
   private versions = new WeakMap<State, string>();
@@ -650,7 +674,11 @@ export class ResearchStore {
           "Research request not found. Return the original request_id.",
         );
       if (request.status === "completed") {
-        if (canonicalJson(request.completion) !== canonicalJson(result))
+        if (
+          canonicalJson(
+            request.completion && withHostEvidenceDowngrade(request.completion),
+          ) !== canonicalJson(withHostEvidenceDowngrade(result))
+        )
           throw new Error(
             "This request already has different results. Start a new request.",
           );
@@ -746,16 +774,8 @@ export class ResearchStore {
       });
       request.status = "completed";
       request.resultSnapshotId = result.snapshot.id;
-      request.assessments = result.assessments?.map((assessment) =>
-        result.snapshot.dataRef || assessment.status === "unverified"
-          ? assessment
-          : {
-              ...assessment,
-              status: "unverified" as const,
-              reason: HOST_EVIDENCE_REASON,
-            },
-      );
-      request.completion = result;
+      request.completion = withHostEvidenceDowngrade(result);
+      request.assessments = request.completion.assessments;
       await this.write(state);
       return this.view(state, result.snapshot.id);
     });
@@ -1156,7 +1176,13 @@ export class ResearchStore {
       ),
       snapshots: state.snapshots.filter((s) => selected.has(s.id)),
       amendments: state.amendments.filter((a) => selected.has(a.snapshot_id)),
-      requests: state.requests?.filter((r) => selected.has(r.snapshotId)),
+      requests: state.requests
+        ?.filter((r) => selected.has(r.snapshotId))
+        .map((r) =>
+          r.completion
+            ? { ...r, completion: withHostEvidenceDowngrade(r.completion) }
+            : r,
+        ),
       titles: Object.fromEntries(
         Object.entries(state.titles ?? {}).filter(([key]) => selected.has(key)),
       ),

@@ -653,6 +653,49 @@ test("host-supplied evidence cannot make a refresh verified or conflicting", asy
     );
   }
 });
+test("an export never carries a verified or conflicting status for host evidence", async () => {
+  for (const status of ["verified", "conflicting"] as const) {
+    const { store, directory } = await setup(refreshSeed);
+    const request = input();
+    await store.beginResearch(request, "refresh");
+    const original = proposal(request.request_id, status, "host");
+    await store.appendResearch(original);
+    const exported = await store.exportBundle("refresh-child");
+    const saved = exported.state.requests!.find(
+      (r) => r.id === request.request_id,
+    )!;
+    for (const assessments of [
+      saved.assessments,
+      saved.completion?.assessments,
+    ])
+      assert.deepEqual(
+        assessments?.map((a) => [a.status, (a as { reason?: string }).reason]),
+        [
+          [
+            "unverified",
+            "the evidence does not match any source text sourcesQL retained.",
+          ],
+        ],
+      );
+    // Replaying the original payload is still the same completion.
+    await store.appendResearch(original);
+    // A completion stored before this rule is also exported as unverified.
+    const file = join(directory, "research.json");
+    const state = JSON.parse(await readFile(file, "utf8"));
+    const legacy = state.requests.find(
+      (r: { id: string }) => r.id === request.request_id,
+    );
+    legacy.completion = original;
+    await writeFile(file, JSON.stringify(state, null, 2));
+    const reopened = new ResearchStore(directory, refreshSeed, trustDataRef);
+    const again = await reopened.exportBundle("refresh-child");
+    assert.equal(
+      again.state.requests![0].completion?.assessments?.[0].status,
+      "unverified",
+    );
+    await reopened.appendResearch(original);
+  }
+});
 test("engine-backed evidence still verifies and can be accepted", async () => {
   const { store } = await setup(refreshSeed);
   const request = input();

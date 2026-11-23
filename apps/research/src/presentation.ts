@@ -7,6 +7,7 @@ import {
 export const HOST_ASSERTED_LABEL = "Host-asserted";
 export const HOST_ASSERTED_TITLE =
   "Host-asserted: the agent that saved this research supplied this source. sourcesQL has not fetched or checked it.";
+import type { Assertion } from "./schema.js";
 export { snapshotAssertion, type Assertion } from "./schema.js";
 export const HOST_ASSERTED_NOTICE =
   'Sources and quotes in a snapshot marked assertion "host" were supplied by the agent that saved it: sourcesQL has not fetched or checked them.';
@@ -25,10 +26,10 @@ export function nextTableSort(
 }
 
 /** Opening a selected URL is navigation, not an attribution of other cell values. */
-export function sourceLinksForValue(
-  sources: { url: string; label?: string }[],
+export function sourceLinksForValue<T extends { url: string; label?: string }>(
+  sources: T[],
   value: unknown,
-): { url: string; label?: string }[] {
+): (T | { url: string; label?: string })[] {
   if (sources.length || typeof value !== "string") return sources;
   try {
     const url = new URL(value);
@@ -38,6 +39,18 @@ export function sourceLinksForValue(
   } catch {
     return [];
   }
+}
+
+/**
+ * A host-asserted source always goes through the picker, which is where its
+ * label is shown; a lone engine-observed source opens directly.
+ */
+export function needsSourcePicker(
+  sources: { url: string; assertion?: Assertion }[],
+): boolean {
+  return (
+    sources.length > 1 || sources.some((source) => source.assertion === "host")
+  );
 }
 
 const acronym = new Map([
@@ -146,7 +159,21 @@ export function hostAssertedSummary(snapshot: Snapshot): string {
     rows++;
     for (const source of sources) urls.add(source.url);
   }
-  return urls.size
-    ? `${urls.size} sources on ${rows} rows are host-asserted: sourcesQL has not fetched or checked them.`
+  if (urls.size)
+    return `${urls.size} sources on ${rows} rows are host-asserted: sourcesQL has not fetched or checked them.`;
+  // Quotes with no source URL are still host text; say so rather than nothing.
+  let quotes = 0,
+    quoteRows = 0;
+  for (const row of snapshot.rows) {
+    const count = Object.values(row.evidence).reduce(
+      (sum, list) => sum + list.filter((q) => q.trim()).length,
+      0,
+    );
+    if (!count) continue;
+    quotes += count;
+    quoteRows++;
+  }
+  return quotes
+    ? `${quotes} quotes on ${quoteRows} rows are host-asserted: sourcesQL has not checked them against fetched text.`
     : "";
 }

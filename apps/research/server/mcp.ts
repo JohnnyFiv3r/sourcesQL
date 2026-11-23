@@ -16,7 +16,7 @@ import {
   type ResultReference,
   type EngineResult,
 } from "./engine.js";
-import { originForSnapshot } from "../src/schema.js";
+import { originForSnapshot, sourcesForSelection } from "../src/schema.js";
 import {
   hostAssertedSummary,
   hostQuoteText,
@@ -275,7 +275,18 @@ export function createServer(
             })),
           }
         : { ...snapshot, assertion: "engine" as const };
-    const hostSnapshot = snapshotAssertion(context.originalSnapshot) === "host";
+    // A source is host-asserted if any host snapshot in the context names it;
+    // the cautious reading wins when a URL appears in both kinds.
+    const hostOriginal = snapshotAssertion(context.originalSnapshot) === "host";
+    const hostUrls = new Set(
+      [context.originalSnapshot, ...context.acceptedObservationsAtRequest]
+        .filter((snapshot) => snapshotAssertion(snapshot) === "host")
+        .flatMap((snapshot) =>
+          snapshot.rows.flatMap((row) =>
+            sourcesForSelection(row).map((source) => source.url),
+          ),
+        ),
+    );
     return {
       ...context,
       originalSnapshot: markSnapshot(context.originalSnapshot),
@@ -285,7 +296,10 @@ export function createServer(
         ...entry,
         sources: entry.sources.map((source) => ({
           ...source,
-          assertion: hostSnapshot ? ("host" as const) : ("engine" as const),
+          assertion:
+            hostOriginal || hostUrls.has(source.url)
+              ? ("host" as const)
+              : ("engine" as const),
         })),
       })),
       assertionNotice: HOST_ASSERTED_NOTICE,

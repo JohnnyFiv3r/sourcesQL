@@ -97,6 +97,7 @@ import {
   presentationColumns,
   nextTableSort,
   sourceLinksForValue,
+  needsSourcePicker,
 } from "./presentation.js";
 
 const MAX_PAGE_SIZE = 25;
@@ -1369,6 +1370,7 @@ function Workspace() {
       : [],
     currentValue,
   );
+  const sourcePicker = needsSourcePicker(sources);
   function changePage(next: number) {
     setSelectedId("");
     setTab("actions");
@@ -2480,7 +2482,7 @@ function Workspace() {
                   className="review-source"
                   disabled={busy}
                   onClick={() =>
-                    sources.length > 1
+                    sourcePicker
                       ? sourceDialog.current?.showModal()
                       : sources[0] && void visitSource(sources[0].url)
                   }
@@ -2832,7 +2834,7 @@ function Workspace() {
                   {cellProposals.length || view.refresh ? "Review" : "Correct"}
                 </span>
               </Button>
-              {sources.length > 1 ? (
+              {sourcePicker ? (
                 <Button
                   variant="ghost"
                   className="source-action"

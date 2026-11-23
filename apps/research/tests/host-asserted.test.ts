@@ -30,6 +30,7 @@ import {
 import { SourceList } from "../src/source-list.js";
 import {
   HOST_ASSERTED_LABEL,
+  needsSourcePicker,
   HOST_ASSERTED_TITLE,
 } from "../src/presentation.js";
 
@@ -451,7 +452,9 @@ test("an engine-backed result shows no host-asserted label anywhere", async (t) 
 });
 
 test("materialising a forged snapshot gives the engine no evidence and no sources", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "sourcesql-host-materialize-"));
+  const directory = await mkdtemp(
+    join(tmpdir(), "sourcesql-host-materialize-"),
+  );
   t.after(() => rm(directory, { recursive: true, force: true }));
   const engine = new PythonEngine(undefined, {
     ...process.env,
@@ -476,4 +479,128 @@ test("materialising a forged snapshot gives the engine no evidence and no source
   const json = JSON.stringify(materialized.structuredContent);
   assert.doesNotMatch(json, /made-up\.example/);
   assert.doesNotMatch(json, /moon is made of cheese/);
+});
+
+// --- Gaps QA found after the first build. ---
+
+test("a lone host-asserted source goes through the labelled picker, a lone engine source does not", () => {
+  assert.equal(needsSourcePicker([]), false);
+  assert.equal(needsSourcePicker([{ url: "https://a.example" }]), false);
+  assert.equal(
+    needsSourcePicker([{ url: "https://a.example", assertion: "engine" }]),
+    false,
+  );
+  assert.equal(
+    needsSourcePicker([{ url: FORGED_URL, assertion: "host" }]),
+    true,
+  );
+  assert.equal(
+    needsSourcePicker([
+      { url: "https://a.example" },
+      { url: "https://b.example" },
+    ]),
+    true,
+  );
+});
+
+test("a quote-only host snapshot is attributed to the host in import and open text", async (t) => {
+  const { client } = await hostFixture(t);
+  const quoteOnly = snapshotSchema.parse({
+    ...forgedV2(),
+    id: "quote-only-1",
+    rows: forgedV2().rows.map((row) => ({
+      ...row,
+      sourceUrl: null,
+      sources: undefined,
+      cellSources: undefined,
+    })),
+  });
+  assert.ok(Object.values(quoteOnly.rows[0].evidence).flat().length > 0);
+  const sentence =
+    "1 quotes on 1 rows are host-asserted: sourcesQL has not checked them against fetched text.";
+  const saved = await client.callTool({
+    name: "import_research",
+    arguments: { snapshot: quoteOnly },
+  });
+  assert.equal(saved.isError, undefined, textOf(saved));
+  assert.ok(textOf(saved).includes(sentence), textOf(saved));
+  const opened = await client.callTool({
+    name: "open_research",
+    arguments: { snapshot_id: "quote-only-1" },
+  });
+  assert.ok(textOf(opened).includes(sentence), textOf(opened));
+});
+
+test("request context marks a host URL host-asserted even when the parent is engine-backed", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sourcesql-mixed-context-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const data = join(directory, "data");
+  const parent = resultSnapshot(engineResult(), reference);
+  const store = new ResearchStore(data, parent, async (s) => s);
+  await store.import({
+    ...snapshotSchema.parse({
+      id: "host-child",
+      title: "Host child",
+      sourceResultSetId: "r0000000000f",
+      capturedAt: "2026-11-23",
+      coverage: "Host-written test data",
+      columns: [{ key: "capacity", label: "Capacity" }],
+      rows: [
+        {
+          id: parent.rows[0].id,
+          values: { capacity: "900 MW" },
+          sourceUrl: FORGED_URL,
+          evidence: { capacity: [FORGED_QUOTE] },
+          verificationNote: "verified",
+        },
+      ],
+    }),
+    parentSnapshotId: parent.id,
+  });
+  // What an earlier build stored when a host refresh was accepted.
+  const file = join(data, "research.json");
+  const state = JSON.parse(await readFile(file, "utf8"));
+  state.amendments.push({
+    snapshot_id: parent.id,
+    row_id: parent.rows[0].id,
+    field: "capacity",
+    value: "900 MW",
+    reason: "Accepted evidence from host-child",
+    sourceSnapshotId: "host-child",
+    expected_revision: 0,
+    mutation_id: randomUUID(),
+    revision: 1,
+    originalValue: "500 MW",
+    createdAt: "2026-11-23T10:00:00.000Z",
+  });
+  await writeFile(file, JSON.stringify(state, null, 2));
+  const reopened = new ResearchStore(data, parent, async (s) => s);
+  const requestId = randomUUID();
+  await reopened.beginResearch(
+    {
+      request_id: requestId,
+      snapshot_id: parent.id,
+      row_id: parent.rows[0].id,
+      field: "capacity",
+      question: "What else is known about this capacity?",
+    },
+    "expand",
+  );
+  const client = await connect(reopened, directory);
+  t.after(() => client.close());
+  const response = await client.callTool({
+    name: "get_research_request",
+    arguments: { request_id: requestId },
+  });
+  assert.equal(response.isError, undefined, textOf(response));
+  const sources = (
+    response.structuredContent as {
+      selectedSources: {
+        sources: { url: string; assertion: string }[];
+      }[];
+    }
+  ).selectedSources.flatMap((entry) => entry.sources);
+  const byUrl = Object.fromEntries(sources.map((s) => [s.url, s.assertion]));
+  assert.equal(byUrl[FORGED_URL], "host");
+  assert.equal(byUrl["https://source.example/campus"], "engine");
 });
