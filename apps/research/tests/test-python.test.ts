@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureBuilt } from "./ensure-built.js";
 import { resolveTestPython } from "./python.js";
 
 const appDirectory = fileURLToPath(new URL("..", import.meta.url));
@@ -155,29 +156,49 @@ test("no test or script falls back to the removed interpreter path", async () =>
   }
 });
 
-test("preflight names the build step when the app has not been built", async () => {
+test("ensureBuilt builds once when dist is missing and passes the build status on", async () => {
   await withRoot(async (root) => {
-    // A copy of the app directory without dist/ shows the unbuilt state.
-    const app = join(root, "app");
-    await mkdir(join(app, "tests"), { recursive: true });
-    for (const name of ["preflight.ts", "python.ts"]) {
-      await writeFile(
-        join(app, "tests", name),
-        await readFile(join(appDirectory, "tests", name), "utf8"),
-      );
-    }
-    const python = await fakeInterpreter(join(root, "python"));
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", join(app, "tests/preflight.ts")],
-      {
-        cwd: appDirectory,
-        env: { ...process.env, SOURCESQL_TEST_PYTHON: python },
-        encoding: "utf8",
-      },
+    const logged: string[] = [];
+    let builds = 0;
+    const missing = join(root, "dist/research.html");
+    assert.equal(
+      ensureBuilt(
+        missing,
+        () => (builds++, 0),
+        (line) => logged.push(line),
+      ),
+      0,
     );
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /dist\/research\.html was not found/);
-    assert.match(result.stderr, /npm run build/);
+    assert.equal(builds, 1);
+    assert.match(
+      logged.join("\n"),
+      /dist\/research\.html is missing; running npm run build once/,
+    );
+    assert.equal(
+      ensureBuilt(
+        missing,
+        () => 3,
+        () => {},
+      ),
+      3,
+    );
+  });
+});
+
+test("ensureBuilt does nothing when dist already exists", async () => {
+  await withRoot(async (root) => {
+    const dist = join(root, "dist/research.html");
+    await mkdir(join(root, "dist"));
+    await writeFile(dist, "<html></html>");
+    let builds = 0;
+    assert.equal(
+      ensureBuilt(
+        dist,
+        () => (builds++, 0),
+        () => assert.fail("no message"),
+      ),
+      0,
+    );
+    assert.equal(builds, 0);
   });
 });
