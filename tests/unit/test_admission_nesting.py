@@ -236,3 +236,16 @@ def test_over_long_declared_types_are_always_refused_with_a_classified_error(dec
         validate_type(declared)
     assert error.value.code == "invalid_output"
     assert_clean(error.value.safe_message)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "DECIMAL(00000000000000000018,2)",
+        "DECIMAL(18,00000000000000000002)",
+        "DECIMAL(18,00000000000000000000)",
+        "DECIMAL(" + "0" * 3000 + "18, 2)",
+    ],
+)
+def test_decimal_leading_zeros_keep_their_numeric_value(declared):
+    assert validate_type(declared).startswith("DECIMAL(18,")

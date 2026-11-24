@@ -519,9 +519,10 @@ def _validate_type_ast(logical_type: str) -> str:
                     or not parameter.this.this.isdigit()
                 ):
                     refuse("Invalid decimal precision", "invalid_output")
-                # Anything past 18 digits is far over the DECIMAL limits; the cap keeps
-                # Python's integer-conversion digit limit out of reach for long types.
-                digits = parameter.this.this
+                # Leading zeros do not change the value. Past 18 significant digits it is
+                # far over the DECIMAL limits; the cap keeps Python's integer-conversion
+                # digit limit out of reach for long types.
+                digits = parameter.this.this.lstrip("0") or "0"
                 values.append(int(digits) if len(digits) <= 18 else 10**18)
             precision, scale = values[0], values[1] if len(values) == 2 else 0
             if 1 <= precision <= 38 and 0 <= scale <= precision:
