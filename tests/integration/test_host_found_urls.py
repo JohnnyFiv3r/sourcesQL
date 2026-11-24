@@ -347,6 +347,14 @@ def test_fixture_profile_advertises_the_host_route_so_it_runs_offline(tmp_path):
 GUIDANCE = pathlib.Path(__file__).parents[2] / "apps/research/server/agent-guidance.ts"
 
 
+def test_walkthrough_says_the_route_is_not_live_qualified_while_capabilities_say_so(tmp_path):
+    docs = (pathlib.Path(__file__).parents[2] / "docs/language.md").read_text()
+    walkthrough = docs.split("## Researching URLs your agent found", 1)[1]
+    assert "This route has not been live-qualified" in walkthrough.split("\n## ", 1)[0]
+    entry = profile_entry(tmp_path, allow_public_source_hosts=True)
+    assert entry["fetch"]["live_qualified"] is False
+
+
 def test_documented_fetch_example_runs_in_fixture_mode(tmp_path):
     match = re.search(r"SOURCESQL_FETCH_EXAMPLE = `(.*?)`;", GUIDANCE.read_text(), re.DOTALL)
     assert match, "SOURCESQL_FETCH_EXAMPLE not found in agent-guidance.ts"

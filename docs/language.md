@@ -151,7 +151,9 @@ pages. This needs no sourcesQL search provider. It needs a profile that may fetc
 model for extraction. `sourcesql_capabilities` reports it per profile as
 `host_search_route.available`; `search.configured` is false and `fetch.configured`
 is true. `WEB_SEARCH` on such a profile is refused with `provider_unavailable`
-before any fetch or model call.
+before any fetch or model call. This route has not been live-qualified: it is
+tested with fixtures and controlled HTML, and `fetch.live_qualified` stays false
+until a live run over real pages is recorded.
 
 1. Search with your own tool. Treat every title, snippet and date as a lead.
 2. Remove duplicate URLs and keep public HTML or text pages.
