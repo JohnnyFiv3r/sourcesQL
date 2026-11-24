@@ -912,6 +912,22 @@ class Engine:
         budget.on_reserve = reserved
 
         fetch_summary = {"used": False, "failed": 0}
+        # The engine's own record of each WEB_FETCH attempt, keyed by the URL the query asked
+        # for. record_lead_batch reads this and never an output column, which a host can write.
+        fetch_outcomes: dict[str, dict] = {}
+
+        def note_fetch_outcome(requested: str, row: dict, failure: str | None) -> None:
+            outcome = {
+                "url": requested,
+                "status": "failed" if failure else "ok",
+                "failure": failure,
+                "source_version_id": None if failure else row.get("source_version_id"),
+            }
+            # A repeated URL keeps its first entry unless the later attempt succeeded.
+            if requested not in fetch_outcomes or (
+                fetch_outcomes[requested]["status"] == "failed" and not failure
+            ):
+                fetch_outcomes[requested] = outcome
 
         def capture_provider_state():
             if registry is None:
@@ -1433,8 +1449,12 @@ class Engine:
                     fetch_summary["failed"] += sum(
                         row.get("status") == "fetch_failed" for row in rows
                     )
+                    if operator == "WEB_FETCH" and len(rows) != len(args):
+                        raise SourcesQLError(
+                            "evidence_invalid", "Fetch outcome count mismatch", "fetch"
+                        )
                     normalized = []
-                    for row in rows:
+                    for index, row in enumerate(rows):
                         if row.get("status") == "fetch_failed":
                             receipt["errors"].append(
                                 {
@@ -1449,6 +1469,10 @@ class Engine:
                                 )
                             # A failed URL stays visible with its reason. It has no
                             # source version, so nothing can cite it.
+                            if operator == "WEB_FETCH":
+                                note_fetch_outcome(
+                                    args[index], row, row.get("failure_reason") or "provider_error"
+                                )
                             normalized.append(
                                 {
                                     "url": row["url"],
@@ -1466,6 +1490,7 @@ class Engine:
                         if operator == "WEB_FETCH":
                             # After add_source: retained source versions stay as acquired.
                             row["fetch_status"], row["fetch_failure"] = "ok", None
+                            note_fetch_outcome(args[index], row, None)
                         normalized.append(row)
                     target = context.get("_lineage_output")
                     if isinstance(target, dict):
@@ -1840,6 +1865,11 @@ class Engine:
                         "source_versions": list(sources.values()),
                         "evidence": evidence,
                         "operator_outcomes": outcomes,
+                        **(
+                            {"fetch_outcomes": list(fetch_outcomes.values())}
+                            if fetch_summary["used"]
+                            else {}
+                        ),
                         "lineage_precision": "cell_where_proven" if bound_cells else "input_set",
                         "bound_evidence_cells": bound_cells,
                         "source_bindings": source_bindings,
@@ -2141,9 +2171,11 @@ class Engine:
         meta, table = self.store.read(result_id)
         return meta, [dict(row) for row in table.rows]
 
-    def _publish_lead_table(self, columns, rows, row_ids, provenance, parents, stamp):
+    def _publish_lead_table(
+        self, columns, rows, row_ids, provenance, parents, stamp, classification="host_reported"
+    ):
         table = validate_table(columns, rows, row_ids, **self._lead_table_limits())
-        identity = digest([table.to_dict(), row_ids, "host_reported", provenance, parents])
+        identity = digest([table.to_dict(), row_ids, classification, provenance, parents])
         result_id = f"wq_{provenance['table']}_" + identity[:32]
         run_id = "run_lead_" + identity[:32]
         receipt = {
@@ -2163,14 +2195,14 @@ class Engine:
             "warnings": [],
             "errors": [],
             "goal_status": "not_evaluated",
-            "data_classification": "host_reported",
+            "data_classification": classification,
             "parents": parents,
         }
         meta = {
             "result_id": result_id,
             "run_id": run_id,
             "parents": parents,
-            "data_classification": "host_reported",
+            "data_classification": classification,
             "provenance": provenance,
             "row_ids": row_ids,
             "created_at": stamp,
@@ -2219,6 +2251,16 @@ class Engine:
             if published:
                 return reply
         raise SourcesQLError("budget_exhausted", "Lead set is busy; retry the same call")
+
+    @staticmethod
+    def _lead_totals(leads) -> dict:
+        count = lambda status: sum(1 for row in leads if row["lead_status"] == status)  # noqa: E731
+        return {
+            "leads": len(leads),
+            "fetched": count("fetched"),
+            "failed": count("failed"),
+            "pending": count("pending"),
+        }
 
     def _lead_revision(self, request_key, request_hash, set_key, title, submitted):
         head = self.store.lead_set_head(set_key) if set_key else None
@@ -2287,6 +2329,7 @@ class Engine:
         stamp = now()
         all_leads = [by_id[key] for key in sorted(by_id)]
         all_hits = hit_rows + new_hits
+        totals = self._lead_totals(all_leads)
 
         hit_ids = [
             "hit_" + digest([set_key, revision, i])[:24] if i >= len(hit_rows) else None
@@ -2322,20 +2365,36 @@ class Engine:
                 "title": title,
                 "assertion": "host",
                 "hits_result_id": hits_meta["result_id"],
+                "totals": totals,
             },
             # The leads revision lists its hits as a parent, so an export of anything built on
-            # the leads carries the hits view with it. Earlier revisions are not parents:
-            # chaining them would make every export carry the whole history. Revoking any
+            # the leads carries the hits view with it. Earlier revisions are not parents while
+            # no batch was recorded: chaining them would make every export carry the whole
+            # history. Once a batch is recorded the previous leads revision is listed too, so
+            # every recorded status keeps its path to the batch that set it. Revoking any
             # revision revokes the set (Store.revoke).
             [
                 {
                     "result_id": hits_meta["result_id"],
                     "content_sha256": digest(hits_table.to_dict()),
-                }
+                },
+                *(
+                    [
+                        {
+                            "result_id": head["leads_result_id"],
+                            "content_sha256": lead_meta["content_sha256"],
+                        }
+                    ]
+                    if head and any(row["lead_status"] != "pending" for row in lead_rows)
+                    else []
+                ),
             ],
             stamp,
+            # A set that has read private data stays private.
+            "private_derived"
+            if head and lead_meta.get("data_classification") == "private_derived"
+            else "host_reported",
         )
-        pending = sum(1 for row in all_leads if row["lead_status"] == "pending")
         reply = {
             "lead_set_id": set_key,
             "revision": revision,
@@ -2347,12 +2406,7 @@ class Engine:
             "already_present": accepted - len(set(by_id) - before),
             "refused": refused,
             "dates_left_out": dates_left_out,
-            "totals": {
-                "leads": len(all_leads),
-                "fetched": sum(1 for r in all_leads if r["lead_status"] == "fetched"),
-                "failed": sum(1 for r in all_leads if r["lead_status"] == "failed"),
-                "pending": pending,
-            },
+            "totals": totals,
         }
         published = self.store.commit_lead_revision(
             [(leads_table, leads_meta), (hits_table, hits_meta)],
@@ -2363,6 +2417,161 @@ class Engine:
             reply,
         )
         return reply, published
+
+    def record_lead_batch(self, request_id, lead_set_id, batch_result_id):
+        """Record what a batch query fetched as a new revision of a lead set.
+
+        Statuses come only from the engine's own per-URL fetch outcomes, stored with the batch
+        result when it ran, and matched to leads by normalized URL. No output column of the
+        batch is read, so nothing a host writes there changes a status.
+        """
+        try:
+            request_key = str(uuid.UUID(str(request_id)))
+            set_key = str(uuid.UUID(str(lead_set_id)))
+        except (ValueError, TypeError, AttributeError):
+            raise SourcesQLError(
+                "invalid_request", "request_id and lead_set_id must be UUIDs"
+            ) from None
+        if not isinstance(batch_result_id, str) or not 1 <= len(batch_result_id) <= 128:
+            raise SourcesQLError("invalid_request", "batch_result_id must be a result ID")
+        request_hash = digest({"kind": "record", "lead_set_id": set_key, "batch": batch_result_id})
+        for _ in range(5):
+            earlier = self.store.lead_request(request_key)
+            if earlier:
+                if earlier[0] != request_hash:
+                    raise SourcesQLError("invalid_request", refusal("lead_record_reused"))
+                return json.loads(earlier[1])
+            reply, published = self._record_batch(
+                request_key, request_hash, set_key, batch_result_id
+            )
+            if published:
+                return reply
+        raise SourcesQLError("budget_exhausted", "Lead set is busy; retry the same call")
+
+    def _record_batch(self, request_key, request_hash, set_key, batch_result_id):
+        head = self.store.lead_set_head(set_key)
+        if not head:
+            raise SourcesQLError("unauthorized", "Result or dependency unavailable")
+        self.store.authorize(head["leads_result_id"])
+        batch_meta = self.store.authorize(batch_result_id)
+        if not self.allow_private and batch_meta.get("data_classification") in (
+            "private_local",
+            "private_derived",
+        ):
+            raise SourcesQLError("unauthorized", "This launcher cannot access private data")
+        # The same batch recorded again is the revision it already made, under any request ID.
+        recorded = self.store.lead_batch_reply(set_key, batch_result_id)
+        if recorded:
+            self.store.remember_lead_request(request_key, request_hash, recorded)
+            return json.loads(recorded), True
+        batch_meta, _ = self.store.read(batch_result_id)
+        read = {parent["result_id"] for parent in batch_meta.get("parents", [])}
+        if not read & self.store.lead_set_results(set_key):
+            raise SourcesQLError("invalid_request", refusal("lead_batch_other_set"))
+        outcomes = batch_meta.get("fetch_outcomes")
+        if not outcomes:
+            raise SourcesQLError("invalid_request", refusal("lead_batch_nothing_fetched"))
+        lead_meta, lead_rows = self._lead_rows(head["leads_result_id"])
+        by_url = {row["url"]: row for row in lead_rows}
+        matched = {}
+        for outcome in outcomes:
+            try:
+                url = self._lead_url(outcome["url"])
+            except SourcesQLError:
+                continue
+            if url in by_url:
+                matched[url] = outcome
+        ignored = sum(
+            1
+            for outcome in outcomes
+            if outcome["status"] == "ok" and self._safe_lead_url(outcome["url"]) not in by_url
+        )
+        if not matched:
+            raise SourcesQLError("invalid_request", refusal("lead_batch_no_match"))
+        leads = [dict(row) for row in lead_rows]
+        changed = {"fetched": 0, "failed": 0}
+        failures: dict[str, int] = {}
+        for row in leads:
+            outcome = matched.get(row["url"])
+            if outcome is None:
+                continue
+            if outcome["status"] == "ok":
+                row.update(
+                    lead_status="fetched", fetch_failure=None, batch_result_id=batch_result_id
+                )
+                changed["fetched"] += 1
+            elif row["lead_status"] != "fetched":
+                code = outcome.get("failure") or "provider_error"
+                row.update(
+                    lead_status="failed", fetch_failure=code, batch_result_id=batch_result_id
+                )
+                changed["failed"] += 1
+                failures[code] = failures.get(code, 0) + 1
+        skipped = {
+            self._safe_lead_url(url) for url in batch_meta["receipt"].get("not_fetched_urls", [])
+        }
+        not_fetched = sum(1 for row in leads if row["url"] in skipped)
+        revision = head["revision"] + 1
+        totals = self._lead_totals(leads)
+        provenance = {
+            **lead_meta["provenance"],
+            "revision": revision,
+            "totals": totals,
+            "recorded_batch_result_id": batch_result_id,
+        }
+        # Private data in either input makes the new revision private; it never becomes public.
+        private = lead_meta.get("data_classification") == "private_derived" or batch_meta.get(
+            "data_classification"
+        ) in ("private_local", "private_derived")
+        hits_meta = self.store.authorize(head["hits_result_id"])
+        table, meta = self._publish_lead_table(
+            self.LEAD_COLUMNS,
+            leads,
+            lead_meta["row_ids"],
+            provenance,
+            [
+                {
+                    "result_id": head["hits_result_id"],
+                    "content_sha256": hits_meta["content_sha256"],
+                },
+                {
+                    "result_id": head["leads_result_id"],
+                    "content_sha256": lead_meta["content_sha256"],
+                },
+                {"result_id": batch_result_id, "content_sha256": batch_meta["content_sha256"]},
+            ],
+            now(),
+            "private_derived" if private else "host_reported",
+        )
+        reply = {
+            "lead_set_id": set_key,
+            "revision": revision,
+            "result_id": meta["result_id"],
+            "batch_result_id": batch_result_id,
+            "fetched": changed["fetched"],
+            "failed": changed["failed"],
+            "failure_counts": dict(sorted(failures.items(), key=lambda item: (-item[1], item[0]))),
+            "not_fetched": not_fetched,
+            "ignored": ignored,
+            "totals": totals,
+        }
+        published = self.store.commit_lead_revision(
+            [(table, meta)],
+            set_key,
+            revision,
+            request_key,
+            request_hash,
+            reply,
+            batch_result_id=batch_result_id,
+            hits_result_id=head["hits_result_id"],
+        )
+        return reply, published
+
+    def _safe_lead_url(self, url):
+        try:
+            return self._lead_url(url)
+        except SourcesQLError:
+            return None
 
     def export(self, result_id):
         records = {}

@@ -92,7 +92,7 @@ def arrow_value(value, dtype):
         return [arrow_value(v, dtype.expressions[0]) for v in value]
     if kind == "STRUCT":
         return {
-            field.name: arrow_value(value[field.name], field.args["kind"])
+            field.name: arrow_value(value.get(field.name), field.args["kind"])
             for field in dtype.expressions
         }
     return value
