@@ -211,7 +211,7 @@ kept. Each call returns the `result_id` of a new revision. Bind it with
 `view: "leads"` (one row per URL: `lead_id`, `url`, `title`, `host_query`,
 `host_rank`, `host_date`, `times_found`, `lead_status`, `fetch_failure`,
 `batch_result_id`) or `view: "hits"` (one row per submission). A set holds at most
-2000 leads and 20000 hits.
+2000 leads. Every submission is kept as a hit, limited only by the storage quota.
 
 Everything in a lead set was reported by the host. It has no source versions, so
 it never appears in the `sources` view and no lead is a citation; a table built

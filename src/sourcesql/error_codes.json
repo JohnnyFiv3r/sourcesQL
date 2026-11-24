@@ -173,11 +173,6 @@
       "message": "This lead set would hold more than 2000 leads",
       "hint": "Filter and fetch what you have, or ask the user before starting a new lead set."
     },
-    "lead_set_hits_full": {
-      "code": "budget_exhausted",
-      "message": "This lead set would hold more than 20000 search hits",
-      "hint": "Filter and fetch what you have, or ask the user before starting a new lead set."
-    },
     "lead_request_reused": {
       "code": "invalid_request",
       "message": "This request ID was already used with different leads",

@@ -2094,8 +2094,14 @@ class Engine:
     ]
     MAX_LEADS_PER_CALL = 150
     MAX_LEADS_PER_SET = 2000
-    MAX_HITS_PER_SET = 20000
     LEAD_FIELDS = {"url", "title", "query", "rank", "date"}
+
+    def _lead_table_limits(self) -> dict:
+        """Lead tables are held to the storage quota, not to the ordinary import row cap.
+
+        Every submission is kept as a hit, so the number of hits has no limit of its own.
+        """
+        return {"max_rows": self.store.quota, "max_bytes": self.store.quota}
 
     @staticmethod
     def _lead_url(url: str) -> str:
@@ -2136,9 +2142,7 @@ class Engine:
         return meta, [dict(row) for row in table.rows]
 
     def _publish_lead_table(self, columns, rows, row_ids, provenance, parents, stamp):
-        table = validate_table(
-            columns, rows, row_ids, max_rows=self.MAX_HITS_PER_SET, max_bytes=16 * 1024 * 1024
-        )
+        table = validate_table(columns, rows, row_ids, **self._lead_table_limits())
         identity = digest([table.to_dict(), row_ids, "host_reported", provenance, parents])
         result_id = f"wq_{provenance['table']}_" + identity[:32]
         run_id = "run_lead_" + identity[:32]
@@ -2279,8 +2283,6 @@ class Engine:
             )
         if len(by_id) > self.MAX_LEADS_PER_SET:
             raise SourcesQLError("budget_exhausted", refusal("lead_set_full"))
-        if len(hit_rows) + len(new_hits) > self.MAX_HITS_PER_SET:
-            raise SourcesQLError("budget_exhausted", refusal("lead_set_hits_full"))
         revision = (head["revision"] if head else 0) + 1
         stamp = now()
         all_leads = [by_id[key] for key in sorted(by_id)]
@@ -2428,8 +2430,7 @@ class Engine:
                     table["columns"],
                     table["rows"],
                     meta["row_ids"],
-                    max_rows=self.MAX_HITS_PER_SET,
-                    max_bytes=16 * 1024 * 1024,
+                    **self._lead_table_limits(),
                 )
             else:
                 validate_table(table["columns"], table["rows"], meta["row_ids"])
@@ -2575,11 +2576,7 @@ class Engine:
                         table["columns"],
                         table["rows"],
                         meta["row_ids"],
-                        **(
-                            {"max_rows": self.MAX_HITS_PER_SET, "max_bytes": 16 * 1024 * 1024}
-                            if lead_set
-                            else {}
-                        ),
+                        **(self._lead_table_limits() if lead_set else {}),
                     ),
                     imported_meta,
                 )

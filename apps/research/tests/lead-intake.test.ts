@@ -117,6 +117,12 @@ test("a missing or over-long field refuses only its own row, through the MCP sch
         { url: "https://notitle.example/" },
         { url: "https://rank.example/", title: "rank", rank: 1.5 },
         { url: "https://query.example/", title: "q", query: "q".repeat(400) },
+        { url: "https://huge.example/" + "a".repeat(50000), title: "huge" },
+        {
+          url: "https://date.example/",
+          title: "d",
+          date: "2026-11-24".repeat(20),
+        },
       ],
     },
   });
@@ -125,14 +131,23 @@ test("a missing or over-long field refuses only its own row, through the MCP sch
     stored: number;
     refused: { index: number; reason: string }[];
   };
-  assert.equal(reply.stored, 1);
   assert.deepEqual(reply.refused, [
     { index: 1, reason: "missing URL" },
     { index: 2, reason: "URL is longer than 2048 characters" },
     { index: 3, reason: "missing title" },
     { index: 4, reason: "rank must be a whole number from 1 to 1000" },
     { index: 5, reason: "query is longer than 300 characters" },
+    { index: 6, reason: "URL is longer than 2048 characters" },
   ]);
+  assert.equal(
+    reply.stored,
+    2,
+    "the row with an over-long date is stored without it",
+  );
+  assert.equal(
+    (result.structuredContent as { dates_left_out: number }).dates_left_out,
+    1,
+  );
 });
 
 test("add_research_leads names the engine's own refusal for too many rows", async (t) => {

@@ -205,18 +205,21 @@ def test_duplicate_submissions_are_all_kept_as_hits_below_the_lead_cap(tmp_path)
     assert counted["rows"] == [{"n": "6150"}]
 
 
-def test_hits_cap_refuses_the_whole_call_and_keeps_the_head(tmp_path):
+def test_no_hit_count_limit_of_its_own_beyond_the_storage_quota(tmp_path):
     engine = make(tmp_path)
-    engine.MAX_HITS_PER_SET = 200
-    first = engine.add_leads(request_id(1), rows(150))
-    error = refused(
-        lambda: engine.add_leads(request_id(2), rows(100), lead_set_id=first["lead_set_id"])
+    # Every revision rewrites the set, so a long history needs room; the quota is the limit.
+    engine.store.quota = 10**10
+    reply = None
+    for call in range(135):
+        reply = engine.add_leads(
+            request_id(call + 1),
+            [{"url": "https://repeat.example/page", "title": "r", "query": "q", "rank": 1}] * 150,
+            lead_set_id=reply["lead_set_id"] if reply else None,
+        )
+    counted = engine.query(
+        query="SELECT count(*) AS n FROM input.h", inputs={"h": lead_view(reply, "hits")}
     )
-    assert (error.code, error.safe_message) == (
-        "budget_exhausted",
-        error_codes.refusal("lead_set_hits_full"),
-    )
-    assert engine.store.lead_set_head(first["lead_set_id"])["revision"] == 1
+    assert counted["rows"] == [{"n": "20250"}]
 
 
 def test_unknown_lead_field_refuses_the_call(tmp_path):

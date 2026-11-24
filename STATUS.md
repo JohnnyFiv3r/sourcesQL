@@ -34,10 +34,10 @@ which makes the result `private_derived` and keeps its restrictions. The class i
 never importable directly. A lead set has no source versions, evidence or search
 provenance, so no lead can be cited. Every lead reads `lead_status = 'pending'`:
 recording fetch outcomes, the batch reply wording, the table labels and the
-guidance are not built yet. A set holds at most 2000 leads and 20000 hits;
-revoking one revision revokes the set. Hosted deployments do not offer the tool,
-and an exported lead set re-imports as data but cannot be appended to in the new
-store. Fixture-tested only.
+guidance are not built yet. A set holds at most 2000 leads, and every submission
+is kept as a hit, limited only by the storage quota; revoking one revision revokes
+the set. Hosted deployments do not offer the tool, and an exported lead set re-
+imports as data but cannot be appended to in the new store. Fixture-tested only.
 
 ## Unreleased citation and result-read correction
 
