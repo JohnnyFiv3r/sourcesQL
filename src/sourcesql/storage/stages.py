@@ -11,6 +11,7 @@ import json
 import re
 
 from sourcesql.contracts import SourcesQLError, canonical, digest
+from sourcesql.error_codes import CODES as _ERROR_CODES
 
 
 MAX_STAGE_BYTES = 4 * 1024 * 1024
@@ -22,29 +23,6 @@ MAX_STAGE_SUMMARIES = 128
 _IDENTITY = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _STATUSES = frozenset(
     {"intent", "completed", "rejected", "outcome_unknown", "not_dispatched", "completed_unretained"}
-)
-_ERROR_CODES = frozenset(
-    {
-        "unsupported_query",
-        "invalid_query",
-        "invalid_request",
-        "budget_exhausted",
-        "unsupported_capability",
-        "unauthorized",
-        "disclosure_required",
-        "evidence_invalid",
-        "invalid_output",
-        "provider_unavailable",
-        "provider_timeout",
-        "provider_connection_error",
-        "provider_http_error",
-        "provider_error",
-        "storage_conflict",
-        "storage_unavailable",
-        "cancelled",
-        "execution_outcome_unknown",
-        "execution_failed",
-    }
 )
 # Recording an already dispatched failure must survive a payload-quota error.
 # Reserve terminal metadata when admitting each intent, so recording a known

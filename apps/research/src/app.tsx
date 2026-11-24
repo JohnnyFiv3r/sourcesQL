@@ -39,11 +39,12 @@ import {
   FileText,
 } from "lucide-react";
 import { Button, Input, Textarea, GrowingTextarea, Select } from "./ui.js";
+import { SourceList } from "./source-list.js";
 import {
   displayValue,
   effectiveValue,
   snapshotSchema,
-  sourcesForViewSelection,
+  assertedSourcesForViewSelection,
   cellDiagnosticSummary,
   researchGapSummary,
   type ResearchView,
@@ -96,6 +97,7 @@ import {
   presentationColumns,
   nextTableSort,
   sourceLinksForValue,
+  needsSourcePicker,
 } from "./presentation.js";
 
 const MAX_PAGE_SIZE = 25;
@@ -1363,9 +1365,12 @@ function Workspace() {
   const selectedCellDiagnostic =
     row && field ? cellDiagnosticSummary(row, field) : undefined;
   const sources = sourceLinksForValue(
-    row && view ? sourcesForViewSelection(view, row, field || undefined) : [],
+    row && view
+      ? assertedSourcesForViewSelection(view, row, field || undefined)
+      : [],
     currentValue,
   );
+  const sourcePicker = needsSourcePicker(sources);
   function changePage(next: number) {
     setSelectedId("");
     setTab("actions");
@@ -2467,12 +2472,17 @@ function Workspace() {
                   </div>
                 </div>
                 <p className="review-note">{refreshChange.note}</p>
+                {refreshChange.reason && (
+                  <p className="review-note">
+                    unverified: {refreshChange.reason}
+                  </p>
+                )}
                 <Button
                   variant="ghost"
                   className="review-source"
                   disabled={busy}
                   onClick={() =>
-                    sources.length > 1
+                    sourcePicker
                       ? sourceDialog.current?.showModal()
                       : sources[0] && void visitSource(sources[0].url)
                   }
@@ -2824,7 +2834,7 @@ function Workspace() {
                   {cellProposals.length || view.refresh ? "Review" : "Correct"}
                 </span>
               </Button>
-              {sources.length > 1 ? (
+              {sourcePicker ? (
                 <Button
                   variant="ghost"
                   className="source-action"
@@ -3218,26 +3228,11 @@ function Workspace() {
             {error}
           </p>
         )}
-        <div className="source-list" aria-busy={busy}>
-          {sources.map((source) => (
-            <a
-              key={source.url}
-              href={source.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => {
-                e.preventDefault();
-                if (!busy) void visitSource(source.url);
-              }}
-            >
-              <span>
-                <strong>{source.label || new URL(source.url).hostname}</strong>
-                <small>{source.url}</small>
-              </span>
-              <ExternalLink size={16} />
-            </a>
-          ))}
-        </div>
+        <SourceList
+          sources={sources}
+          busy={busy}
+          onVisit={(url) => void visitSource(url)}
+        />
       </dialog>
       {treeOpen && (
         <ResearchTreePanel

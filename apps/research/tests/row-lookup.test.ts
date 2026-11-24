@@ -207,7 +207,13 @@ test("MCP lookup drives a request-bound child under the resolved row without UI 
     const lookup: Awaited<ReturnType<ResearchStore["findRows"]>> = JSON.parse(
       textBlock.text!,
     );
-    assert.deepEqual(lookup, found.structuredContent);
+    // The agent-readable text marks host-supplied source URLs in place; the
+    // structured result keeps the bare URL and carries the assertion beside it.
+    const marked = structuredClone(found.structuredContent) as typeof lookup;
+    for (const match of marked.matches)
+      if (match.assertion === "host" && match.source_url)
+        match.source_url = `${match.source_url} (host-asserted)`;
+    assert.deepEqual(lookup, marked);
     assert.equal(lookup.status, "unique");
     const { snapshot_id, row_id } = lookup.matches[0];
     assert.equal(row_id, "stable-austin");
