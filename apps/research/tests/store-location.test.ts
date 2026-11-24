@@ -240,6 +240,64 @@ test("a failing lock cleanup does not replace the original failure", async (t) =
   restore(t);
 });
 
+const failOwnerRead = (t: TestContext, code: string) => {
+  const original = fsPromises.readFile;
+  t.mock.method(fsPromises, "readFile", ((path: unknown, ...rest: unknown[]) =>
+    String(path).includes("owner-")
+      ? failing(code)()
+      : (original as (...args: unknown[]) => unknown)(
+          path,
+          ...rest,
+        )) as typeof fsPromises.readFile);
+  syncBuiltinESMExports();
+};
+
+const renameCall = () => ({
+  name: "rename_research",
+  arguments: {
+    snapshot_id: seed.id,
+    title: "Another title",
+    expected_title: seed.title,
+  },
+});
+
+test("a filesystem fault reading the lock owner does not hide the write failure", async (t) => {
+  const root = await temporary(t);
+  const client = await connect(
+    t,
+    new ResearchStore(join(root, "data"), seed),
+    root,
+  );
+  inject(t, "rename", "ENOSPC");
+  failOwnerRead(t, "EIO");
+  const log = t.mock.method(console, "error", () => undefined);
+  assertSafe(await client.callTool(renameCall()), root);
+  const lines = log.mock.calls.map((call) => String(call.arguments[0]));
+  assert.ok(
+    lines.some((line) => /write failed: ENOSPC/.test(line)),
+    lines.join(),
+  );
+  assert.ok(
+    lines.some((line) => /lock cleanup failed: EIO/.test(line)),
+    lines.join(),
+  );
+  restore(t);
+});
+
+test("a missing lock owner is still an ownership change", async (t) => {
+  const root = await temporary(t);
+  const client = await connect(
+    t,
+    new ResearchStore(join(root, "data"), seed),
+    root,
+  );
+  failOwnerRead(t, "ENOENT");
+  const result = await client.callTool(renameCall());
+  assert.equal(result.isError, true);
+  assert.match(text(result), /Research writer lock ownership changed/);
+  restore(t);
+});
+
 test("a revision conflict still reaches the agent with its own text", async (t) => {
   const root = await temporary(t);
   const client = await connect(

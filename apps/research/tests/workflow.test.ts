@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ResearchStore } from "../server/store.js";
 import {
   snapshotSchema,
+  type Snapshot,
   effectiveValue,
   sourcesForViewSelection,
   type ResearchInput,
@@ -30,9 +31,15 @@ const child = (id: string) => ({
   sourceResultSetId: "r123abcdef",
   rows: [seed.rows[0]],
 });
-async function setup() {
+// The real resolver re-reads the engine; these tests have no engine, so a
+// snapshot that carries a dataRef is trusted as given.
+const trustDataRef = async (snapshot: Snapshot) => snapshot;
+async function setup(parent: Snapshot = seed) {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-workflow-"));
-  return { directory, store: new ResearchStore(directory, seed) };
+  return {
+    directory,
+    store: new ResearchStore(directory, parent, trustDataRef),
+  };
 }
 test("tree origins retain request-time corrections and distinguish cell, row, table and legacy scopes", async () => {
   const { store } = await setup();
@@ -102,25 +109,77 @@ test("tree origins retain request-time corrections and distinguish cell, row, ta
     seed.title,
   );
 });
+const refreshRows = [
+  {
+    ...seed.rows[0],
+    values: { ...seed.rows[0].values, closes_at: "2026-10-05 15:00:00" },
+    sourceUrl: "https://example.com/new-deadline",
+    evidence: { closes_at: ["Synthetic test: closes October 5 at 3 pm."] },
+  },
+];
+const v2Columns = seed.columns.map((c) => ({
+  ...c,
+  logicalType: "VARCHAR",
+  nullable: true,
+}));
+const v2Base = {
+  schemaVersion: 2,
+  title: seed.title,
+  rowCount: 1,
+  dataClassification: "synthetic_fixture",
+  coverage: { planComplete: true, corpusComplete: "unknown", notes: [] },
+  columns: v2Columns,
+};
+// Refresh needs a parent with typed columns, which only v2 snapshots have.
+const refreshSeed = snapshotSchema.parse({
+  ...v2Base,
+  id: seed.id,
+  origin: { engine: "imported", resultId: "r00000000001", runId: null },
+  capturedAt: "2026-09-30",
+  captureBasis: "imported_declared_time",
+  capturePrecision: "day",
+  rowCount: seed.rows.length,
+  rows: seed.rows,
+});
+// A result the engine produced: only these carry a dataRef, which is how the
+// app tells engine-observed quotes from ones the host wrote.
+const engineChild = (id: string): Snapshot =>
+  snapshotSchema.parse({
+    ...v2Base,
+    id,
+    origin: {
+      engine: "sourcesql",
+      resultId: "wq_refresh",
+      runId: "run_refresh",
+    },
+    capturedAt: "2026-10-05T00:00:00.000Z",
+    captureBasis: "run_completed_at",
+    capturePrecision: "instant",
+    rows: refreshRows,
+    dataRef: { resultId: "wq_refresh", contentSha256: "a".repeat(64) },
+  });
+// The same rows supplied by the host: no dataRef, so nothing backs the quotes.
+const hostChild = (id: string): Snapshot =>
+  snapshotSchema.parse({
+    ...v2Base,
+    id,
+    origin: { engine: "imported", resultId: "r123abcdef", runId: null },
+    capturedAt: "2026-10-05",
+    captureBasis: "imported_declared_time",
+    capturePrecision: "day",
+    rows: refreshRows,
+  });
 function proposal(
   request_id: string,
   status: "verified" | "conflicting" | "unverified" = "verified",
+  backing: "engine" | "host" = "engine",
 ): AppendResearchInput {
   return {
     request_id,
-    snapshot: {
-      ...child("refresh-child"),
-      rows: [
-        {
-          ...seed.rows[0],
-          values: { ...seed.rows[0].values, closes_at: "2026-10-05 15:00:00" },
-          sourceUrl: "https://example.com/new-deadline",
-          evidence: {
-            closes_at: ["Synthetic test: closes October 5 at 3 pm."],
-          },
-        },
-      ],
-    },
+    snapshot:
+      backing === "engine"
+        ? engineChild("refresh-child")
+        : hostChild("refresh-child"),
     assessments: [
       {
         row_id: "record-1",
@@ -156,7 +215,7 @@ test("archiving a child is durable, isolated, reversible, and cannot be bypassed
   assert.equal(receipt.parentSnapshotId, seed.id);
   assert.equal(receipt.status, "archived");
   assert.deepEqual(await store.remove("removed-child"), receipt);
-  const restarted = new ResearchStore(directory, seed);
+  const restarted = new ResearchStore(directory, seed, trustDataRef);
   const after = await restarted.open();
   assert.deepEqual(after.snapshot, before.snapshot);
   assert.deepEqual(after.amendments, before.amendments);
@@ -266,7 +325,7 @@ test("removal never cascades, closes pending requests, or deletes a root", async
   assert.equal((await store.open("leaf")).snapshot.parentSnapshotId, "branch");
 });
 test("archiving accepted refresh research preserves the parent correction and its source evidence", async () => {
-  const { store, directory } = await setup();
+  const { store, directory } = await setup(refreshSeed);
   const request = input();
   await store.beginResearch(request, "refresh");
   await store.appendResearch(proposal(request.request_id));
@@ -279,7 +338,7 @@ test("archiving accepted refresh research preserves the parent correction and it
   });
   const before = await store.open();
   await store.remove("refresh-child");
-  const restarted = new ResearchStore(directory, seed);
+  const restarted = new ResearchStore(directory, refreshSeed, trustDataRef);
   const after = await restarted.open();
   assert.deepEqual(after.amendments, before.amendments);
   assert.deepEqual(after.acceptedSources, before.acceptedSources);
@@ -315,7 +374,7 @@ test("requests and nested children survive restart with exact origin and frozen 
     store.beginResearch({ ...start, row_id: "record-2" }, "expand"),
     /different scope/,
   );
-  const restarted = new ResearchStore(directory, seed);
+  const restarted = new ResearchStore(directory, seed, trustDataRef);
   const context = await restarted.researchContext(start.request_id);
   assert.equal(
     context.effectiveRowsAtRequest[0].values.closes_at,
@@ -345,7 +404,7 @@ test("requests and nested children survive restart with exact origin and frozen 
     request_id: secondInput.request_id,
     snapshot: { ...child("grandchild"), sourceResultSetId: "r456abcdef" },
   });
-  const root = await new ResearchStore(directory, seed).open();
+  const root = await new ResearchStore(directory, seed, trustDataRef).open();
   assert.deepEqual(
     root.snapshots.map((s) => [s.id, s.depth]),
     [
@@ -416,9 +475,9 @@ test("cancelled/failed requests reject late results and wrong-parent attachments
   );
 });
 test("refresh proposes differences and preserves original/corrected values until explicit acceptance", async () => {
-  const { store, directory } = await setup();
+  const { store, directory } = await setup(refreshSeed);
   await store.amend({
-    snapshot_id: seed.id,
+    snapshot_id: refreshSeed.id,
     row_id: "record-1",
     field: "closes_at",
     value: "2026-10-04 15:00:00",
@@ -443,7 +502,7 @@ test("refresh proposes differences and preserves original/corrected values until
   };
   await store.reviewRefresh(review);
   await store.reviewRefresh(review);
-  parent = await new ResearchStore(directory, seed).open();
+  parent = await new ResearchStore(directory, refreshSeed, trustDataRef).open();
   assert.equal(parent.amendments.length, 2);
   assert.equal(
     effectiveValue(parent, parent.snapshot.rows[0], "closes_at"),
@@ -455,11 +514,11 @@ test("refresh proposes differences and preserves original/corrected values until
       (s) => s.url === "https://example.com/new-deadline",
     ),
   );
-  assert.deepEqual(parent.snapshot, seed);
+  assert.deepEqual(parent.snapshot, refreshSeed);
 });
 test("unverified/conflicting evidence cannot be accepted, keep never mutates the parent", async () => {
   for (const status of ["unverified", "conflicting"] as const) {
-    const { store } = await setup();
+    const { store } = await setup(refreshSeed);
     const request = input();
     await store.beginResearch(request, "refresh");
     const result = await store.appendResearch(
@@ -481,7 +540,7 @@ test("unverified/conflicting evidence cannot be accepted, keep never mutates the
   }
 });
 test("refresh validates row identity, coverage, duplicate assessments, evidence and stale acceptance", async () => {
-  const { store } = await setup();
+  const { store } = await setup(refreshSeed);
   const request = input();
   await store.beginResearch(request, "refresh");
   const result = proposal(request.request_id);
@@ -515,7 +574,7 @@ test("refresh validates row identity, coverage, duplicate assessments, evidence 
   );
   await store.appendResearch(result);
   await store.amend({
-    snapshot_id: seed.id,
+    snapshot_id: refreshSeed.id,
     row_id: "record-1",
     field: "closes_at",
     value: "2026-10-06 15:00:00",
@@ -566,4 +625,135 @@ test("whole-row and whole-table refresh scopes require every field, and reject s
     seed.rows.length * seed.columns.length,
   );
   assert.ok(view.refresh?.changes.every((c) => !c.canAccept));
+});
+test("host-supplied evidence cannot make a refresh verified or conflicting", async () => {
+  for (const status of ["verified", "conflicting"] as const) {
+    const { store } = await setup(refreshSeed);
+    const request = input();
+    await store.beginResearch(request, "refresh");
+    const result = await store.appendResearch(
+      proposal(request.request_id, status, "host"),
+    );
+    const change = result.refresh!.changes[0];
+    assert.equal(change.status, "unverified");
+    assert.equal(
+      change.reason,
+      "the evidence does not match any source text sourcesQL retained.",
+    );
+    assert.equal(change.canAccept, false);
+    await assert.rejects(
+      store.reviewRefresh({
+        request_id: request.request_id,
+        row_id: "record-1",
+        field: "closes_at",
+        decision: "accept",
+        expected_revision: 0,
+      }),
+      /supported/,
+    );
+  }
+});
+test("an export never carries a verified or conflicting status for host evidence", async () => {
+  for (const status of ["verified", "conflicting"] as const) {
+    const { store, directory } = await setup(refreshSeed);
+    const request = input();
+    await store.beginResearch(request, "refresh");
+    const original = proposal(request.request_id, status, "host");
+    await store.appendResearch(original);
+    const exported = await store.exportBundle("refresh-child");
+    const saved = exported.state.requests!.find(
+      (r) => r.id === request.request_id,
+    )!;
+    for (const assessments of [
+      saved.assessments,
+      saved.completion?.assessments,
+    ])
+      assert.deepEqual(
+        assessments?.map((a) => [a.status, (a as { reason?: string }).reason]),
+        [
+          [
+            "unverified",
+            "the evidence does not match any source text sourcesQL retained.",
+          ],
+        ],
+      );
+    // Replaying the original payload is still the same completion.
+    await store.appendResearch(original);
+    // A completion stored before this rule is also exported as unverified.
+    const file = join(directory, "research.json");
+    const state = JSON.parse(await readFile(file, "utf8"));
+    const legacy = state.requests.find(
+      (r: { id: string }) => r.id === request.request_id,
+    );
+    legacy.completion = original;
+    legacy.assessments = original.assessments;
+    await writeFile(file, JSON.stringify(state, null, 2));
+    const reopened = new ResearchStore(directory, refreshSeed, trustDataRef);
+    const again = await reopened.exportBundle("refresh-child");
+    for (const assessments of [
+      again.state.requests![0].assessments,
+      again.state.requests![0].completion?.assessments,
+    ])
+      assert.equal(assessments?.[0].status, "unverified");
+    await reopened.appendResearch(original);
+  }
+});
+test("replaying a host completion with a different status still conflicts", async () => {
+  for (const [first, second] of [
+    ["verified", "conflicting"],
+    ["conflicting", "verified"],
+  ] as const) {
+    const { store } = await setup(refreshSeed);
+    const request = input();
+    await store.beginResearch(request, "refresh");
+    await store.appendResearch(proposal(request.request_id, first, "host"));
+    await assert.rejects(
+      store.appendResearch(proposal(request.request_id, second, "host")),
+      /already has different results/,
+    );
+  }
+});
+test("engine-backed evidence still verifies and can be accepted", async () => {
+  const { store } = await setup(refreshSeed);
+  const request = input();
+  await store.beginResearch(request, "refresh");
+  const result = await store.appendResearch(proposal(request.request_id));
+  const change = result.refresh!.changes[0];
+  assert.equal(change.status, "changed");
+  assert.equal(change.reason, undefined);
+  assert.equal(change.canAccept, true);
+});
+test("a verified assessment stored before this rule reads as unverified without rewriting the file", async () => {
+  const { store, directory } = await setup(refreshSeed);
+  const request = input();
+  await store.beginResearch(request, "refresh");
+  await store.appendResearch(
+    proposal(request.request_id, "unverified", "host"),
+  );
+  const file = join(directory, "research.json");
+  const state = JSON.parse(await readFile(file, "utf8"));
+  const saved = state.requests.find(
+    (r: { id: string }) => r.id === request.request_id,
+  );
+  // What an earlier build stored for a host snapshot: no reason, "verified".
+  saved.assessments = [
+    {
+      row_id: "record-1",
+      field: "closes_at",
+      status: "verified",
+      note: "Synthetic test observation",
+    },
+  ];
+  await writeFile(file, JSON.stringify(state, null, 2));
+  const before = await readFile(file, "utf8");
+  const reopened = await new ResearchStore(
+    directory,
+    refreshSeed,
+    trustDataRef,
+  ).open("refresh-child");
+  const change = reopened.refresh!.changes[0];
+  assert.equal(change.status, "unverified");
+  assert.equal(change.canAccept, false);
+  assert.ok(change.reason);
+  assert.equal(await readFile(file, "utf8"), before);
 });
