@@ -59,9 +59,12 @@ recorded by the engine (`lead_inputs_read`) from the inputs the SQL references, 
 a lead input that is bound but unused does not make a batch and keeps #111's
 rules, and `record_lead_batch` refuses such a result. The reply and the receipt name the job's actual fetch limit, and an
 all-skipped result is not offered for recording. Lead-set reads and opens begin with a queue line, the table
-labels host-written columns as Host-asserted (in a table built from a lead set,
-every column no cell cites a source for), and a lead set cannot be corrected in
-the app. A failed `WEB_FETCH` row no longer breaks
+labels host-written columns as Host-asserted. A table built from a lead set (its
+SQL read one; a lead input bound but never used does not count) labels every
+column that no cell cites a source for, except `lead_id`, `lead_status`,
+`fetch_failure` and `batch_result_id`. The engine does not track which input a
+derived column came from, so a derived column of other data with no citation is
+labelled too. A lead set cannot be corrected in the app. A failed `WEB_FETCH` row no longer breaks
 the next step of the same query. Fixture-tested only; no live provider run.
 
 ## Unreleased citation and result-read correction

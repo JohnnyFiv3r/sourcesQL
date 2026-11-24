@@ -243,7 +243,9 @@ export function leadQueueLine(
  */
 export function hostAssertedColumn(snapshot: Snapshot, key: string): boolean {
   if (snapshot.leadSet) return LEAD_HOST_COLUMNS.includes(key);
-  if (snapshot.dataClassification !== "host_reported") return false;
+  // Only a result whose SQL read a lead set: a lead input that was bound but never used
+  // leaves the table's own columns as the engine produced them.
+  if (!snapshot.readsLeadSet) return false;
   if (LEAD_ENGINE_COLUMNS.includes(key)) return false;
   return !snapshot.rows.some(
     (row) => row.cellSources?.[key]?.length || row.evidence[key]?.length,

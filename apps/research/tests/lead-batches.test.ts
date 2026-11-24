@@ -541,3 +541,34 @@ test("a lead batch with its own ORDER BY is refused with the CTE instruction", a
     "invalid_query: In a lead batch, put ORDER BY and LIMIT in a CTE before WEB_FETCH. An ORDER BY or LIMIT in the same SELECT as WEB_FETCH does not choose which pages are fetched.",
   );
 });
+
+test("a table is badged as lead-derived only when its SQL read the lead set", async (t) => {
+  const { client } = await connect(t);
+  const set = await intake(client, [AURORA]);
+  const open = async (result: { structuredContent?: unknown }, id: string) => {
+    const { result_id } = result.structuredContent as { result_id: string };
+    const opened = await client.callTool({
+      name: "open_research",
+      arguments: { result_ref: { result_id, snapshot_id: id, title: id } },
+    });
+    assert.notEqual(opened.isError, true, textOf(opened));
+    return (
+      opened.structuredContent as { snapshot: { readsLeadSet?: boolean } }
+    ).snapshot;
+  };
+  const unused = await client.callTool({
+    name: "sourcesql_query",
+    arguments: {
+      request_id: randomUUID(),
+      query: `SELECT url, fetch_status FROM WEB_FETCH('${AURORA}')`,
+      inputs: { unused: view(set.result_id) },
+    },
+  });
+  assert.equal((await open(unused, "unused-pin")).readsLeadSet, undefined);
+  const read = await batch(
+    client,
+    "WITH b AS (SELECT lead_id, url FROM input.l LIMIT 5) SELECT lead_id, WEB_FETCH(url)[1].fetch_status AS status FROM b",
+    set.result_id,
+  );
+  assert.equal((await open(read, "read-set")).readsLeadSet, true);
+});
