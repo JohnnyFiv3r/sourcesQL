@@ -296,7 +296,10 @@ def test_admission_refusal_reason_is_kept_only_for_an_admission_refusal(make_sto
     with pytest.raises(SourcesQLError) as error:
         engine(store, tmp_path).explain(**claimed["request"])
     reason = public_refusal_reason(error.value)
-    assert reason == "SQL could not be parsed in the installed dialect"
+    assert reason == (
+        "SQL could not be parsed in the installed dialect. Line 1, column 29: Syntax error. "
+        "Fix the SQL at that position and run it again."
+    )
     store.fail_job(
         job_id, token, error.value.code, "PRIVATE-RAW", error.value.stage, refusal_reason=reason
     )
