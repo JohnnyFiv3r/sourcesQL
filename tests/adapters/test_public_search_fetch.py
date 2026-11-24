@@ -97,6 +97,7 @@ def test_public_fetch_grant_does_not_allow_private_redirect_or_expose_provider_k
     assert rows[0]["status"] == "fetch_failed"
     assert rows[0]["error_code"] == "unauthorized"
     assert rows[0]["content"] is None
+    assert rows[0]["failure_reason"] == "blocked_host"
     assert budget.counts["fetches"] == 1
     assert "SAFE-SYNTHETIC-KEY" not in str(calls[0].headers)
 
@@ -124,3 +125,103 @@ def test_explicit_host_allowlist_still_blocks_an_unapproved_public_redirect(prov
         )
     assert len(calls) == 1
     assert rows[0]["error_code"] == "unauthorized"
+
+
+def raising(error):
+    def reply(request):
+        raise error
+
+    return reply
+
+
+@pytest.mark.parametrize(
+    ("reply", "reason"),
+    [
+        (
+            lambda _: httpx.Response(200, headers={"content-type": "application/pdf"}),
+            "unsupported_type",
+        ),
+        (
+            lambda _: httpx.Response(
+                200, headers={"content-type": "text/html"}, content=b"x" * 3_000_000
+            ),
+            "too_large",
+        ),
+        (
+            lambda _: httpx.Response(404, headers={"content-type": "text/html"}, text="gone"),
+            "http_error",
+        ),
+        (
+            lambda _: httpx.Response(404, headers={"content-type": "application/json"}, text="{}"),
+            "http_error",
+        ),
+        (
+            lambda _: httpx.Response(302, headers={"location": "https://source.example/a"}),
+            "too_many_redirects",
+        ),
+        (lambda _: httpx.Response(302), "too_many_redirects"),
+        (
+            lambda _: httpx.Response(
+                200, headers={"content-type": "text/plain; charset=utf-8"}, content=b"\xff\xfe"
+            ),
+            "unsupported_type",
+        ),
+        (raising(httpx.ReadTimeout("slow")), "timeout"),
+        (raising(httpx.ConnectError("refused")), "transport_error"),
+    ],
+)
+def test_fetch_failure_records_a_reason_code_for_each_failure_kind(reply, reason):
+    with httpx.Client(transport=httpx.MockTransport(reply), trust_env=False) as client:
+        registry = ProviderRegistry(profile("brave", client, resolve))
+        rows = registry.fetch(
+            ["https://source.example/a"],
+            {},
+            Budget({"max_cost_microusd": 50_000, "max_fetches": 9}),
+        )
+    assert rows[0]["status"] == "fetch_failed"
+    assert rows[0]["failure_reason"] == reason
+
+
+@pytest.mark.parametrize("provider", ["brave", "serper"])
+def test_private_url_among_public_ones_is_a_blocked_row_and_is_never_dispatched(provider):
+    hosts = []
+
+    def reply(request):
+        hosts.append(request.headers["host"])
+        return httpx.Response(
+            200, headers={"content-type": "text/plain"}, text="Capacity is 500 MW."
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(reply), trust_env=False) as client:
+        registry = ProviderRegistry(profile(provider, client, resolve))
+        rows = registry.fetch(
+            ["https://a.example/1", "https://private.example/2", "https://b.example/3"],
+            {},
+            Budget({"max_cost_microusd": 50_000, "max_fetches": 9}),
+        )
+    assert hosts == ["a.example", "b.example"]
+    assert [r["status"] for r in rows] == ["acquired", "fetch_failed", "acquired"]
+    assert rows[1]["url"] == "https://private.example/2"
+    assert rows[1]["failure_reason"] == "blocked_host"
+
+
+def test_url_outside_an_explicit_allowlist_is_a_blocked_row():
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, headers={"content-type": "text/plain"}, text="ok")
+        ),
+        trust_env=False,
+    ) as client:
+        registry = ProviderRegistry(
+            profile(
+                "brave",
+                client,
+                resolve,
+                allow_public_source_hosts=False,
+                allowed_source_hosts=["a.example"],
+            )
+        )
+        rows = registry.fetch(
+            ["https://a.example/1", "https://other.example/2"], {}, Budget({"max_cost_microusd": 1})
+        )
+    assert [r.get("failure_reason") for r in rows] == [None, "blocked_host"]

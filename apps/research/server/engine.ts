@@ -72,6 +72,8 @@ export interface ResearchEngine {
   readonly staticProfiles?: readonly { name: string; mode: string }[];
   readonly supportsExplain?: boolean;
   readonly supportsAsyncJobs?: boolean;
+  /** True when the engine can store host-found lead sets (add_leads). */
+  readonly supportsLeadSets?: boolean;
   /** True when `query` already returns the authorized first result page. */
   readonly queryReturnsAuthorizedPage?: boolean;
   readonly supportsUsageReporting?: boolean;
@@ -190,6 +192,7 @@ export class PythonEngine implements ResearchEngine {
   // Engine.query returns read_result(result_id), including the
   // data_classification that store.authorize computed.
   readonly queryReturnsAuthorizedPage = true;
+  readonly supportsLeadSets = true;
   private featuresPromise?: Promise<Record<string, unknown>>;
   // bridge.py loads profiles only from SOURCESQL_PROFILES_FILE; without it
   // Engine.__init__ has exactly the built-in fixture profile. A profiles file

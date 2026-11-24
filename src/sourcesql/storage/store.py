@@ -13,7 +13,14 @@ from sourcesql.storage.stages import StageJournalMixin
 from sourcesql.storage.inspection import InspectionMixin
 
 
+class _LeadSetMoved(Exception):
+    """Another writer got to this lead-set revision first."""
+
+
 class Store(StageJournalMixin, InspectionMixin):
+    # The hosted store keeps no lead-set index, so it revokes only the result it is given.
+    has_lead_sets = True
+
     def __init__(self, root: Path | str, quota: int = 100 * 1024 * 1024):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -21,7 +28,7 @@ class Store(StageJournalMixin, InspectionMixin):
         self.quota = quota
         with self.db() as db:
             db.executescript(
-                """CREATE TABLE IF NOT EXISTS results(id TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, receipt TEXT NOT NULL);CREATE INDEX IF NOT EXISTS runs_request_uuid ON runs(lower(request_id));"""
+                """CREATE TABLE IF NOT EXISTS results(id TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, receipt TEXT NOT NULL);CREATE INDEX IF NOT EXISTS runs_request_uuid ON runs(lower(request_id));CREATE TABLE IF NOT EXISTS lead_sets(lead_set_id TEXT NOT NULL, revision INTEGER NOT NULL, leads_result_id TEXT NOT NULL, hits_result_id TEXT NOT NULL, PRIMARY KEY(lead_set_id, revision));CREATE TABLE IF NOT EXISTS lead_requests(request_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, reply TEXT NOT NULL);"""
             )
         self.initialize_stage_journal()
 
@@ -223,11 +230,103 @@ class Store(StageJournalMixin, InspectionMixin):
     def revoke(self, result_id: str):
         with self.db() as db:
             db.execute("UPDATE results SET revoked=1 WHERE id=?", (result_id,))
+            # A lead set is one body of host-reported data in many revisions: withdrawing
+            # one revision withdraws them all.
+            sets = (
+                ()
+                if not self.has_lead_sets
+                else db.execute(
+                    "SELECT DISTINCT lead_set_id FROM lead_sets WHERE leads_result_id=?1 OR hits_result_id=?1",
+                    (result_id,),
+                ).fetchall()
+            )
+            for (lead_set_id,) in sets:
+                for revision in db.execute(
+                    "SELECT leads_result_id,hits_result_id FROM lead_sets WHERE lead_set_id=?",
+                    (lead_set_id,),
+                ).fetchall():
+                    db.executemany(
+                        "UPDATE results SET revoked=1 WHERE id=?", [(rid,) for rid in revision]
+                    )
+
+    def lead_set_head(self, lead_set_id: str, db=None) -> dict | None:
+        """The newest revision of a lead set, or None when it has none."""
+        if db is None:
+            with self.db() as own:
+                return self.lead_set_head(lead_set_id, own)
+        row = db.execute(
+            "SELECT revision,leads_result_id,hits_result_id FROM lead_sets "
+            "WHERE lead_set_id=? ORDER BY revision DESC LIMIT 1",
+            (lead_set_id,),
+        ).fetchone()
+        return (
+            {"revision": row[0], "leads_result_id": row[1], "hits_result_id": row[2]}
+            if row
+            else None
+        )
+
+    def lead_request(self, request_id: str) -> tuple[str, str] | None:
+        """The stored (request hash, reply) of an earlier intake call."""
+        with self.db() as db:
+            return db.execute(
+                "SELECT request_hash,reply FROM lead_requests WHERE request_id=?", (request_id,)
+            ).fetchone()
+
+    def commit_lead_revision(
+        self,
+        items: list[tuple[Table, dict]],
+        lead_set_id: str,
+        revision: int,
+        request_id: str,
+        request_hash: str,
+        reply: dict,
+    ) -> bool:
+        """Publish a lead-set revision, its index row and its request record together.
+
+        Returns False without writing when another writer already added this revision, so the
+        caller can merge onto the new head and try again.
+        """
+        leads_id, hits_id = items[0][1]["result_id"], items[1][1]["result_id"]
+
+        def check(db):
+            head = self.lead_set_head(lead_set_id, db)
+            if (head["revision"] if head else 0) != revision - 1:
+                raise _LeadSetMoved
+            if db.execute(
+                "SELECT 1 FROM lead_requests WHERE request_id=?", (request_id,)
+            ).fetchone():
+                raise _LeadSetMoved
+
+        def record(db):
+            db.execute(
+                "INSERT INTO lead_sets(lead_set_id,revision,leads_result_id,hits_result_id) "
+                "VALUES(?,?,?,?)",
+                (lead_set_id, revision, leads_id, hits_id),
+            )
+            db.execute(
+                "INSERT INTO lead_requests(request_id,request_hash,reply) VALUES(?,?,?)",
+                (request_id, request_hash, canonical(reply).decode()),
+            )
+
+        try:
+            self.commit_many(items, before_write=check, after_write=record)
+        except _LeadSetMoved:
+            return False
+        return True
 
     def commit_many(
-        self, items: list[tuple[Table, dict]], root_result_id=None, result_mapping=None
+        self,
+        items: list[tuple[Table, dict]],
+        root_result_id=None,
+        result_mapping=None,
+        before_write=None,
+        after_write=None,
     ) -> None:
-        """Make a fully validated imported graph visible in one control transaction."""
+        """Make a fully validated imported graph visible in one control transaction.
+
+        The hooks run inside that transaction, so the caller's own rows commit or roll back
+        with the results.
+        """
         prepared = []
         for table, meta in items:
             value = table.to_dict()
@@ -248,6 +347,8 @@ class Store(StageJournalMixin, InspectionMixin):
             )
         with self.db() as db:
             db.execute("BEGIN IMMEDIATE")
+            if before_write:
+                before_write(db)
             needed = 0
             for payload, meta in prepared:
                 existing = db.execute(
@@ -287,3 +388,5 @@ class Store(StageJournalMixin, InspectionMixin):
                         canonical(receipt).decode(),
                     ),
                 )
+            if after_write:
+                after_write(db)

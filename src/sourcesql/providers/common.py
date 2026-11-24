@@ -478,8 +478,11 @@ class SafeFetcher:
         records = []
         for original in urls:
             url = normalized_url(original)
+            # Each step names its own failure so callers never parse messages.
+            reason = "blocked_host"
             try:
                 for redirect in range(self.max_redirects + 1):
+                    reason = "blocked_host"
                     host, addr, port = resolve_public(url, self.resolver)
                     if self.allowed_hosts is not None and host not in self.allowed_hosts:
                         raise SourcesQLError(
@@ -508,6 +511,7 @@ class SafeFetcher:
                         ) as response:
                             if response.is_redirect:
                                 event["status"] = "redirect"
+                                reason = "too_many_redirects"
                                 if redirect == self.max_redirects or not response.headers.get(
                                     "location"
                                 ):
@@ -519,13 +523,18 @@ class SafeFetcher:
                                 url = normalized_url(urljoin(url, response.headers["location"]))
                                 continue
                             media = response.headers.get("content-type", "").split(";")[0].lower()
+                            reason = (
+                                "http_error" if response.status_code >= 400 else "unsupported_type"
+                            )
                             if media not in {"text/html", "text/plain", "application/xhtml+xml"}:
                                 raise SourcesQLError(
                                     "unsupported_capability",
                                     "Only HTML/text fetch is supported",
                                     "acquisition",
                                 )
+                            reason = "http_error" if response.status_code >= 400 else "too_large"
                             raw = read_response(response, self.max_bytes)
+                            reason = "unsupported_type"
                             encoding = response.encoding or "utf-8"
                             try:
                                 content = normalized_text(
@@ -542,8 +551,13 @@ class SafeFetcher:
                         record["acquisition_mode"] = "live"
                         records.append(record)
                         break
-                    except httpx.HTTPError:
+                    except httpx.HTTPError as error:
                         event["status"] = "remote_outcome_unknown"
+                        reason = (
+                            "timeout"
+                            if isinstance(error, httpx.TimeoutException)
+                            else "transport_error"
+                        )
                         raise SourcesQLError(
                             "provider_unavailable", "Fetch transport failed", "acquisition"
                         ) from None
@@ -557,6 +571,7 @@ class SafeFetcher:
                         "url": original,
                         "status": "fetch_failed",
                         "error_code": error.code,
+                        "failure_reason": reason,
                         "content": None,
                         "content_basis": None,
                     }

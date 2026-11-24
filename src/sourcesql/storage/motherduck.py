@@ -82,6 +82,7 @@ class Transaction:
 
 
 class MotherDuckStore(Store):
+    has_lead_sets = False
     inspection_dialect = "duckdb"
 
     def __init__(

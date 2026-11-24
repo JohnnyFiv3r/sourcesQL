@@ -66,6 +66,8 @@ Durable app mutations use a versioned backend read and one compare-and-swap writ
 
 The local subprocess adapter uses a bounded synchronous 30-second response deadline. On POSIX each bridge runs in its own process group; timeout or response overflow stops that owned group, including its SQL worker. Windows uses ordinary child termination; the SQL worker is already unsupported there. MotherDuck uses durable asynchronous job handles rather than keeping a local Python bridge alive for Flight execution. A local timeout remains an honest transport failure; inspect/retry the same request key to recover existing run state rather than creating duplicate work.
 
+Hosts without a sourcesQL search provider can search with their own tool and pass the URLs to `WEB_FETCH`; see [Researching URLs your agent found](language.md#researching-urls-your-agent-found).
+
 ## Qualification scope
 
 Local engine/app tests cover typed values, source references, immutable result
