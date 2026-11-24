@@ -20,6 +20,7 @@ from sqlglot.errors import SqlglotError
 from sqlglot.parsers.duckdb import DuckDBParser
 
 from sourcesql.contracts import Column, SourcesQLError
+from sourcesql.error_codes import refusal
 
 PARSER_VERSION = "30.19.0"
 EXTERNAL = frozenset(
@@ -257,6 +258,23 @@ def refuse(message: str, code: str = "unsupported_query") -> NoReturn:
     raise AdmissionRefusal(code, message)
 
 
+def _parse_refusal(error: SqlglotError) -> str:
+    """The parse refusal with the parser's position and a fixed description, never its text."""
+    first = (getattr(error, "errors", None) or [{}])[0]
+    said = str(first.get("description", ""))
+    if "Unexpected token" in said:
+        description = "Unexpected token"
+    elif "Invalid expression" in said:
+        description = "Invalid expression"
+    elif "unexpected end" in said.lower() or "end of" in said.lower():
+        description = "Unexpected end of query"
+    else:
+        description = "Syntax error"
+    return refusal(
+        "parse_error", line=first.get("line"), column=first.get("col"), description=description
+    )
+
+
 PUBLIC_REASON = re.compile(r"[A-Za-z0-9 ,.;:()_'-]{1,240}\Z")
 
 
@@ -326,7 +344,7 @@ def _closed_tree(tree: exp.Expr) -> None:
     for node in nodes:
         name = type(node).__name__
         if name not in _ARGS:
-            refuse(f"Unsupported SQL construct: {name}")
+            refuse(refusal("unsupported_construct", construct=name))
         if any(v is not None and v != [] and k not in _ARGS[name] for k, v in node.args.items()):
             refuse(f"Unsupported clause in {name}")
         if isinstance(node, exp.Anonymous) and not custom_name(node):
@@ -571,9 +589,8 @@ class _Binder:
         if not found and outer:
             return self.resolve(node, outer, {})
         if len(found) != 1:
-            refuse(
-                "Column is unknown or ambiguous; use an explicit relation alias", "invalid_query"
-            )
+            name = f"{node.table}.{node.name}" if node.table else node.name
+            refuse(refusal("unknown_column", name=name), "invalid_query")
         return found[0].logical_type
 
     def infer(
@@ -592,7 +609,7 @@ class _Binder:
         if isinstance(node, (exp.Parameter, exp.Placeholder)):
             key = _parameter_name(node)
             if key not in self.parameters:
-                refuse("A query parameter has no binding", "invalid_query")
+                refuse(refusal("unbound_parameter", name=key), "invalid_query")
             self.used_parameters.add(key)
             value = self.parameters[key]
             return (
@@ -1111,8 +1128,8 @@ def admit(
         schemas[key] = [Column(c.key, validate_type(c.logical_type), c.nullable) for c in cols]
     try:
         statements = sqlglot.parse(query, read=_ClosedDuckDB)
-    except SqlglotError:
-        refuse("SQL could not be parsed in the installed dialect", "invalid_query")
+    except SqlglotError as error:
+        refuse(_parse_refusal(error), "invalid_query")
     if len(statements) != 1 or not isinstance(statements[0], (exp.Select, exp.SetOperation)):
         refuse("Exactly one read-only SELECT statement is required")
     tree = statements[0]
@@ -1123,7 +1140,7 @@ def admit(
             isinstance(node, (exp.Parameter, exp.Placeholder))
             and _parameter_name(node) not in params
         ):
-            refuse("A query parameter has no binding", "invalid_query")
+            refuse(refusal("unbound_parameter", name=_parameter_name(node)), "invalid_query")
     binder = _Binder(params, schemas)
     columns = binder.query(tree, {})
     if set(params) != binder.used_parameters:

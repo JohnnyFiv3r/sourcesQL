@@ -14,6 +14,7 @@ from datetime import date
 from typing import Any
 import uuid
 from sourcesql import __version__
+from sourcesql.error_codes import refusal
 from sourcesql.contracts import (
     Budget,
     Column,
@@ -442,7 +443,14 @@ class Engine:
         canonical(parameters)
         profile_name = request.get("profile", "fixture")
         if profile_name not in self.profiles:
-            raise SourcesQLError("unsupported_capability", "Profile unavailable")
+            raise SourcesQLError(
+                "unsupported_capability",
+                refusal(
+                    "profile_unavailable",
+                    requested=profile_name if isinstance(profile_name, str) else None,
+                    profiles=list(self.profiles),
+                ),
+            )
         profile = self.profiles[profile_name]
         inputs, parents, classification = self._inputs(request.get("inputs", {}))
         plan = admit(query, parameters, {k: v.columns for k, v in inputs.items()})

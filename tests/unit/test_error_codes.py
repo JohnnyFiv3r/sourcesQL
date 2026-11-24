@@ -6,10 +6,14 @@ import ast
 from pathlib import Path
 import re
 
+import pytest
+
 from sourcesql import error_codes
 from sourcesql.storage import stages
 
 ROOT = Path(__file__).resolve().parents[2]
+GATE = re.compile(r"[A-Za-z0-9 ,.;:()_'-]{1,240}\Z")
+CHARACTERS = re.compile(r"[A-Za-z0-9 ,.;:()_'-]+\Z")
 
 # Each call site that passes a code held in a variable or expression, keyed by
 # file, enclosing function and the code expression. A new site must be listed
@@ -226,5 +230,88 @@ def test_table_summaries_pass_the_stored_reason_gate():
         assert gate.match(error_codes.summary(code)), code
 
 
-def test_table_ships_a_refusals_section_for_later_wording():
-    assert error_codes.TABLE["refusals"] == {}
+def maximal_slots(entry):
+    sizes = {"int": 10**12, "name": "n" * 64, "names": [f"{'n' * 60}{i:02}" for i in range(20)]}
+    return {
+        slot: entry["values"][slot][0] if kind == "enum" else sizes[kind]
+        for slot, kind in entry.get("slots", {}).items()
+    }
+
+
+def test_every_refusal_template_renders_inside_the_gate():
+    for refusal_id, entry in error_codes.TABLE["refusals"].items():
+        for raisable in (False, True):
+            text = error_codes.refusal(refusal_id, raisable=raisable, **maximal_slots(entry))
+            limit = entry.get("max_length", 240)
+            assert CHARACTERS.match(text), refusal_id
+            assert len(text) <= limit, refusal_id
+            assert text.startswith(entry["message"].split("{")[0]), refusal_id
+
+
+def test_a_hostile_name_is_replaced_not_passed():
+    text = error_codes.refusal("unknown_column", name='a"b/c$')
+    assert "(name omitted)" in text
+    assert 'a"b' not in text and "$" not in text
+
+
+def test_a_missing_slot_leaves_the_fixed_sentence_alone():
+    message = error_codes.TABLE["refusals"]["unbound_parameter"]["message"]
+    assert error_codes.refusal("unbound_parameter", name=None) == message
+
+
+def test_an_int_slot_rejects_a_bool_or_text():
+    for bad in (True, "7"):
+        with pytest.raises(TypeError):
+            error_codes.refusal("budget_ceiling", key="k", max=bad, value=1)
+
+
+def test_an_unknown_slot_or_enum_value_cannot_widen_the_text():
+    with pytest.raises(ValueError):
+        error_codes.refusal("unknown_column", name="a", extra="b")
+    text = error_codes.refusal("parse_error", line=1, column=2, description="anything at all")
+    assert "anything" not in text and "Syntax error" in text
+
+
+def refusal_table(**changes):
+    entry = {
+        "code": "invalid_query",
+        "message": "A fixed sentence",
+        "detail": "Name: {name}.",
+        "slots": {"name": "name"},
+        **changes,
+    }
+    return {"example": entry}
+
+
+def test_loader_accepts_a_well_formed_refusal():
+    error_codes._validate_refusals(error_codes.TABLE["codes"], refusal_table())
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"code": "not_a_code"},
+        {"detail": "Name: {other}."},
+        {"detail": "Name: $name."},
+        {"hint": 'Say "hello" to /dev/null'},
+        {"slots": {"name": "free_text"}},
+        {"slots": {"name": "enum"}},
+    ],
+)
+def test_loader_rejects_a_bad_refusal_entry(changes):
+    with pytest.raises(ValueError):
+        error_codes._validate_refusals(error_codes.TABLE["codes"], refusal_table(**changes))
+
+
+def test_only_a_refusal_never_stored_as_a_hosted_reason_may_exceed_240():
+    for refusal_id, entry in error_codes.TABLE["refusals"].items():
+        if entry.get("max_length", 240) > 240:
+            assert entry["code"] not in {"invalid_query", "unsupported_query"}, refusal_id
+    base = {"code": "invalid_query", "message": "Fixed sentence", "max_length": 400}
+    with pytest.raises(ValueError, match="bad max_length"):
+        error_codes._validate_refusals(error_codes.TABLE["codes"], {"x": base})
+    with pytest.raises(ValueError, match="bad max_length"):
+        error_codes._validate_refusals(
+            error_codes.TABLE["codes"],
+            {"x": {**base, "code": "unsupported_capability", "max_length": 401}},
+        )

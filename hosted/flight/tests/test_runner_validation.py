@@ -140,9 +140,20 @@ def test_hosted_query_owns_one_binding_pass_and_sandbox_without_explain(tmp_path
     [
         (
             "SELECT title FROM WEB_SEARCH($q1,$q2",
-            "SQL could not be parsed in the installed dialect",
+            "SQL could not be parsed in the installed dialect. Line 1, column 36: Syntax error. "
+            "Fix the SQL at that position and run it again.",
         ),
-        ("SELECT random() AS n", "Unsupported SQL construct: Rand"),
+        (
+            "SELECT random() AS n",
+            "Unsupported SQL construct: Rand. "
+            "Call sourcesql_capabilities to see the supported operators and constructs.",
+        ),
+        (
+            "SELECT $missing AS n",
+            "A query parameter has no binding. Parameter name: missing. "
+            "Pass a value for missing in parameters, with the same name as in the SQL "
+            "but without the dollar sign.",
+        ),
         (
             "SELECT url FROM WEB_FETCH()",
             "WEB_FETCH needs at least one URL. Search with your own tool first, "

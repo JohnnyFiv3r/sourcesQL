@@ -66,7 +66,12 @@ import {
   type ResearchView,
   type Snapshot,
 } from "../src/schema.js";
-import { ResearchStore, type ResearchState } from "./store.js";
+import {
+  ResearchStore,
+  StoreLocationError,
+  logStoreFailure,
+  type ResearchState,
+} from "./store.js";
 import {
   updateBeginSchema,
   updateCompletionSchema,
@@ -471,6 +476,17 @@ export function createServer(
         };
       return result;
     } catch (error) {
+      // A store location failure is logged for the operator; the agent gets
+      // only the fixed sentence.
+      if (error instanceof StoreLocationError) {
+        logStoreFailure(error);
+        return {
+          isError: true,
+          content: [
+            { type: "text", text: `storage_unavailable: ${error.message}` },
+          ],
+        };
+      }
       // An engine code outside the shared table gets its fixed summary, never
       // the engine's own text.
       const text =
