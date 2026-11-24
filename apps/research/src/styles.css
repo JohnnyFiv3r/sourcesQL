@@ -1499,6 +1499,9 @@ label .input {
   margin-top: 3px;
   overflow-wrap: anywhere;
 }
+.source-list .source-assertion {
+  margin-top: 2px;
+}
 .source-list svg {
   flex: none;
 }

@@ -16,9 +16,13 @@ export type ResearchRequest = ResearchRequestSummary & {
   baseline: Row[];
   corrections: Amendment[];
   baseRevision: number;
-  assessments?: AppendResearchInput["assessments"];
+  assessments?: (NonNullable<AppendResearchInput["assessments"]>[number] & {
+    reason?: string;
+  })[];
   decisions?: Record<string, "accept" | "keep">;
   completion?: AppendResearchInput;
+  /** SHA-256 of the payload as submitted; survives export, which downgrades `completion`. */
+  completionDigest?: string;
 };
 export const changeKey = (rowId: string, field: string) => `${rowId}:${field}`;
 export function createRequest(
@@ -127,7 +131,7 @@ export function requestContext(request: ResearchRequest, view: ResearchView) {
       SOURCESQL_IDENTIFIER_GUIDANCE,
       "Only run research for a pending request. If resultArchivedAt is present, report that the result is archived; do not reopen, restore or rerun it unless requested. Otherwise, if already completed, call open_research with the request's resultSnapshotId to display its saved child; do not rerun the query.",
       "Keep intermediate discovery and unfinished tables behind the scenes. Complete requested filtering, deduplication, joins, semantic fields, final column selection and display labels before calling open_research once for the final child. Compose an admitted sourcesQL query answering the question. Use sourcesql_capabilities, sourcesql_query and sourcesql_read_result. Results stay server-side; result previews are not complete datasets.",
-      "append_research prefers request_id and result_ref:{result_id,snapshot_id,title}. Legacy bounded imports may use snapshot: {id (new unique ID), title, sourceResultSetId (actual SELECT result ID), capturedAt (YYYY-MM-DD evidence capture date), parentSnapshotId, coverage, columns:[{key,label}], rows:[{id,values,sourceUrl,sources?,cellSources?,evidence,verificationNote}]}. Values must be scalar or null. Evidence arrays contain exact returned quotes. Up to 100 rows, 12 columns, 200 KB.",
+      "append_research prefers request_id and result_ref:{result_id,snapshot_id,title}. Legacy bounded imports may use snapshot: {id (new unique ID), title, sourceResultSetId (actual SELECT result ID), capturedAt (YYYY-MM-DD evidence capture date), parentSnapshotId, coverage, columns:[{key,label}], rows:[{id,values,sourceUrl,sources?,cellSources?,evidence,verificationNote}]}. Values must be scalar or null. Evidence arrays hold quotes you supply; sourcesQL shows them as host-asserted unless an engine result backs them. To cite fetched text, use request_id and result_ref. Up to 100 rows, 12 columns, 200 KB.",
       `Use parentSnapshotId ${request.snapshotId}; the server also binds it to this request. Preserve the original observations and user corrections.`,
       "After append_research succeeds, call open_research with snapshot_id equal to its returned snapshot.id to render the child in the latest reply. Saving alone does not render a new component. If presentation fails, retry only open_research; preserve the completed request and saved child.",
       request.kind === "expand"
