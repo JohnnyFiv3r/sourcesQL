@@ -156,6 +156,32 @@
       "message": "Unsupported SQL construct: {construct}",
       "hint": "Call sourcesql_capabilities to see the supported operators and constructs.",
       "slots": {"construct": "name"}
+    },
+    "lead_batch_empty": {
+      "code": "invalid_request",
+      "message": "No leads were sent",
+      "hint": "Send between 1 and 150 leads."
+    },
+    "lead_batch_too_large": {
+      "code": "invalid_request",
+      "message": "Too many leads in one call: {count}",
+      "hint": "Send at most 150 per call and call again with the same lead_set_id.",
+      "slots": {"count": "int"}
+    },
+    "lead_set_full": {
+      "code": "budget_exhausted",
+      "message": "This lead set would hold more than 2000 leads",
+      "hint": "Filter and fetch what you have, or ask the user before starting a new lead set."
+    },
+    "lead_set_hits_full": {
+      "code": "budget_exhausted",
+      "message": "This lead set would hold more than 6000 search hits",
+      "hint": "Filter and fetch what you have, or ask the user before starting a new lead set."
+    },
+    "lead_request_reused": {
+      "code": "invalid_request",
+      "message": "This request ID was already used with different leads",
+      "hint": "Use a new request ID, or resend the original leads unchanged."
     }
   }
 }

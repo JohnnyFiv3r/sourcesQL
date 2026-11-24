@@ -35,6 +35,7 @@ def main():
         "read_result": engine.read_result,
         "inspect_result": engine.inspect_result,
         "import_table": engine.import_table,
+        "add_leads": engine.add_leads,
         "export": engine.export,
         "import": engine.import_bundle,
         "run_status": engine.run_status,
