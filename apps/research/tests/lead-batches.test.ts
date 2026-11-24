@@ -593,6 +593,25 @@ test("a table is badged as lead-derived only when its SQL read the lead set", as
     },
   });
   assert.equal((await open(reused, "reused")).leadDerived, true);
+  // An effective-view pin is materialized by the app first; the mark survives that too.
+  const effective = await client.callTool({
+    name: "sourcesql_query",
+    arguments: {
+      request_id: randomUUID(),
+      query: "SELECT title FROM input.saved",
+      inputs: {
+        saved: { result_id, view: "effective", amendment_revision: 0 },
+      },
+    },
+  });
+  assert.notEqual(effective.isError, true, textOf(effective));
+  assert.equal((await open(effective, "effective")).leadDerived, true);
+  assert.equal(
+    (effective.structuredContent as { lead_inputs_read?: unknown })
+      .lead_inputs_read,
+    undefined,
+    "reuse is not a read of the lead set",
+  );
   // Reuse of a table that never touched a lead set stays unmarked.
   const plain = await client.callTool({
     name: "sourcesql_query",

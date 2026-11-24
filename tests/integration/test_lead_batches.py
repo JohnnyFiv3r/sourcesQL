@@ -616,3 +616,22 @@ def test_lead_derived_follows_reuse_but_not_an_unused_pin(tmp_path):
         },
     )
     assert "lead_derived" not in again
+
+
+def test_an_imported_table_built_on_lead_data_stays_lead_derived(tmp_path):
+    engine = make(tmp_path)
+    reply = engine.add_leads(request_id(1), leads_of(AURORA))
+    titles = engine.query(query="SELECT title FROM input.l", inputs={"l": lead_view(reply)})
+    parent = {"result_id": titles["result_id"], "view": "original", "amendment_revision": None}
+    columns = [{"key": "title", "logical_type": "VARCHAR", "nullable": False}]
+    built = engine.import_table(
+        columns=columns,
+        rows=[{"title": "Lead 0"}],
+        data_classification="public_web",
+        parents=[parent],
+    )
+    assert built["lead_derived"] is True
+    other = engine.import_table(
+        columns=columns, rows=[{"title": "x"}], data_classification="public_web"
+    )
+    assert "lead_derived" not in other

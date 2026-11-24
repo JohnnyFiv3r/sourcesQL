@@ -452,8 +452,11 @@ class Engine:
         """
         if lead_inputs_read:
             return True
-        for alias in plan.input_aliases:
-            meta = self.store.authorize(bindings[alias]["result_id"])
+        return self._holds_lead_data([bindings[alias]["result_id"] for alias in plan.input_aliases])
+
+    def _holds_lead_data(self, result_ids) -> bool:
+        for result_id in result_ids:
+            meta = self.store.authorize(result_id)
             if meta.get("lead_derived") or meta.get("provenance", {}).get("kind") == "lead_set":
                 return True
         return False
@@ -2160,6 +2163,13 @@ class Engine:
                     "parents": parents,
                     "data_classification": data_classification,
                     "provenance": provenance,
+                    # An imported table built on lead-set data (an app materialization of a
+                    # table made from one) keeps that, so its host badges survive.
+                    **(
+                        {"lead_derived": True}
+                        if self._holds_lead_data([p["result_id"] for p in parents])
+                        else {}
+                    ),
                     "row_ids": published_row_ids,
                     "created_at": stamp,
                     "receipt": receipt,
