@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "codes": {
+    "unsupported_query": {
+      "summary": "The query is not supported. Review its SQL against sourcesql_capabilities before starting new work.",
+      "hosted_visible": true
+    },
+    "invalid_query": {
+      "summary": "The query could not be executed. Review its SQL and input bindings before starting new work.",
+      "hosted_visible": true
+    },
+    "invalid_request": {
+      "summary": "The request is invalid. Review its arguments before starting new work.",
+      "hosted_visible": true
+    },
+    "budget_exhausted": {
+      "summary": "A configured execution allowance was exhausted. Inspect this job or run before authorizing further work.",
+      "hosted_visible": true
+    },
+    "unsupported_capability": {
+      "summary": "A required capability is unavailable in this configuration. Check sourcesql_capabilities before starting new work.",
+      "hosted_visible": true
+    },
+    "unauthorized": {
+      "summary": "The operation is not authorized for this connection.",
+      "hosted_visible": true
+    },
+    "disclosure_required": {
+      "summary": "The operation requires explicit disclosure authorization.",
+      "hosted_visible": true
+    },
+    "evidence_invalid": {
+      "summary": "Source evidence failed validation. Inspect the saved run before continuing.",
+      "hosted_visible": true
+    },
+    "invalid_output": {
+      "summary": "Research output failed validation. Inspect the saved run before continuing.",
+      "hosted_visible": true
+    },
+    "provider_unavailable": {
+      "summary": "A required provider or dependency is unavailable. Inspect this job or run before continuing.",
+      "hosted_visible": true
+    },
+    "provider_timeout": {
+      "summary": "A provider request timed out. Its remote outcome may be unknown; inspect the saved run before retrying.",
+      "hosted_visible": true
+    },
+    "provider_connection_error": {
+      "summary": "A provider connection failed. Its remote outcome may be unknown; inspect the saved run before retrying.",
+      "hosted_visible": true
+    },
+    "provider_http_error": {
+      "summary": "A provider rejected a request. Inspect the saved run before continuing.",
+      "hosted_visible": true
+    },
+    "provider_error": {
+      "summary": "A provider request failed. Inspect the saved run before continuing.",
+      "hosted_visible": true
+    },
+    "storage_conflict": {
+      "summary": "Stored state changed concurrently. Inspect this job or run before continuing.",
+      "hosted_visible": true
+    },
+    "storage_unavailable": {
+      "summary": "Durable storage is unavailable. Inspect this job or run before continuing.",
+      "hosted_visible": true
+    },
+    "cancelled": {
+      "summary": "Execution was cancelled. No further work starts from status inspection.",
+      "hosted_visible": true
+    },
+    "flight_definition_changed": {
+      "summary": "The pinned worker configuration changed. Review the worker configuration before starting new work.",
+      "hosted_visible": true
+    },
+    "execution_outcome_unknown": {
+      "summary": "Execution outcome is unknown. Inspect this job or run; do not automatically resubmit it.",
+      "hosted_visible": true
+    },
+    "execution_failed": {
+      "summary": "Research execution failed safely. Inspect this job or run before continuing.",
+      "hosted_visible": true
+    },
+    "not_found": {
+      "summary": "Not found.",
+      "hosted_visible": true
+    },
+    "result_unavailable": {
+      "summary": "Result or dependency unavailable.",
+      "hosted_visible": true
+    },
+    "idempotency_conflict": {
+      "summary": "That request ID was already used with different parameters. Use a new request ID, or repeat the original request unchanged.",
+      "hosted_visible": true
+    },
+    "revision_conflict": {
+      "summary": "The research changed since you read it. Reread it and apply your change again.",
+      "hosted_visible": true
+    }
+  },
+  "refusals": {
+    "parse_error": {
+      "code": "invalid_query",
+      "message": "SQL could not be parsed in the installed dialect",
+      "detail": "Line {line}, column {column}: {description}.",
+      "hint": "Fix the SQL at that position and run it again.",
+      "slots": {"line": "int", "column": "int", "description": "enum"},
+      "values": {"description": ["Unexpected token", "Invalid expression", "Unexpected end of query", "Syntax error"]}
+    },
+    "unknown_column": {
+      "code": "invalid_query",
+      "message": "Column is unknown or ambiguous; use an explicit relation alias",
+      "detail": "Column name: {name}.",
+      "hint": "Check the column names of the relations in FROM, or qualify it as alias.column.",
+      "slots": {"name": "name"}
+    },
+    "unbound_parameter": {
+      "code": "invalid_query",
+      "message": "A query parameter has no binding",
+      "detail": "Parameter name: {name}.",
+      "hint": "Pass a value for {name} in parameters, with the same name as in the SQL but without the dollar sign.",
+      "slots": {"name": "name"}
+    },
+    "profile_unavailable": {
+      "code": "unsupported_capability",
+      "message": "Profile unavailable",
+      "max_length": 400,
+      "detail": "Requested profile: {requested}. Available profiles: {profiles}.",
+      "hint": "Choose one of these, or omit profile to use the default.",
+      "slots": {"requested": "name", "profiles": "names"}
+    },
+    "budget_ceiling": {
+      "code": "invalid_request",
+      "message": "Requested budget exceeds the supported ceiling",
+      "detail": "Budget key {key} is at most {max}; you sent {value}.",
+      "hint": "Lower it to {max} or less.",
+      "slots": {"key": "name", "max": "int", "value": "int"}
+    },
+    "allowance_exhausted": {
+      "code": "budget_exhausted",
+      "message": "Work allowance exhausted",
+      "detail": "The {counter} allowance of {limit} was used up.",
+      "hint": "Narrow the query.",
+      "hint_raisable": "Narrow the query, or ask the user to approve a higher limit.",
+      "slots": {"counter": "name", "limit": "int"}
+    },
+    "missing_cost_budget": {
+      "code": "unauthorized",
+      "message": "Live dispatch requires a trusted finite spending grant",
+      "detail": "This live request has no per-query cost budget. Approved amount: {approved} microusd.",
+      "hint": "Set budgets.max_cost_microusd to a positive amount no larger than the profile's approved amount.",
+      "slots": {"approved": "int"}
+    },
+    "unsupported_construct": {
+      "code": "unsupported_query",
+      "message": "Unsupported SQL construct: {construct}",
+      "hint": "Call sourcesql_capabilities to see the supported operators and constructs.",
+      "slots": {"construct": "name"}
+    },
+    "lead_batch_empty": {
+      "code": "invalid_request",
+      "message": "No leads were sent",
+      "hint": "Send between 1 and 150 leads."
+    },
+    "lead_batch_too_large": {
+      "code": "invalid_request",
+      "message": "Too many leads in one call: {count}",
+      "hint": "Send at most 150 per call and call again with the same lead_set_id.",
+      "slots": {"count": "int"}
+    },
+    "lead_set_full": {
+      "code": "budget_exhausted",
+      "message": "This lead set would hold more than 2000 leads",
+      "hint": "Filter and fetch what you have, or ask the user before starting a new lead set."
+    },
+    "lead_request_reused": {
+      "code": "invalid_request",
+      "message": "This request ID was already used with different leads",
+      "hint": "Use a new request ID, or resend the original leads unchanged."
+    }
+  }
+}

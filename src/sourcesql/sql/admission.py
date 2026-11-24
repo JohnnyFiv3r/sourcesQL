@@ -20,6 +20,7 @@ from sqlglot.errors import SqlglotError
 from sqlglot.parsers.duckdb import DuckDBParser
 
 from sourcesql.contracts import Column, SourcesQLError
+from sourcesql.error_codes import refusal
 
 PARSER_VERSION = "30.19.0"
 EXTERNAL = frozenset(
@@ -60,6 +61,9 @@ SOURCE_COLUMNS.extend(
         Column("best_search_rank", "BIGINT"),
     ]
 )
+# Only WEB_FETCH reports per-URL outcomes, so a failed URL stays visible with its
+# reason. WEB_SEARCH keeps SOURCE_COLUMNS and its row type unchanged.
+FETCH_COLUMNS = [*SOURCE_COLUMNS, Column("fetch_status"), Column("fetch_failure")]
 SCALAR_TYPES = frozenset(
     {
         "VARCHAR",
@@ -254,6 +258,23 @@ def refuse(message: str, code: str = "unsupported_query") -> NoReturn:
     raise AdmissionRefusal(code, message)
 
 
+def _parse_refusal(error: SqlglotError) -> str:
+    """The parse refusal with the parser's position and a fixed description, never its text."""
+    first = (getattr(error, "errors", None) or [{}])[0]
+    said = str(first.get("description", ""))
+    if "Unexpected token" in said:
+        description = "Unexpected token"
+    elif "Invalid expression" in said:
+        description = "Invalid expression"
+    elif "unexpected end" in said.lower() or "end of" in said.lower():
+        description = "Unexpected end of query"
+    else:
+        description = "Syntax error"
+    return refusal(
+        "parse_error", line=first.get("line"), column=first.get("col"), description=description
+    )
+
+
 PUBLIC_REASON = re.compile(r"[A-Za-z0-9 ,.;:()_'-]{1,240}\Z")
 
 
@@ -323,7 +344,7 @@ def _closed_tree(tree: exp.Expr) -> None:
     for node in nodes:
         name = type(node).__name__
         if name not in _ARGS:
-            refuse(f"Unsupported SQL construct: {name}")
+            refuse(refusal("unsupported_construct", construct=name))
         if any(v is not None and v != [] and k not in _ARGS[name] for k, v in node.args.items()):
             refuse(f"Unsupported clause in {name}")
         if isinstance(node, exp.Anonymous) and not custom_name(node):
@@ -397,10 +418,32 @@ def _fields(logical_type: str) -> list[Column]:
     ]
 
 
+_TYPE_LENGTH_LIMIT = 4096
+# Types longer than the limit are parsed only to tell deep nesting from other
+# faults, so the work is bounded.
+_TYPE_PARSE_LIMIT = 65536
+_TYPE_NESTING_REFUSAL = "Logical type exceeds the supported nesting"
+
+
 def validate_type(logical_type: str) -> str:
     """Validate a declared type as an AST before it enters trusted worker SQL."""
-    if type(logical_type) is not str or len(logical_type) > 4096:
+    if type(logical_type) is not str:
         refuse("Invalid logical type", "invalid_output")
+    if len(logical_type) > _TYPE_LENGTH_LIMIT:
+        # Never admitted. The one reason named is nesting, and only when the
+        # ordinary checks themselves give it; any other fault keeps the generic
+        # refusal a long type has always had.
+        if len(logical_type) <= _TYPE_PARSE_LIMIT:
+            try:
+                _validate_type_ast(logical_type)
+            except SourcesQLError as error:
+                if error.safe_message == _TYPE_NESTING_REFUSAL:
+                    raise
+        refuse("Invalid logical type", "invalid_output")
+    return _validate_type_ast(logical_type)
+
+
+def _validate_type_ast(logical_type: str) -> str:
     try:
         statements = sqlglot.parse(f"SELECT CAST(NULL AS {logical_type})", read=_ClosedDuckDB)
         if (
@@ -426,6 +469,8 @@ def validate_type(logical_type: str) -> str:
         tree = expression.args["to"]
     except SqlglotError:
         refuse("Invalid logical type", "invalid_output")
+    except RecursionError:
+        refuse(_TYPE_NESTING_REFUSAL, "invalid_output")
 
     scalar = {
         "TEXT": "VARCHAR",
@@ -449,7 +494,7 @@ def validate_type(logical_type: str) -> str:
 
     def walk(node: exp.DataType, depth: int = 0) -> str:
         if depth > 8 or not isinstance(node, exp.DataType):
-            refuse("Logical type exceeds the supported nesting", "invalid_output")
+            refuse(_TYPE_NESTING_REFUSAL, "invalid_output")
         if any(
             v is not None and v != [] and k not in {"this", "expressions", "nested"}
             for k, v in node.args.items()
@@ -495,7 +540,11 @@ def validate_type(logical_type: str) -> str:
                     or not parameter.this.this.isdigit()
                 ):
                     refuse("Invalid decimal precision", "invalid_output")
-                values.append(int(parameter.this.this))
+                # Leading zeros do not change the value. Past 18 significant digits it is
+                # far over the DECIMAL limits; the cap keeps Python's integer-conversion
+                # digit limit out of reach for long types.
+                digits = parameter.this.this.lstrip("0") or "0"
+                values.append(int(digits) if len(digits) <= 18 else 10**18)
             precision, scale = values[0], values[1] if len(values) == 2 else 0
             if 1 <= precision <= 38 and 0 <= scale <= precision:
                 return f"DECIMAL({precision},{scale})"
@@ -508,7 +557,8 @@ def operator_type(node: exp.Anonymous, parameters: dict[str, Any]) -> str:
     name = custom_name(node)
     _, kwargs = call_parts(node)
     if name in ("WEB_SEARCH", "WEB_FETCH"):
-        return "STRUCT(" + ", ".join(c.key + " " + c.logical_type for c in SOURCE_COLUMNS) + ")[]"
+        columns = FETCH_COLUMNS if name == "WEB_FETCH" else SOURCE_COLUMNS
+        return "STRUCT(" + ", ".join(c.key + " " + c.logical_type for c in columns) + ")[]"
     if name == "SEM_MATCH":
         return "BOOLEAN"
     if name == "SEM_SCORE":
@@ -567,9 +617,8 @@ class _Binder:
         if not found and outer:
             return self.resolve(node, outer, {})
         if len(found) != 1:
-            refuse(
-                "Column is unknown or ambiguous; use an explicit relation alias", "invalid_query"
-            )
+            name = f"{node.table}.{node.name}" if node.table else node.name
+            refuse(refusal("unknown_column", name=name), "invalid_query")
         return found[0].logical_type
 
     def infer(
@@ -588,7 +637,7 @@ class _Binder:
         if isinstance(node, (exp.Parameter, exp.Placeholder)):
             key = _parameter_name(node)
             if key not in self.parameters:
-                refuse("A query parameter has no binding", "invalid_query")
+                refuse(refusal("unbound_parameter", name=key), "invalid_query")
             self.used_parameters.add(key)
             value = self.parameters[key]
             return (
@@ -735,7 +784,9 @@ class _Binder:
                 if custom_name(node.this) not in ("WEB_SEARCH", "WEB_FETCH"):
                     refuse("Only WEB_SEARCH and WEB_FETCH are source operators")
                 self.validate_call(node.this, {}, source=True)
-                cols = list(SOURCE_COLUMNS)
+                cols = list(
+                    FETCH_COLUMNS if custom_name(node.this) == "WEB_FETCH" else SOURCE_COLUMNS
+                )
             elif node.db:
                 if node.db.lower() != "input" or node.name not in self.inputs:
                     refuse("Unknown or unbound input relation", "invalid_query")
@@ -786,6 +837,13 @@ class _Binder:
                 "Operator arguments must be deterministic scalar expressions from the source row"
             )
         if name in ("WEB_SEARCH", "WEB_FETCH"):
+            if name == "WEB_FETCH" and not args:
+                # Plain words only: a hosted caller sees this sentence, and `$` is not in its gate.
+                refuse(
+                    "WEB_FETCH needs at least one URL. Search with your own tool first, "
+                    "then pass the URLs as query parameters named u1 to u32.",
+                    "invalid_query",
+                )
             if not 1 <= len(args) <= 32:
                 refuse("Web source operators require one to 32 strings", "invalid_query")
             allowed = (
@@ -1098,8 +1156,12 @@ def admit(
         schemas[key] = [Column(c.key, validate_type(c.logical_type), c.nullable) for c in cols]
     try:
         statements = sqlglot.parse(query, read=_ClosedDuckDB)
-    except SqlglotError:
-        refuse("SQL could not be parsed in the installed dialect", "invalid_query")
+    except RecursionError:
+        # The parser recurses per nesting level, so input too deep to parse is the same
+        # condition as the post-parse depth limit in _closed_tree.
+        refuse("Query exceeds the AST depth limit", "invalid_query")
+    except SqlglotError as error:
+        refuse(_parse_refusal(error), "invalid_query")
     if len(statements) != 1 or not isinstance(statements[0], (exp.Select, exp.SetOperation)):
         refuse("Exactly one read-only SELECT statement is required")
     tree = statements[0]
@@ -1110,7 +1172,7 @@ def admit(
             isinstance(node, (exp.Parameter, exp.Placeholder))
             and _parameter_name(node) not in params
         ):
-            refuse("A query parameter has no binding", "invalid_query")
+            refuse(refusal("unbound_parameter", name=_parameter_name(node)), "invalid_query")
     binder = _Binder(params, schemas)
     columns = binder.query(tree, {})
     if set(params) != binder.used_parameters:

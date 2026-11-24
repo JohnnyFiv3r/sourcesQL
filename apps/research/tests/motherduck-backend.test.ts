@@ -2840,6 +2840,32 @@ test("MCP job status carries an admission refusal's own reason, and only that", 
   }
 });
 
+test("job status keeps not_found, and degrades a code outside the shared table", async () => {
+  const h = await harness();
+  try {
+    const original = h.engine("owner-a", { allowSubmission: true });
+    await original.initialize();
+    const submitted = await original.call<Row>("query", query());
+    const stored = async (code: string) => {
+      await original.connection((connection) =>
+        connection.query(
+          `UPDATE ${original.table("jobs")} SET status='failed',error_code=$1,error_message='PRIVATE-RAW' WHERE id=$2::UUID`,
+          [code, submitted.job_id],
+        ),
+      );
+      h.runs[0].status = "RUN_STATUS_FAILED";
+      h.runs[0].exit_code = 1;
+      return original.call<Row>("job_status", { job_id: submitted.job_id });
+    };
+    assert.equal((await stored("not_found")).error.code, "not_found");
+    const unknown = await stored("not_in_the_table");
+    assert.equal(unknown.error.code, "execution_failed");
+    assert.ok(!JSON.stringify(unknown).includes("PRIVATE"));
+  } finally {
+    await h.close();
+  }
+});
+
 test("operator-reserved compatibility: MCP returns the blocked queued receipt and same-ID resume guidance rather than an error", async () => {
   const h = await harness();
   const client = new Client({ name: "budget-boundary-test", version: "1" });

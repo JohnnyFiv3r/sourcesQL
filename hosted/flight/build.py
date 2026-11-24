@@ -22,6 +22,7 @@ import zipfile
 
 
 TOKENIZER_RESOURCE = "sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz"
+ERROR_CODES_RESOURCE = "sourcesql/error_codes.json"
 TOKENIZER_HYDRATION = {
     "resource": TOKENIZER_RESOURCE,
     "url": "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
@@ -162,6 +163,7 @@ def validate_wheel(root: Path, wheel: Path, runtime: dict) -> dict[str, str]:
         for relative in (
             "sourcesql/_resources/tokenizers/cl100k_base.tiktoken.gz",
             "sourcesql/_resources/tokenizers/TIKTOKEN_LICENSE.txt",
+            ERROR_CODES_RESOURCE,
         ):
             data = (root / "src" / relative).read_bytes()
             if relative not in names or archive.read(relative) != data:

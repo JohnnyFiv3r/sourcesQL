@@ -23,6 +23,8 @@ This command reads configuration and creates a local store; it does not contact 
 | `embedding` | `{ "name": "text-embedding-3-small", "api_key_env": "OPENAI_API_KEY" }` configures `SEM_SCORE`. Optional `endpoint` selects a trusted compatible destination. An unfamiliar compatible model also needs an explicit supported `encoding`, currently `cl100k_base`. Known model/encoding conflicts refuse. No scorer means refusal; there is no lexical substitute. |
 | `allow_public_source_hosts` | Exact `true` opts into public HTTP(S) source fetching. Public DNS, standard ports and redirects are still checked. This does not authorize private-source disclosure. |
 
+A live profile without a search credential can still run `WEB_FETCH` over URLs a host agent found with its own search; see [Researching URLs your agent found](language.md#researching-urls-your-agent-found). A fetch-only profile sets `"mode": "live"`, `"allow_live": true`, `"approved_cost_microusd"`, `"metering_policy": "estimated"`, a `model`, and either `"allow_public_source_hosts": true` or `allowed_source_hosts`, and omits `api_key_env`. `WEB_SEARCH` is refused on it with `provider_unavailable`. Capabilities report `search.configured: false` and `host_search_route.available: true` for it. This route is mock- and fixture-tested only; live qualification is a separate check.
+
 Both `model` and `embedding` can be omitted for search-only work. Credentials, destination permissions and a spending grant are separate requirements. Private inputs additionally require exact trusted disclosure permissions; query text cannot grant them.
 
 ## Semantic matching, ranking and normalization

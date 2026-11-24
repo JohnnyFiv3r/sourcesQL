@@ -185,6 +185,11 @@ Flight config. See the [create](https://motherduck.com/docs/sql-reference/mother
 and [version metadata](https://motherduck.com/docs/sql-reference/motherduck-sql-reference/flights/md-get-flight-version/)
 references.
 
+## Fetch-only profiles
+
+Hosted fetch-only profiles, where the host agent searches and the Flight only
+fetches, are not offered yet. The Exa-only profile allows no fetches.
+
 ## Cost controls and qualification
 
 Provision bounded F4 Flights without schedules, keep fixture mode as the default

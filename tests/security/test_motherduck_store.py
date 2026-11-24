@@ -296,7 +296,10 @@ def test_admission_refusal_reason_is_kept_only_for_an_admission_refusal(make_sto
     with pytest.raises(SourcesQLError) as error:
         engine(store, tmp_path).explain(**claimed["request"])
     reason = public_refusal_reason(error.value)
-    assert reason == "SQL could not be parsed in the installed dialect"
+    assert reason == (
+        "SQL could not be parsed in the installed dialect. Line 1, column 29: Syntax error. "
+        "Fix the SQL at that position and run it again."
+    )
     store.fail_job(
         job_id, token, error.value.code, "PRIVATE-RAW", error.value.stage, refusal_reason=reason
     )
@@ -357,6 +360,20 @@ def test_provider_failure_code_survives_reopen_without_retaining_provider_text(
     final = job(reopened, job_id)
     assert final["error_code"] == provider_code
     assert final["error_message"] == saved["error_message"]
+
+
+@pytest.mark.parametrize(
+    "code", ["not_found", "result_unavailable", "idempotency_conflict", "revision_conflict"]
+)
+def test_shared_error_codes_keep_their_code_on_a_failed_job(make_store, code):
+    store = make_store()
+    job_id, context = seed_job(store)
+    token, _ = claim(store, job_id, context)
+    store.fail_job(job_id, token, code, "PRIVATE-RAW-DETAILS")
+    saved = job(make_store(), job_id)
+    assert saved["status"] == "failed"
+    assert saved["error_code"] == code
+    assert "PRIVATE" not in json.dumps(saved, default=str)
 
 
 @pytest.mark.parametrize("unreviewed_code", ["unknown_provider_code", "", None])

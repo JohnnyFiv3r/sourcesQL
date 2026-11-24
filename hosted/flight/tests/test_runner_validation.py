@@ -140,9 +140,25 @@ def test_hosted_query_owns_one_binding_pass_and_sandbox_without_explain(tmp_path
     [
         (
             "SELECT title FROM WEB_SEARCH($q1,$q2",
-            "SQL could not be parsed in the installed dialect",
+            "SQL could not be parsed in the installed dialect. Line 1, column 36: Syntax error. "
+            "Fix the SQL at that position and run it again.",
         ),
-        ("SELECT random() AS n", "Unsupported SQL construct: Rand"),
+        (
+            "SELECT random() AS n",
+            "Unsupported SQL construct: Rand. "
+            "Call sourcesql_capabilities to see the supported operators and constructs.",
+        ),
+        (
+            "SELECT $missing AS n",
+            "A query parameter has no binding. Parameter name: missing. "
+            "Pass a value for missing in parameters, with the same name as in the SQL "
+            "but without the dollar sign.",
+        ),
+        (
+            "SELECT url FROM WEB_FETCH()",
+            "WEB_FETCH needs at least one URL. Search with your own tool first, "
+            "then pass the URLs as query parameters named u1 to u32.",
+        ),
     ],
 )
 def test_admission_refusal_hands_its_own_reason_to_the_job_store(
@@ -230,3 +246,17 @@ def test_explicit_hosted_explain_still_explains_without_provider_setup(tmp_path,
 def test_query_cannot_supply_a_validation_override(tmp_path, field):
     with pytest.raises(SourcesQLError, match="Unknown request field"):
         engine_module.Engine(tmp_path).query(query="SELECT 1 AS value", **{field: True})
+
+
+def test_too_deep_query_fails_the_hosted_job_with_the_depth_reason(tmp_path, monkeypatch):
+    tracked_execution(monkeypatch)
+    request = {"query": "SELECT " + "(" * 100 + "1" + ")" * 100 + " AS x"}
+    store = JobStore(tmp_path / "store", request)
+    report = {}
+    runner.execute_job(
+        store, {"job_id": str(uuid4())}, report, tmp_path, policy, policy.load_configuration({})
+    )
+    assert report["status"] == "failed" and store.finished == []
+    assert store.failures == ["invalid_query"]
+    assert store.reasons == ["Query exceeds the AST depth limit"]
+    assert report["error_code"] == "invalid_query"

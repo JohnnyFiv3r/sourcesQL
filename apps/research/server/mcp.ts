@@ -13,6 +13,7 @@ import {
   withEngineReadScope,
   boundedPreview,
   resultSnapshot,
+  EngineCallError,
   localJobsUnavailable,
   withLocalCallBudget,
   LOCAL_READ_LIMIT_MS,
@@ -20,7 +21,14 @@ import {
   type ResultReference,
   type EngineResult,
 } from "./engine.js";
-import { originForSnapshot } from "../src/schema.js";
+import { originForSnapshot, sourcesForSelection } from "../src/schema.js";
+import {
+  hostAssertedSummary,
+  hostQuoteText,
+  hostSourceText,
+  HOST_ASSERTED_NOTICE,
+  snapshotAssertion,
+} from "../src/presentation.js";
 import {
   McpServer,
   ResourceTemplate,
@@ -58,7 +66,12 @@ import {
   type ResearchView,
   type Snapshot,
 } from "../src/schema.js";
-import { ResearchStore, type ResearchState } from "./store.js";
+import {
+  ResearchStore,
+  StoreLocationError,
+  logStoreFailure,
+  type ResearchState,
+} from "./store.js";
 import {
   updateBeginSchema,
   updateCompletionSchema,
@@ -79,11 +92,15 @@ import {
 import { capacitySchema, researchJobView } from "../src/job-view.js";
 import { encodeResearchView, type ResearchViewWire } from "../src/view-wire.js";
 import {
+  knownErrorCode,
   safeExecutionError,
   safeRunErrors,
   safeFailureContext,
 } from "./execution-errors.js";
 import {
+  ADD_RESEARCH_LEADS_DESCRIPTION,
+  leadIntakeText,
+  type LeadIntakeReply,
   serverInstructions,
   queryDescription,
   recoverRunDescription,
@@ -259,13 +276,173 @@ export function createServer(
       },
     });
   };
+  // Saved snapshots with no engine result behind them carry the host's own
+  // sources and quotes. Return copies so stored rows are never altered.
+  const markHostAssertions = (
+    context: Awaited<ReturnType<ResearchStore["researchContext"]>>,
+  ) => {
+    const markSnapshot = <T extends Snapshot>(snapshot: T) =>
+      snapshotAssertion(snapshot) === "host"
+        ? {
+            ...snapshot,
+            assertion: "host" as const,
+            rows: snapshot.rows.map((row) => ({
+              ...row,
+              evidence: Object.fromEntries(
+                Object.entries(row.evidence).map(([field, quotes]) => [
+                  field,
+                  quotes.map(hostQuoteText),
+                ]),
+              ),
+            })),
+          }
+        : { ...snapshot, assertion: "engine" as const };
+    // A source is host-asserted if any host snapshot in the context names it;
+    // the cautious reading wins when a URL appears in both kinds.
+    const urlsOf = (assertion: "host" | "engine") =>
+      new Set(
+        [context.originalSnapshot, ...context.acceptedObservationsAtRequest]
+          .filter((snapshot) => snapshotAssertion(snapshot) === assertion)
+          .flatMap((snapshot) =>
+            snapshot.rows.flatMap((row) =>
+              sourcesForSelection(row).map((source) => source.url),
+            ),
+          ),
+      );
+    const hostUrls = urlsOf("host");
+    const engineUrls = urlsOf("engine");
+    // Unknown to every engine snapshot means nothing vouches for it.
+    const isHostUrl = (url: string) =>
+      hostUrls.has(url) || !engineUrls.has(url);
+    const hostQuotes = snapshotAssertion(context.originalSnapshot) === "host";
+    // The effective rows repeat the saved row's URLs and quotes, so they carry
+    // the same attribution as the snapshot copy above.
+    const markEffectiveRow = (
+      row: (typeof context.effectiveRowsAtRequest)[number],
+    ) => {
+      const urls = sourcesForSelection(row).map((source) => source.url);
+      return {
+        ...row,
+        assertion:
+          hostQuotes || urls.some(isHostUrl)
+            ? ("host" as const)
+            : ("engine" as const),
+        hostUrls: urls.filter(isHostUrl),
+        evidence: hostQuotes
+          ? Object.fromEntries(
+              Object.entries(row.evidence).map(([field, quotes]) => [
+                field,
+                quotes.map(hostQuoteText),
+              ]),
+            )
+          : row.evidence,
+      };
+    };
+    return {
+      ...context,
+      effectiveRowsAtRequest:
+        context.effectiveRowsAtRequest.map(markEffectiveRow),
+      originalSnapshot: markSnapshot(context.originalSnapshot),
+      acceptedObservationsAtRequest:
+        context.acceptedObservationsAtRequest.map(markSnapshot),
+      selectedSources: context.selectedSources.map((entry) => ({
+        ...entry,
+        sources: entry.sources.map((source) => ({
+          ...source,
+          assertion: isHostUrl(source.url)
+            ? ("host" as const)
+            : ("engine" as const),
+        })),
+      })),
+      assertionNotice: HOST_ASSERTED_NOTICE,
+    };
+  };
+  // The text an agent reads carries the marker in each host URL itself, while
+  // the structured copy keeps bare URLs that can be used as they are.
+  const withHostUrlText = (marked: ReturnType<typeof markHostAssertions>) => {
+    const markSources = <T extends { url: string }>(sources: T[]) =>
+      sources.map((source) => ({
+        ...source,
+        url: hostSourceText(source.url),
+      }));
+    type Marked = typeof marked.originalSnapshot;
+    const markSnapshot = (snapshot: Marked): Marked =>
+      snapshot.assertion !== "host"
+        ? snapshot
+        : {
+            ...snapshot,
+            rows: snapshot.rows.map((row) => ({
+              ...row,
+              ...(row.sourceUrl
+                ? { sourceUrl: hostSourceText(row.sourceUrl) }
+                : {}),
+              ...(row.sources ? { sources: markSources(row.sources) } : {}),
+              ...(row.cellSources
+                ? {
+                    cellSources: Object.fromEntries(
+                      Object.entries(row.cellSources).map(([field, list]) => [
+                        field,
+                        markSources(list),
+                      ]),
+                    ),
+                  }
+                : {}),
+            })),
+          };
+    const markEffectiveRow = (
+      row: (typeof marked.effectiveRowsAtRequest)[number],
+    ) => {
+      const host = new Set(row.hostUrls);
+      const text = (url: string) => (host.has(url) ? hostSourceText(url) : url);
+      const markList = <T extends { url: string }>(sources: T[]) =>
+        sources.map((source) => ({ ...source, url: text(source.url) }));
+      return {
+        ...row,
+        ...(row.sourceUrl ? { sourceUrl: text(row.sourceUrl) } : {}),
+        ...(row.sources ? { sources: markList(row.sources) } : {}),
+        ...(row.cellSources
+          ? {
+              cellSources: Object.fromEntries(
+                Object.entries(row.cellSources).map(([field, list]) => [
+                  field,
+                  markList(list),
+                ]),
+              ),
+            }
+          : {}),
+      };
+    };
+    return {
+      ...marked,
+      effectiveRowsAtRequest:
+        marked.effectiveRowsAtRequest.map(markEffectiveRow),
+      originalSnapshot: markSnapshot(marked.originalSnapshot),
+      acceptedObservationsAtRequest:
+        marked.acceptedObservationsAtRequest.map(markSnapshot),
+      selectedSources: marked.selectedSources.map((entry) => ({
+        ...entry,
+        sources: entry.sources.map((source) =>
+          source.assertion === "host"
+            ? { ...source, url: hostSourceText(source.url) }
+            : source,
+        ),
+      })),
+    };
+  };
+  const hostSentence = (
+    snapshot: Snapshot,
+    accepted?: ResearchView["acceptedSources"],
+  ) => {
+    const summary = hostAssertedSummary(snapshot, accepted);
+    return summary ? ` ${summary}` : "";
+  };
   const viewResult = (fullView: ResearchView, offset = 0): CallToolResult => {
     const view = presentation(fullView, offset);
     return {
       content: [
         {
           type: "text",
-          text: `${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.`,
+          text: `${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.${hostSentence(fullView.snapshot, fullView.acceptedSources)}`,
         },
       ],
       structuredContent: view,
@@ -302,18 +479,26 @@ export function createServer(
         };
       return result;
     } catch (error) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text:
-              error instanceof Error
-                ? error.message
-                : "Unable to complete the operation.",
-          },
-        ],
-      };
+      // A store location failure is logged for the operator; the agent gets
+      // only the fixed sentence.
+      if (error instanceof StoreLocationError) {
+        logStoreFailure(error);
+        return {
+          isError: true,
+          content: [
+            { type: "text", text: `storage_unavailable: ${error.message}` },
+          ],
+        };
+      }
+      // An engine code outside the shared table gets its fixed summary, never
+      // the engine's own text.
+      const text =
+        error instanceof EngineCallError && !knownErrorCode(error.code)
+          ? `execution_failed: ${safeExecutionError("execution_failed").message}`
+          : error instanceof Error
+            ? error.message
+            : "Unable to complete the operation.";
+      return { isError: true, content: [{ type: "text", text }] };
     }
   };
   // Read-only tools do no provider work: every bridge step they start shares
@@ -638,7 +823,7 @@ export function createServer(
     {
       title: "Save research results",
       description:
-        "Save an intermediate or final research result without rendering an app component. Accepts exactly one canonical result_ref:{result_id,snapshot_id,title} or bounded immutable v1/v2 snapshot. Retains source observations, types, nullable fields and capture precision; corrections are separate records. Returns the saved snapshot_id. open_research displays a saved table. import_research_bundle restores an exported research tree.",
+        "Save an intermediate or final research result without rendering an app component. Accepts exactly one canonical result_ref:{result_id,snapshot_id,title} or bounded immutable v1/v2 snapshot. Sources and evidence in a snapshot you supply are shown as host-asserted unless an engine result backs them. Retains source observations, types, nullable fields and capture precision; corrections are separate records. Returns the saved snapshot_id. open_research displays a saved table. import_research_bundle restores an exported research tree.",
       inputSchema: z
         .object({
           snapshot: snapshotSchema.optional(),
@@ -667,7 +852,7 @@ export function createServer(
         result.content = [
           {
             type: "text",
-            text: `Research saved as snapshot_id: ${saved.id}. This save does not render a new component. open_research displays the saved table.`,
+            text: `Research saved as snapshot_id: ${saved.id}. This save does not render a new component. open_research displays the saved table.${hostSentence(saved)}`,
           },
         ];
         return result;
@@ -783,8 +968,17 @@ export function createServer(
             return false;
           }
         });
+        // The text an agent reads carries the marker in the URL itself.
+        const text = {
+          ...result,
+          matches: result.matches.map((match) =>
+            match.assertion === "host" && match.source_url
+              ? { ...match, source_url: hostSourceText(match.source_url) }
+              : match,
+          ),
+        };
         return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
+          content: [{ type: "text", text: JSON.stringify(text) }],
           structuredContent: result,
         };
       }),
@@ -846,9 +1040,12 @@ export function createServer(
         );
         for (const snapshot of result.acceptedObservationsAtRequest)
           authorizeSnapshot(snapshot, options.access);
+        const marked = markHostAssertions(result);
         return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          structuredContent: result,
+          content: [
+            { type: "text", text: JSON.stringify(withHostUrlText(marked)) },
+          ],
+          structuredContent: marked,
         };
       }),
   );
@@ -857,7 +1054,7 @@ export function createServer(
     {
       title: "Return completed research",
       description:
-        "Complete a tracked pending expansion or refresh with its exact request_id and either result_ref:{result_id,snapshot_id,title} or a bounded v1/v2 snapshot. The server binds the saved parent and resolves canonical engine data. Call open_research with the saved snapshot.id after success to render it; retry rendering without rerunning the query. Identical completions are safe; changed payloads conflict and cancelled/failed requests reject late results. Refresh preserves exact requested row IDs and parent columns, with assessments for each scoped field. For engine refresh, project the saved IDs as an explicit identity column and pass row_id_column to sourcesql_query; the engine validates unique IDs against authorized input rows and removes that column from the published schema. The tracked request still requires its exact row scope and parent columns. Never guess or implicitly align URL/name matches; verified/conflicting assessments require returned textual evidence and only an explicit review_refresh accepts changes.",
+        "Complete a tracked pending expansion or refresh with its exact request_id and either result_ref:{result_id,snapshot_id,title} or a bounded v1/v2 snapshot. The server binds the saved parent and resolves canonical engine data. Call open_research with the saved snapshot.id after success to render it; retry rendering without rerunning the query. Identical completions are safe; changed payloads conflict and cancelled/failed requests reject late results. Refresh preserves exact requested row IDs and parent columns, with assessments for each scoped field. For engine refresh, project the saved IDs as an explicit identity column and pass row_id_column to sourcesql_query; the engine validates unique IDs against authorized input rows and removes that column from the published schema. The tracked request still requires its exact row scope and parent columns. Never guess or implicitly align URL/name matches; verified/conflicting assessments require returned textual evidence, and evidence in an inline snapshot is host-asserted unless an engine result backs it, so those assessments are stored as unverified; only an explicit review_refresh accepts changes.",
       inputSchema: z
         .object({
           request_id: z.string().uuid(),
@@ -2025,7 +2222,7 @@ export function createServer(
     const inputPin = z
       .object({
         result_id: id,
-        view: z.enum(["original", "effective", "sources"]),
+        view: z.enum(["original", "effective", "sources", "leads", "hits"]),
         amendment_revision: z.number().int().nonnegative().nullable(),
       })
       .strict()
@@ -2034,7 +2231,7 @@ export function createServer(
           v.view !== "effective"
             ? v.amendment_revision === null
             : v.amendment_revision !== null,
-        "Original and sources views need null; effective view needs an exact app revision",
+        "Original, sources, leads and hits views need null; effective view needs an exact app revision",
       );
     const querySchema = z
       .object({
@@ -2571,6 +2768,49 @@ export function createServer(
             : engineResult(result);
         }),
     );
+    if (engine.supportsLeadSets === true)
+      tools.registerTool(
+        "add_research_leads",
+        {
+          description: ADD_RESEARCH_LEADS_DESCRIPTION,
+          inputSchema: z
+            .object({
+              request_id: z.string().uuid(),
+              lead_set_id: z.string().uuid().optional(),
+              title: z.string().max(120).optional(),
+              // The schema checks only shapes and the row count. Missing fields, over-long
+              // text, bad ranks and 0 or over 150 rows reach the engine, which
+              // refuses a bad row by index and keeps the good ones.
+              leads: z
+                .array(
+                  z
+                    .object({
+                      url: z.string().optional(),
+                      title: z.string().optional(),
+                      query: z.string().optional(),
+                      rank: z.number().optional(),
+                      date: z.string().optional(),
+                    })
+                    .strict(),
+                )
+                .max(1000),
+            })
+            .strict(),
+          annotations: {
+            readOnlyHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        (args) =>
+          safeShort(async () => {
+            const reply = await engine.call<LeadIntakeReply>("add_leads", args);
+            return {
+              content: [{ type: "text", text: leadIntakeText(reply) }],
+              structuredContent: reply as unknown as Record<string, unknown>,
+            };
+          }),
+      );
     tools.registerTool(
       "sourcesql_inspect_evidence",
       {

@@ -12,8 +12,10 @@ import math
 from decimal import Decimal, InvalidOperation
 from datetime import date
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 import uuid
 from sourcesql import __version__
+from sourcesql.error_codes import refusal
 from sourcesql.contracts import (
     Budget,
     Column,
@@ -99,7 +101,9 @@ def wire_value(value: Any, logical_type: str) -> Any:
     return convert(value, dtype)
 
 
-def validate_table(columns, rows, row_ids=None) -> Table:
+def validate_table(
+    columns, rows, row_ids=None, max_rows: int = 1000, max_bytes: int = 4194304
+) -> Table:
     from sourcesql.sql.admission import validate_type
     from sqlglot import exp
 
@@ -107,8 +111,8 @@ def validate_table(columns, rows, row_ids=None) -> Table:
         not isinstance(columns, list)
         or not isinstance(rows, list)
         or not 1 <= len(columns) <= 128
-        or len(rows) > 1000
-        or len(canonical(rows)) > 4194304
+        or len(rows) > max_rows
+        or len(canonical(rows)) > max_bytes
     ):
         raise SourcesQLError("budget_exhausted", "Import exceeds storage policy")
     cols = [
@@ -235,11 +239,13 @@ def validate_table(columns, rows, row_ids=None) -> Table:
             raise ValueError()
 
     try:
+        # Parsed once per column, not per cell: lead sets hold thousands of rows.
+        types = {c.key: exp.DataType.build(c.logical_type, dialect="duckdb") for c in cols}
         for row in rows:
             for c in cols:
                 if row[c.key] is None and not c.nullable:
                     raise ValueError()
-                cell(row[c.key], exp.DataType.build(c.logical_type, dialect="duckdb"))
+                cell(row[c.key], types[c.key])
     except (ValueError, TypeError, InvalidOperation, KeyError) as error:
         raise SourcesQLError(
             "invalid_output", "Imported value does not match declared type/nullability"
@@ -283,13 +289,14 @@ class Engine:
 
     def capabilities(self):
         from sourcesql.sql.admission import EXTERNAL
+        from sourcesql.providers import route_capabilities
 
         return {
             "engine_version": __version__,
             "dialect": "duckdb",
             "sqlglot_version": "30.19.0",
             "operators": sorted(EXTERNAL),
-            "input_views": ["original", "effective", "sources"],
+            "input_views": ["original", "effective", "sources", "leads", "hits"],
             "worker_feature_contracts": dict(WORKER_FEATURE_CONTRACTS),
             "curated_citations": {
                 "contract": CURATED_CITATION_CONTRACT,
@@ -302,8 +309,11 @@ class Engine:
                 {
                     "name": k,
                     "mode": v.get("mode", "fixture"),
-                    "provider": v.get("provider", "fixture"),
+                    "provider": v.get(
+                        "provider", "fixture" if v.get("mode", "fixture") == "fixture" else "brave"
+                    ),
                     "live_qualified": False,
+                    **route_capabilities(v),
                 }
                 for k, v in self.profiles.items()
             ],
@@ -350,8 +360,8 @@ class Engine:
             view = binding.get("view", "original")
             revision = binding.get("amendment_revision")
             if (
-                view not in ("original", "effective", "sources")
-                or (view in ("original", "sources") and revision is not None)
+                view not in ("original", "effective", "sources", "leads", "hits")
+                or (view in ("original", "sources", "leads", "hits") and revision is not None)
                 or (view == "effective" and (type(revision) is not int or revision < 0))
             ):
                 raise SourcesQLError(
@@ -364,6 +374,25 @@ class Engine:
             ):
                 raise SourcesQLError("unauthorized", "This launcher cannot access private data")
             meta, table = self.store.read(binding["result_id"])
+            extra_parents = []
+            if view in ("leads", "hits"):
+                lead_set = meta.get("provenance", {})
+                if lead_set.get("kind") != "lead_set" or lead_set.get("table") != "leads":
+                    raise SourcesQLError(
+                        "invalid_request", "Bind a lead-set result with view leads or hits"
+                    )
+                if view == "hits":
+                    hits_id = lead_set["hits_result_id"]
+                    hits_meta = self.store.authorize(hits_id)
+                    _, table = self.store.read(hits_id)
+                    extra_parents.append(
+                        {
+                            "result_id": hits_id,
+                            "content_sha256": hits_meta["content_sha256"],
+                            "view": "original",
+                            "amendment_revision": None,
+                        }
+                    )
             if (
                 view == "effective"
                 and meta.get("provenance", {}).get("amendment_revision") != revision
@@ -392,8 +421,13 @@ class Engine:
                     "amendment_revision": revision,
                 }
             )
+            parents.extend(extra_parents)
             if meta.get("data_classification") in ("private_local", "private_derived"):
                 classification = "private_derived"
+            elif meta.get("data_classification") == "host_reported" and classification not in (
+                "private_derived",
+            ):
+                classification = "host_reported"
         return tables, parents, classification
 
     def _admit(self, request):
@@ -438,7 +472,14 @@ class Engine:
         canonical(parameters)
         profile_name = request.get("profile", "fixture")
         if profile_name not in self.profiles:
-            raise SourcesQLError("unsupported_capability", "Profile unavailable")
+            raise SourcesQLError(
+                "unsupported_capability",
+                refusal(
+                    "profile_unavailable",
+                    requested=profile_name if isinstance(profile_name, str) else None,
+                    profiles=list(self.profiles),
+                ),
+            )
         profile = self.profiles[profile_name]
         inputs, parents, classification = self._inputs(request.get("inputs", {}))
         plan = admit(query, parameters, {k: v.columns for k, v in inputs.items()})
@@ -870,9 +911,20 @@ class Engine:
 
         budget.on_reserve = reserved
 
+        fetch_summary = {"used": False, "failed": 0}
+
         def capture_provider_state():
             if registry is None:
                 return
+            if fetch_summary["used"]:
+                # Both the finished and the refused run say what a fetch call left out.
+                not_fetched = list(getattr(registry, "not_fetched_urls", []))
+                receipt.update(
+                    fetch_failed=fetch_summary["failed"],
+                    fetch_cap_hit=bool(not_fetched),
+                    not_fetched_urls=not_fetched[:100],
+                    not_fetched_count=len(not_fetched),
+                )
             events = registry.events
             receipt["provider_events"] = events
             receipt["source_hits"] = [*(continuation or {}).get("source_hits", []), *registry.hits]
@@ -1365,10 +1417,21 @@ class Engine:
                     return value
                 if operator in ("WEB_SEARCH", "WEB_FETCH"):
                     options["source_mode"] = request.get("source_mode", "require_document")
-                    rows = (
-                        registry.search(args, options, budget)
-                        if operator == "WEB_SEARCH"
-                        else registry.fetch(args, options, budget)
+                    fetch_summary["used"] |= operator == "WEB_FETCH"
+                    try:
+                        rows = (
+                            registry.search(args, options, budget)
+                            if operator == "WEB_SEARCH"
+                            else registry.fetch(args, options, budget)
+                        )
+                    except SourcesQLError:
+                        if operator == "WEB_FETCH":
+                            fetch_summary["failed"] += getattr(registry, "failed_before_error", 0)
+                        raise
+                    # Counted before any row is handled, so a strict refusal at the
+                    # first failure still reports every URL of the call that failed.
+                    fetch_summary["failed"] += sum(
+                        row.get("status") == "fetch_failed" for row in rows
                     )
                     normalized = []
                     for row in rows:
@@ -1384,6 +1447,15 @@ class Engine:
                                 raise SourcesQLError(
                                     "provider_unavailable", "Required source fetch failed", "fetch"
                                 )
+                            # A failed URL stays visible with its reason. It has no
+                            # source version, so nothing can cite it.
+                            normalized.append(
+                                {
+                                    "url": row["url"],
+                                    "fetch_status": "failed",
+                                    "fetch_failure": row.get("failure_reason") or "provider_error",
+                                }
+                            )
                             continue
                         if isinstance(row.get("content"), str):
                             row.setdefault(
@@ -1391,13 +1463,10 @@ class Engine:
                                 "src_" + hashlib.sha256(row["content"].encode()).hexdigest()[:32],
                             )
                             attribution.add_source(row)
+                        if operator == "WEB_FETCH":
+                            # After add_source: retained source versions stay as acquired.
+                            row["fetch_status"], row["fetch_failure"] = "ok", None
                         normalized.append(row)
-                    if rows and not normalized:
-                        raise SourcesQLError(
-                            "provider_unavailable",
-                            "No requested source was acquired",
-                            "acquisition",
-                        )
                     target = context.get("_lineage_output")
                     if isinstance(target, dict):
                         for index, row in enumerate(normalized, 1):
@@ -1746,7 +1815,7 @@ class Engine:
                     check_active(force=True)
                 result_classification = (
                     classification
-                    if classification == "private_derived"
+                    if classification in ("private_derived", "host_reported")
                     else (
                         "synthetic_fixture"
                         if profile.get("mode", "fixture") == "fixture"
@@ -1902,6 +1971,13 @@ class Engine:
             p.update(content_sha256=meta["content_sha256"])
             if meta["data_classification"] in ("private_local", "private_derived"):
                 data_classification = "private_derived"
+            elif (
+                meta["data_classification"] == "host_reported"
+                and data_classification != "private_derived"
+            ):
+                # Only add_leads creates host_reported data, but anything derived from it
+                # keeps the label, so host-found values never read as observed web data.
+                data_classification = "host_reported"
         if not self.allow_private and data_classification in ("private_local", "private_derived"):
             raise SourcesQLError("unauthorized", "This launcher cannot derive private data")
         recipe = [table.to_dict(), row_ids, data_classification, provenance, parents]
@@ -1993,6 +2069,301 @@ class Engine:
             raise
         return self.read_result("wq_import_" + identity[:32])
 
+    # --- Host-found lead sets -------------------------------------------------------------
+    # A lead set is a chain of immutable revisions. Each revision is two ordinary results of
+    # class host_reported: one row per distinct URL, and one row per submitted hit.
+
+    LEAD_COLUMNS = [
+        {"key": "lead_id", "logical_type": "VARCHAR", "nullable": False},
+        {"key": "url", "logical_type": "VARCHAR", "nullable": False},
+        {"key": "title", "logical_type": "VARCHAR", "nullable": False},
+        {"key": "host_query", "logical_type": "VARCHAR"},
+        {"key": "host_rank", "logical_type": "BIGINT"},
+        {"key": "host_date", "logical_type": "DATE"},
+        {"key": "times_found", "logical_type": "BIGINT", "nullable": False},
+        {"key": "lead_status", "logical_type": "VARCHAR", "nullable": False},
+        {"key": "fetch_failure", "logical_type": "VARCHAR"},
+        {"key": "batch_result_id", "logical_type": "VARCHAR"},
+    ]
+    HIT_COLUMNS = [
+        {"key": "lead_id", "logical_type": "VARCHAR", "nullable": False},
+        {"key": "url", "logical_type": "VARCHAR", "nullable": False},
+        {"key": "host_query", "logical_type": "VARCHAR"},
+        {"key": "host_rank", "logical_type": "BIGINT"},
+        {"key": "host_date", "logical_type": "DATE"},
+    ]
+    MAX_LEADS_PER_CALL = 150
+    MAX_LEADS_PER_SET = 2000
+    LEAD_FIELDS = {"url", "title", "query", "rank", "date"}
+
+    def _lead_table_limits(self) -> dict:
+        """Lead tables are held to the storage quota, not to the ordinary import row cap.
+
+        Every submission is kept as a hit, so the number of hits has no limit of its own.
+        """
+        return {"max_rows": self.store.quota, "max_bytes": self.store.quota}
+
+    @staticmethod
+    def _lead_url(url: str) -> str:
+        from sourcesql.providers.common import normalized_url
+
+        normal = normalized_url(url)
+        parts = urlsplit(normal)
+        path = parts.path[:-1] if parts.path.endswith("/") and parts.path != "/" else parts.path
+        return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
+
+    @classmethod
+    def _lead_row_problem(cls, row) -> str | None:
+        """The fixed reason a submitted row is refused, or None when it is acceptable."""
+        url = row.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return "missing URL"
+        if len(url) > 2048:
+            return "URL is longer than 2048 characters"
+        try:
+            cls._lead_url(url.strip())
+        except SourcesQLError:
+            return "not an http or https URL"
+        title = row.get("title")
+        if not isinstance(title, str) or not title.strip():
+            return "missing title"
+        if len(title.strip()) > 300:
+            return "title is longer than 300 characters"
+        query = row.get("query")
+        if query is not None and (not isinstance(query, str) or len(query) > 300):
+            return "query is longer than 300 characters"
+        rank = row.get("rank")
+        if rank is not None and (type(rank) is not int or not 1 <= rank <= 1000):
+            return "rank must be a whole number from 1 to 1000"
+        return None
+
+    def _lead_rows(self, result_id):
+        meta, table = self.store.read(result_id)
+        return meta, [dict(row) for row in table.rows]
+
+    def _publish_lead_table(self, columns, rows, row_ids, provenance, parents, stamp):
+        table = validate_table(columns, rows, row_ids, **self._lead_table_limits())
+        identity = digest([table.to_dict(), row_ids, "host_reported", provenance, parents])
+        result_id = f"wq_{provenance['table']}_" + identity[:32]
+        run_id = "run_lead_" + identity[:32]
+        receipt = {
+            "run_id": run_id,
+            "request_id": str(uuid.uuid5(uuid.NAMESPACE_URL, identity)),
+            "receipt_id": "receipt_lead_" + identity[:32],
+            "receipt_revision": 1,
+            "status": "completed",
+            "settlement_status": "settled",
+            "unsettled_requests": 0,
+            "started_at": stamp,
+            "finished_at": stamp,
+            "plan_complete": True,
+            "result_id": result_id,
+            "counts": {"output_rows": len(rows)},
+            "usage": [],
+            "warnings": [],
+            "errors": [],
+            "goal_status": "not_evaluated",
+            "data_classification": "host_reported",
+            "parents": parents,
+        }
+        meta = {
+            "result_id": result_id,
+            "run_id": run_id,
+            "parents": parents,
+            "data_classification": "host_reported",
+            "provenance": provenance,
+            "row_ids": row_ids,
+            "created_at": stamp,
+            "receipt": receipt,
+            "lineage_precision": "input_set",
+            "source_versions": [],
+            "evidence": [],
+            "bound_evidence_cells": 0,
+            "replay_level": "values_only",
+        }
+        return table, meta
+
+    def add_leads(self, request_id, leads, lead_set_id=None, title=None):
+        """Store host-found search hits as a new revision of a lead set.
+
+        The hits are what the host reported. Nothing here fetches or checks them, so the
+        results carry no source versions or evidence and are classed host_reported.
+        """
+        try:
+            request_key = str(uuid.UUID(str(request_id)))
+            set_key = str(uuid.UUID(str(lead_set_id))) if lead_set_id is not None else None
+        except (ValueError, TypeError, AttributeError):
+            raise SourcesQLError(
+                "invalid_request", "request_id and lead_set_id must be UUIDs"
+            ) from None
+        if not isinstance(leads, list):
+            raise SourcesQLError("invalid_request", "leads must be a list")
+        if not leads:
+            raise SourcesQLError("invalid_request", refusal("lead_batch_empty"))
+        if len(leads) > self.MAX_LEADS_PER_CALL:
+            raise SourcesQLError(
+                "invalid_request", refusal("lead_batch_too_large", count=len(leads))
+            )
+        if title is not None and (not isinstance(title, str) or len(title) > 120):
+            raise SourcesQLError("invalid_request", "title must be text of at most 120 characters")
+        if any(not isinstance(row, dict) or set(row) - self.LEAD_FIELDS for row in leads):
+            raise SourcesQLError("invalid_request", "Unknown lead field")
+        request_hash = digest({"lead_set_id": set_key, "title": title, "leads": leads})
+        for _ in range(5):
+            earlier = self.store.lead_request(request_key)
+            if earlier:
+                if earlier[0] != request_hash:
+                    raise SourcesQLError("invalid_request", refusal("lead_request_reused"))
+                return json.loads(earlier[1])
+            reply, published = self._lead_revision(request_key, request_hash, set_key, title, leads)
+            if published:
+                return reply
+        raise SourcesQLError("budget_exhausted", "Lead set is busy; retry the same call")
+
+    def _lead_revision(self, request_key, request_hash, set_key, title, submitted):
+        head = self.store.lead_set_head(set_key) if set_key else None
+        if set_key and not head:
+            raise SourcesQLError("unauthorized", "Result or dependency unavailable")
+        if head:
+            lead_meta, lead_rows = self._lead_rows(head["leads_result_id"])
+            _, hit_rows = self._lead_rows(head["hits_result_id"])
+            title = lead_meta.get("provenance", {}).get("title")
+        else:
+            set_key = str(uuid.uuid4())
+            lead_rows, hit_rows = [], []
+        by_id = {row["lead_id"]: row for row in lead_rows}
+        before = set(by_id)
+        refused, accepted, dates_left_out, new_hits = [], 0, 0, []
+        for index, row in enumerate(submitted):
+            problem = self._lead_row_problem(row)
+            if problem:
+                refused.append({"index": index, "reason": problem})
+                continue
+            url = self._lead_url(row["url"].strip())
+            lead_id = "lead_" + digest(url)[:24]
+            raw_date = row.get("date")
+            host_date = None
+            if raw_date is not None:
+                try:
+                    if not isinstance(raw_date, str) or len(raw_date) != 10:
+                        raise ValueError
+                    host_date = date.fromisoformat(raw_date).isoformat()
+                except ValueError:
+                    dates_left_out += 1
+            host_query, rank = row.get("query"), row.get("rank")
+            existing = by_id.get(lead_id)
+            if existing is None:
+                by_id[lead_id] = {
+                    "lead_id": lead_id,
+                    "url": url,
+                    "title": row["title"].strip(),
+                    "host_query": host_query,
+                    "host_rank": rank,
+                    "host_date": host_date,
+                    "times_found": 1,
+                    "lead_status": "pending",
+                    "fetch_failure": None,
+                    "batch_result_id": None,
+                }
+            else:
+                existing["times_found"] += 1
+                if rank is not None and (
+                    existing["host_rank"] is None or rank < existing["host_rank"]
+                ):
+                    existing["host_rank"] = rank
+            accepted += 1
+            new_hits.append(
+                {
+                    "lead_id": lead_id,
+                    "url": url,
+                    "host_query": host_query,
+                    "host_rank": rank,
+                    "host_date": host_date,
+                }
+            )
+        if len(by_id) > self.MAX_LEADS_PER_SET:
+            raise SourcesQLError("budget_exhausted", refusal("lead_set_full"))
+        revision = (head["revision"] if head else 0) + 1
+        stamp = now()
+        all_leads = [by_id[key] for key in sorted(by_id)]
+        all_hits = hit_rows + new_hits
+
+        hit_ids = [
+            "hit_" + digest([set_key, revision, i])[:24] if i >= len(hit_rows) else None
+            for i in range(len(all_hits))
+        ]
+        if head:
+            old_ids = self.store.read(head["hits_result_id"])[0]["row_ids"]
+            hit_ids[: len(hit_rows)] = old_ids
+        hits_table, hits_meta = self._publish_lead_table(
+            self.HIT_COLUMNS,
+            all_hits,
+            hit_ids,
+            {
+                "kind": "lead_set",
+                "table": "hits",
+                "lead_set_id": set_key,
+                "revision": revision,
+                "title": title,
+                "assertion": "host",
+            },
+            [],
+            stamp,
+        )
+        leads_table, leads_meta = self._publish_lead_table(
+            self.LEAD_COLUMNS,
+            all_leads,
+            [row["lead_id"] for row in all_leads],
+            {
+                "kind": "lead_set",
+                "table": "leads",
+                "lead_set_id": set_key,
+                "revision": revision,
+                "title": title,
+                "assertion": "host",
+                "hits_result_id": hits_meta["result_id"],
+            },
+            # The leads revision lists its hits as a parent, so an export of anything built on
+            # the leads carries the hits view with it. Earlier revisions are not parents:
+            # chaining them would make every export carry the whole history. Revoking any
+            # revision revokes the set (Store.revoke).
+            [
+                {
+                    "result_id": hits_meta["result_id"],
+                    "content_sha256": digest(hits_table.to_dict()),
+                }
+            ],
+            stamp,
+        )
+        pending = sum(1 for row in all_leads if row["lead_status"] == "pending")
+        reply = {
+            "lead_set_id": set_key,
+            "revision": revision,
+            "result_id": leads_meta["result_id"],
+            "hits_result_id": hits_meta["result_id"],
+            "title": title,
+            "stored": accepted,
+            "new": len(set(by_id) - before),
+            "already_present": accepted - len(set(by_id) - before),
+            "refused": refused,
+            "dates_left_out": dates_left_out,
+            "totals": {
+                "leads": len(all_leads),
+                "fetched": sum(1 for r in all_leads if r["lead_status"] == "fetched"),
+                "failed": sum(1 for r in all_leads if r["lead_status"] == "failed"),
+                "pending": pending,
+            },
+        }
+        published = self.store.commit_lead_revision(
+            [(leads_table, leads_meta), (hits_table, hits_meta)],
+            set_key,
+            revision,
+            request_key,
+            request_hash,
+            reply,
+        )
+        return reply, published
+
     def export(self, result_id):
         records = {}
 
@@ -2053,14 +2424,24 @@ class Engine:
                 raise SourcesQLError("evidence_invalid", "Bundle record identity mismatch")
             if digest(table) != meta["content_sha256"]:
                 raise SourcesQLError("evidence_invalid", "Invalid result digest")
-            validate_table(table["columns"], table["rows"], meta["row_ids"])
+            lead_set = meta.get("provenance", {}).get("kind") == "lead_set"
+            if lead_set:
+                validate_table(
+                    table["columns"],
+                    table["rows"],
+                    meta["row_ids"],
+                    **self._lead_table_limits(),
+                )
+            else:
+                validate_table(table["columns"], table["rows"], meta["row_ids"])
             classification = meta.get("data_classification")
             if classification not in (
                 "private_local",
                 "private_derived",
                 "synthetic_fixture",
                 "public_web",
-            ):
+                "host_reported",
+            ) or (classification == "host_reported" and not lead_set and not meta.get("parents")):
                 raise SourcesQLError("invalid_request", "Invalid imported classification")
             if not self.allow_private and meta.get("data_classification") in (
                 "private_local",
@@ -2177,13 +2558,28 @@ class Engine:
                 "foreign_receipt": original_receipt,
                 "provenance": {
                     **meta.get("provenance", {}),
+                    # A lead set's hits view finds its sibling by id, which import remaps.
+                    **(
+                        {"hits_result_id": mapping[meta["provenance"]["hits_result_id"]]}
+                        if meta.get("provenance", {}).get("hits_result_id") in mapping
+                        else {}
+                    ),
                     "foreign_result_id": rid,
                     "bundle_sha256": bundle["content_sha256"],
                 },
                 "created_at": stamp,
             }
+            lead_set = meta.get("provenance", {}).get("kind") == "lead_set"
             prepared.append(
-                (validate_table(table["columns"], table["rows"], meta["row_ids"]), imported_meta)
+                (
+                    validate_table(
+                        table["columns"],
+                        table["rows"],
+                        meta["row_ids"],
+                        **(self._lead_table_limits() if lead_set else {}),
+                    ),
+                    imported_meta,
+                )
             )
         self.store.commit_many(
             prepared, root_result_id=mapping[bundle["root_result_id"]], result_mapping=mapping

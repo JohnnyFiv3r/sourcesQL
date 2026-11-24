@@ -72,6 +72,8 @@ export interface ResearchEngine {
   readonly staticProfiles?: readonly { name: string; mode: string }[];
   readonly supportsExplain?: boolean;
   readonly supportsAsyncJobs?: boolean;
+  /** True when the engine can store host-found lead sets (add_leads). */
+  readonly supportsLeadSets?: boolean;
   /** True when `query` already returns the authorized first result page. */
   readonly queryReturnsAuthorizedPage?: boolean;
   readonly supportsUsageReporting?: boolean;
@@ -89,7 +91,7 @@ const declaredFeatures = (
     : {};
 };
 type BridgeReply =
-  { ok: true; result: unknown } | { ok: false; message: string };
+  { ok: true; result: unknown } | { ok: false; code?: string; message: string };
 const readMemo = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
 /** Scopes repeated identical result reads inside one tool call to one process. */
 export const withEngineReadScope = <T>(run: () => Promise<T>): Promise<T> =>
@@ -173,10 +175,24 @@ export type BridgeProcessOptions = {
   command?: string;
   args?: string[];
 };
+/** An engine refusal. Its message keeps the `code: message` shape callers match on. */
+export class EngineCallError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+  }
+}
+const failure = (reply: { code?: string; message: string }): Error =>
+  reply.code === undefined
+    ? new Error(reply.message)
+    : new EngineCallError(reply.code, reply.message);
 export class PythonEngine implements ResearchEngine {
   // Engine.query returns read_result(result_id), including the
   // data_classification that store.authorize computed.
   readonly queryReturnsAuthorizedPage = true;
+  readonly supportsLeadSets = true;
   private featuresPromise?: Promise<Record<string, unknown>>;
   // bridge.py loads profiles only from SOURCESQL_PROFILES_FILE; without it
   // Engine.__init__ has exactly the built-in fixture profile. A profiles file
@@ -264,7 +280,7 @@ export class PythonEngine implements ResearchEngine {
       { method: "capabilities", params: {} },
       { method: "inspect_result", params },
     ]);
-    if (!capabilities.ok) throw new Error(capabilities.message);
+    if (!capabilities.ok) throw failure(capabilities);
     const features = declaredFeatures(
       capabilities.result as Record<string, unknown>,
     );
@@ -273,7 +289,7 @@ export class PythonEngine implements ResearchEngine {
       features.result_inspection !== WORKER_FEATURE_CONTRACTS.result_inspection
     )
       return undefined;
-    if (!inspected.ok) throw new Error(inspected.message);
+    if (!inspected.ok) throw failure(inspected);
     return inspected.result as Record<string, unknown>;
   }
   async call<T = Record<string, unknown>>(
@@ -342,7 +358,7 @@ export class PythonEngine implements ResearchEngine {
     params: Record<string, unknown> = {},
   ): Promise<T> {
     const [reply] = await this.bridgeBatch([{ method, params }]);
-    if (!reply.ok) throw new Error(reply.message);
+    if (!reply.ok) throw failure(reply);
     return reply.result as T;
   }
   /** One process answers every request; replies are matched by id, not order. */
@@ -453,7 +469,8 @@ export class PythonEngine implements ResearchEngine {
               if (reply?.error)
                 return {
                   ok: false,
-                  message: `${String(reply.error.code)}: ${String(reply.error.message)}`,
+                  code: String(reply.error.code),
+                  message: String(reply.error.message),
                 };
               if (!reply || !Object.hasOwn(reply, "result"))
                 return {

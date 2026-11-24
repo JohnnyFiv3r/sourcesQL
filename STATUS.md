@@ -6,6 +6,39 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased host-found URL research
+
+A host agent can search with its own tool and have sourcesQL fetch the URLs, with
+no sourcesQL search provider. `WEB_FETCH` rows now carry `fetch_status` and
+`fetch_failure`; a URL that fails to fetch stays as a failed row with no
+citation, and an all-failed fetch completes instead of failing the job. In live
+mode a non-public or non-allowlisted URL becomes a `blocked_host` row and is never
+requested, where it used to refuse the whole call. Receipts add `fetch_failed`,
+`fetch_cap_hit`, `not_fetched_urls` and `not_fetched_count`. Capabilities report
+per-profile `search`, `fetch` and `host_search_route`, and the served guidance now
+permits host search when no sourcesQL search provider works. Fixture- and
+mock-tested only: `live_qualified` stays false, and no live run over host-found URLs
+or scripted host session has been done. Hosted fetch-only profiles are not offered.
+Behaviour changes: failed `WEB_FETCH` URLs are no longer dropped from rows, and
+`WEB_FETCH` has two more columns.
+
+## Unreleased host-found lead sets (part 1)
+
+The local app has an `add_research_leads` tool. A host agent sends the hits from
+its own search, up to 150 per call, and sourcesQL keeps them as a lead set: one
+immutable revision per call, with one row per distinct URL (`leads` view) and one
+per submitted hit (`hits` view). The lead set has a new `host_reported` data
+class. Anything derived from it keeps that class through queries, imports of
+derived tables, exports and re-imports, unless it also depends on private data,
+which makes the result `private_derived` and keeps its restrictions. The class is
+never importable directly. A lead set has no source versions, evidence or search
+provenance, so no lead can be cited. Every lead reads `lead_status = 'pending'`:
+recording fetch outcomes, the batch reply wording, the table labels and the
+guidance are not built yet. A set holds at most 2000 leads, and every submission
+is kept as a hit, limited only by the storage quota; revoking one revision revokes
+the set. Hosted deployments do not offer the tool, and an exported lead set re-
+imports as data but cannot be appended to in the new store. Fixture-tested only.
+
 ## Unreleased citation and result-read correction
 
 Public result rows and retained evidence/source records now have separate byte-

@@ -340,7 +340,8 @@ def test_only_admission_refusals_carry_a_public_reason():
 
     with pytest.raises(SourcesQLError) as parse:
         admit("SELECT FROM WHERE (")
-    assert public_refusal_reason(parse.value) == "SQL could not be parsed in the installed dialect"
+    assert public_refusal_reason(parse.value) == parse.value.safe_message
+    assert parse.value.safe_message.startswith("SQL could not be parsed in the installed dialect. ")
     with pytest.raises(SourcesQLError) as construct:
         admit("SELECT random()")
     assert public_refusal_reason(construct.value) == construct.value.safe_message
