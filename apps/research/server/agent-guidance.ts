@@ -230,3 +230,53 @@ export function openResearchDescription(jobs: boolean): string {
     ".",
   );
 }
+
+export const ADD_RESEARCH_LEADS_DESCRIPTION =
+  "Store host-found search hits as host-asserted leads in a lead set, up to 150 per call. Reuse lead_set_id to append; duplicates by URL are merged and every query and rank is kept. Leads are never citations; fetch chosen leads with WEB_FETCH. Returns the newest lead-set result_id for SQL with view leads or hits.";
+
+export type LeadIntakeReply = {
+  lead_set_id: string;
+  revision: number;
+  result_id: string;
+  stored: number;
+  new: number;
+  already_present: number;
+  refused: { index: number; reason: string }[];
+  dates_left_out: number;
+  totals: { leads: number; fetched: number; failed: number; pending: number };
+};
+
+const count = (n: number, one: string, many = `${one}s`) =>
+  `${n} ${n === 1 ? one : many}`;
+
+/** The intake reply as the agent reads it. Plain text from fixed words and the engine's own counts. */
+export function leadIntakeText(reply: LeadIntakeReply): string {
+  const parts = [
+    `Stored ${count(reply.stored, "lead")} in lead set ${reply.lead_set_id}, revision ${reply.revision}, result_id ${reply.result_id}.`,
+    `${reply.new} ${reply.new === 1 ? "is" : "are"} new, ${reply.already_present} ${reply.already_present === 1 ? "was" : "were"} already present; their queries and ranks were kept.`,
+  ];
+  if (reply.refused.length) {
+    const shown = reply.refused
+      .slice(0, 10)
+      .map((row) => `row ${row.index + 1}: ${row.reason}`)
+      .join("; ");
+    const more =
+      reply.refused.length > 10
+        ? `, and ${reply.refused.length - 10} more`
+        : "";
+    parts.push(
+      `${count(reply.refused.length, "row was", "rows were")} refused: ${shown}${more}.`,
+    );
+  }
+  if (reply.dates_left_out)
+    parts.push(
+      `${count(reply.dates_left_out, "date was", "dates were")} not in YYYY-MM-DD form and ${reply.dates_left_out === 1 ? "was" : "were"} left out.`,
+    );
+  const { totals } = reply;
+  parts.push(
+    `The lead set now has ${count(totals.leads, "lead")}, ${totals.fetched} fetched, ${totals.failed} failed, ${totals.pending} pending.`,
+    "These leads are host-asserted: sourcesQL has not fetched or checked them.",
+    `Filter them with SQL over the leads view of result_id ${reply.result_id}, then fetch the ones you choose, at most 40 per job.`,
+  );
+  return parts.join(" ");
+}

@@ -98,6 +98,9 @@ import {
   safeFailureContext,
 } from "./execution-errors.js";
 import {
+  ADD_RESEARCH_LEADS_DESCRIPTION,
+  leadIntakeText,
+  type LeadIntakeReply,
   serverInstructions,
   queryDescription,
   recoverRunDescription,
@@ -2219,7 +2222,7 @@ export function createServer(
     const inputPin = z
       .object({
         result_id: id,
-        view: z.enum(["original", "effective", "sources"]),
+        view: z.enum(["original", "effective", "sources", "leads", "hits"]),
         amendment_revision: z.number().int().nonnegative().nullable(),
       })
       .strict()
@@ -2228,7 +2231,7 @@ export function createServer(
           v.view !== "effective"
             ? v.amendment_revision === null
             : v.amendment_revision !== null,
-        "Original and sources views need null; effective view needs an exact app revision",
+        "Original, sources, leads and hits views need null; effective view needs an exact app revision",
       );
     const querySchema = z
       .object({
@@ -2765,6 +2768,48 @@ export function createServer(
             : engineResult(result);
         }),
     );
+    if (engine.supportsLeadSets === true)
+      tools.registerTool(
+        "add_research_leads",
+        {
+          description: ADD_RESEARCH_LEADS_DESCRIPTION,
+          inputSchema: z
+            .object({
+              request_id: z.string().uuid(),
+              lead_set_id: z.string().uuid().optional(),
+              title: z.string().max(120).optional(),
+              // The schema lets 0 and over 150 rows through so the engine can
+              // refuse them in its own words; it bounds only the payload size.
+              leads: z
+                .array(
+                  z
+                    .object({
+                      url: z.string().max(2048),
+                      title: z.string().max(300),
+                      query: z.string().max(300).optional(),
+                      rank: z.number().int().optional(),
+                      date: z.string().max(10).optional(),
+                    })
+                    .strict(),
+                )
+                .max(1000),
+            })
+            .strict(),
+          annotations: {
+            readOnlyHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        (args) =>
+          safeShort(async () => {
+            const reply = await engine.call<LeadIntakeReply>("add_leads", args);
+            return {
+              content: [{ type: "text", text: leadIntakeText(reply) }],
+              structuredContent: reply as unknown as Record<string, unknown>,
+            };
+          }),
+      );
     tools.registerTool(
       "sourcesql_inspect_evidence",
       {

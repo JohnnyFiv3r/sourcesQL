@@ -20,16 +20,18 @@ const JOB_TOOLS = [
 ];
 // A local engine runs synchronously and lists no job tools; a hosted one does.
 const CONFIGURATIONS = [
-  { name: "local", jobs: false, count: 36 },
-  { name: "hosted", jobs: true, count: 39 },
+  { name: "local", jobs: false, leads: false, count: 36 },
+  { name: "hosted", jobs: true, leads: false, count: 39 },
+  { name: "local with lead sets", jobs: false, leads: true, count: 37 },
 ] as const;
 
-async function listTools(jobs: boolean) {
+async function listTools(jobs: boolean, leads = false) {
   const directory = await mkdtemp(join(tmpdir(), "sourcesql-tool-size-"));
   const htmlPath = join(directory, "research.html");
   await writeFile(htmlPath, "<!doctype html><html>Synthetic widget</html>");
   const engine: ResearchEngine = {
     ...(jobs ? { supportsAsyncJobs: true } : {}),
+    ...(leads ? { supportsLeadSets: true } : {}),
     async call<T>(): Promise<T> {
       throw new Error("Listing tools must not execute engine work");
     },
@@ -51,10 +53,14 @@ async function listTools(jobs: boolean) {
   }
 }
 
-for (const { name, jobs, count } of CONFIGURATIONS) {
+for (const { name, jobs, leads, count } of CONFIGURATIONS) {
   test(`the ${name} tool list keeps its names and uses no $ref or $defs`, async () => {
-    const tools = await listTools(jobs);
+    const tools = await listTools(jobs, leads);
     assert.equal(tools.length, count);
+    assert.equal(
+      tools.some((tool) => tool.name === "add_research_leads"),
+      leads,
+    );
     const listed = tools.map((tool) => tool.name);
     for (const job of JOB_TOOLS) assert.equal(listed.includes(job), jobs, job);
     const text = JSON.stringify(tools);
@@ -64,7 +70,7 @@ for (const { name, jobs, count } of CONFIGURATIONS) {
 }
 
 test("the advertised tool list stays within the total size budget", async (t) => {
-  const tools = await listTools(true);
+  const tools = await listTools(true, true);
   const sizes = tools
     .map((tool) => ({ name: tool.name, size: JSON.stringify(tool).length }))
     .sort((x, y) => y.size - x.size);
@@ -82,7 +88,7 @@ test("the advertised tool list stays within the total size budget", async (t) =>
 });
 
 test("no tool entry goes over the per-tool size budget", async () => {
-  for (const tool of await listTools(true)) {
+  for (const tool of await listTools(true, true)) {
     const size = JSON.stringify(tool).length;
     assert.ok(
       size <= TOOL_BUDGET,

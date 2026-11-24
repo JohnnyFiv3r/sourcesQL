@@ -166,9 +166,13 @@ export function buildMaterializationPayload(
     })),
     rows,
     row_ids: root.snapshot.rows.map((row) => row.id),
+    // The engine refuses to import host_reported data, and re-derives it from the
+    // lead-set parents listed below, so the label is not sent.
     data_classification: privateContributor
       ? "private_derived"
-      : rootClassification,
+      : rootClassification === "host_reported"
+        ? "public_web"
+        : rootClassification,
     parents: resultIds.map((result_id) => ({
       result_id,
       view: "original",
