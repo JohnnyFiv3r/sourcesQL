@@ -193,6 +193,11 @@
       "message": "None of the pages this result fetched are leads in this lead set",
       "hint": "Fetch URLs from the leads view of this lead set."
     },
+    "lead_batch_fetch_order": {
+      "code": "invalid_query",
+      "message": "In a lead batch, put ORDER BY and LIMIT in a CTE before WEB_FETCH",
+      "hint": "An ORDER BY or LIMIT in the same SELECT as WEB_FETCH does not choose which pages are fetched."
+    },
     "lead_record_reused": {
       "code": "invalid_request",
       "message": "This request ID was already used with a different batch",

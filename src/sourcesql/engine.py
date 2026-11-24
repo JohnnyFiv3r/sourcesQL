@@ -430,6 +430,40 @@ class Engine:
                 classification = "host_reported"
         return tables, parents, classification
 
+    def _lead_inputs_read(self, bindings, plan) -> list[str]:
+        """The lead-set results the SQL itself references, not merely the inputs it was given."""
+        read = set()
+        for alias in plan.input_aliases:
+            binding = bindings.get(alias, {})
+            if binding.get("view") not in ("leads", "hits"):
+                continue
+            read.add(binding["result_id"])
+            if binding["view"] == "hits":
+                meta = self.store.authorize(binding["result_id"])
+                read.add(meta["provenance"]["hits_result_id"])
+        return sorted(read)
+
+    @staticmethod
+    def _refuse_ordered_fetch(plan) -> None:
+        """A SELECT that fetches and also orders or limits itself does not choose its pages.
+
+        The fetch runs row by row before that SELECT's ORDER BY or LIMIT applies, so in a lead
+        batch the cap would fall on whichever rows come first. The supported shape puts them in
+        a CTE ahead of the fetch.
+        """
+        from sqlglot import exp
+        from sourcesql.sql.admission import custom_name, refuse
+
+        for node in plan.tree.find_all(exp.Anonymous):
+            if custom_name(node) != "WEB_FETCH":
+                continue
+            scope = node.find_ancestor(exp.Select)
+            scopes = [scope]
+            while isinstance(scopes[-1].parent, exp.SetOperation):
+                scopes.append(scopes[-1].parent)
+            if any(scope.args.get(key) for scope in scopes for key in ("order", "limit", "offset")):
+                refuse(refusal("lead_batch_fetch_order"), "invalid_query")
+
     def _admit(self, request):
         from sourcesql.sql.admission import admit
 
@@ -483,6 +517,9 @@ class Engine:
         profile = self.profiles[profile_name]
         inputs, parents, classification = self._inputs(request.get("inputs", {}))
         plan = admit(query, parameters, {k: v.columns for k, v in inputs.items()})
+        lead_inputs_read = self._lead_inputs_read(request.get("inputs", {}), plan)
+        if lead_inputs_read:
+            self._refuse_ordered_fetch(plan)
         validate_requirements(request.get("research_requirements"), plan.columns)
         validate_citations(request.get("citations"))
         operators = getattr(plan, "operators", getattr(plan, "custom_operators", []))
@@ -505,12 +542,12 @@ class Engine:
         ):
             raise SourcesQLError("invalid_request", "Invalid source mode")
         budget = Budget(request.get("budgets"))
-        return plan, inputs, parents, classification, profile, budget
+        return plan, inputs, parents, classification, profile, budget, lead_inputs_read
 
     def explain(self, **request):
         from sourcesql.execution.planner import validate_plan
 
-        plan, inputs, parents, classification, profile, budget = self._admit(request)
+        plan, inputs, parents, classification, profile, budget, _ = self._admit(request)
         deadline = time.monotonic() + budget.limits["dispatch_deadline_seconds"]
         session = None
 
@@ -751,7 +788,9 @@ class Engine:
         from sourcesql.providers import ProviderRegistry
         from sourcesql.execution.planner import execute_plan
 
-        plan, inputs, parents, classification, profile, budget = self._admit(request)
+        plan, inputs, parents, classification, profile, budget, lead_inputs_read = self._admit(
+            request
+        )
         continuation = None
         if request.get("continuation_of"):
             continuation = self.run_status(request["continuation_of"])
@@ -917,10 +956,7 @@ class Engine:
         fetch_outcomes: dict[str, dict] = {}
         # A query over a lead set is a batch: the fetch cap ends it rather than refusing it, so
         # the leads it did fetch can be recorded and the rest stay pending (spec AC9).
-        bindings = request.get("inputs", {})
-        lead_batch = any(
-            bindings.get(alias, {}).get("view") in ("leads", "hits") for alias in plan.input_aliases
-        )
+        lead_batch = bool(lead_inputs_read)
         capped_fetches: list[str] = []
 
         def note_fetch_outcome(requested: str, row: dict, failure: str | None) -> None:
@@ -1892,6 +1928,7 @@ class Engine:
                             if fetch_summary["used"]
                             else {}
                         ),
+                        **({"lead_inputs_read": lead_inputs_read} if lead_inputs_read else {}),
                         "lineage_precision": "cell_where_proven" if bound_cells else "input_set",
                         "bound_evidence_cells": bound_cells,
                         "source_bindings": source_bindings,
@@ -2487,7 +2524,7 @@ class Engine:
             self.store.remember_lead_request(request_key, request_hash, recorded)
             return json.loads(recorded), True
         batch_meta, _ = self.store.read(batch_result_id)
-        read = {parent["result_id"] for parent in batch_meta.get("parents", [])}
+        read = set(batch_meta.get("lead_inputs_read", []))
         if not read & self.store.lead_set_results(set_key):
             raise SourcesQLError("invalid_request", refusal("lead_batch_other_set"))
         outcomes = batch_meta.get("fetch_outcomes")

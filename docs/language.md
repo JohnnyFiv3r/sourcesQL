@@ -224,8 +224,12 @@ writes a new revision in which each lead whose URL sourcesQL fetched is
 `fetched`, or `failed` with its `fetch_failure`. It uses sourcesQL's own record of
 the fetches and never the query's output columns. Bind the revision it returns for
 the next batch and select `lead_status = 'pending'`; ask the user before each
-further batch. Put `ORDER BY` and `LIMIT 40` in a CTE before `WEB_FETCH`: an outer
-`ORDER BY` or `LIMIT` does not choose which pages are fetched.
+further batch. Put `ORDER BY` and `LIMIT` in a CTE before `WEB_FETCH`. The order of pages
+fetched is the order of the rows reaching `WEB_FETCH`. A SELECT with `WEB_FETCH`
+and no `ORDER BY` or `LIMIT` fetches in stored row order, which is not a ranking,
+and stops at the job's fetch limit. In a query that reads a lead set, a SELECT
+that calls `WEB_FETCH` and has its own `ORDER BY`, `LIMIT` or `OFFSET` is refused
+before any fetch.
 
 ```sql
 WITH batch AS (

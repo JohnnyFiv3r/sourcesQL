@@ -489,3 +489,55 @@ test("the shipped example SQL runs over a lead set and its batch can be recorded
   });
   assert.notEqual(recorded.isError, true, textOf(recorded));
 });
+
+test("an unused lead pin gets no batch reply, and a CTE batch over the same pin does", async (t) => {
+  const { client } = await connect(t);
+  const set = await intake(client, [AURORA, BIRCH]);
+  const unused = await client.callTool({
+    name: "sourcesql_query",
+    arguments: {
+      request_id: randomUUID(),
+      query: `SELECT url, fetch_status FROM WEB_FETCH('${AURORA}')`,
+      inputs: { unused: view(set.result_id) },
+    },
+  });
+  assert.notEqual(unused.isError, true, textOf(unused));
+  assert.equal(texts(unused).length, 1);
+  assert.equal(
+    (unused.structuredContent as { lead_inputs_read?: unknown })
+      .lead_inputs_read,
+    undefined,
+  );
+  const refused = await client.callTool({
+    name: "record_lead_batch",
+    arguments: {
+      request_id: randomUUID(),
+      lead_set_id: set.lead_set_id,
+      batch_result_id: (unused.structuredContent as { result_id: string })
+        .result_id,
+    },
+  });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /did not read this lead set/);
+  const cte = await batch(
+    client,
+    "WITH b AS (SELECT lead_id, url FROM input.l ORDER BY host_rank LIMIT 40) SELECT lead_id, WEB_FETCH(url) AS page FROM b",
+    set.result_id,
+  );
+  assert.equal(texts(cte).length, 2);
+});
+
+test("a lead batch with its own ORDER BY is refused with the CTE instruction", async (t) => {
+  const { client } = await connect(t);
+  const set = await intake(client, [AURORA, BIRCH]);
+  const refused = await batch(
+    client,
+    "SELECT host_rank, lead_id, WEB_FETCH(url) AS page FROM input.l ORDER BY host_rank LIMIT 41",
+    set.result_id,
+  );
+  assert.equal(refused.isError, true);
+  assert.equal(
+    textOf(refused),
+    "invalid_query: In a lead batch, put ORDER BY and LIMIT in a CTE before WEB_FETCH. An ORDER BY or LIMIT in the same SELECT as WEB_FETCH does not choose which pages are fetched.",
+  );
+});

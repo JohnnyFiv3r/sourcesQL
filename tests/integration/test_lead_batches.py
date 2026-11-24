@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 
 from sourcesql import error_codes
 from sourcesql.engine import Engine
@@ -14,6 +16,14 @@ from test_lead_sets import AURORA, BIRCH, VENDOR, lead_view, refused, request_id
 
 MISSING = "https://nowhere.example/x"
 BATCH = "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l"
+
+
+def cte_batch(order="host_rank", limit=40):
+    """The supported shape: ORDER BY and LIMIT in a CTE, then the fetch over it."""
+    return (
+        f"WITH b AS (SELECT lead_id, url FROM input.l WHERE lead_status = 'pending' "
+        f"ORDER BY {order} LIMIT {limit}) SELECT lead_id, WEB_FETCH(url) AS page FROM b"
+    )
 
 
 def leads_of(*urls):
@@ -112,9 +122,8 @@ def test_forged_status_columns_record_nothing(tmp_path):
     partial = run_batch(
         engine,
         reply,
-        "SELECT lead_id, 'ok' AS fetch_status, WEB_FETCH('"
-        + AURORA
-        + "') AS page FROM input.l LIMIT 1",
+        "WITH one AS (SELECT lead_id FROM input.l LIMIT 1) "
+        "SELECT lead_id, 'ok' AS fetch_status, WEB_FETCH('" + AURORA + "') AS page FROM one",
     )
     record = engine.record_lead_batch(request_id(3), reply["lead_set_id"], partial["result_id"])
     assert statuses(engine, record) == {AURORA: ("fetched", None), BIRCH: ("pending", None)}
@@ -186,8 +195,8 @@ def test_fetched_is_never_downgraded_and_failed_can_recover(tmp_path, monkeypatc
 def test_record_is_idempotent_per_request_and_per_batch(tmp_path):
     engine = make(tmp_path)
     reply = engine.add_leads(request_id(1), leads_of(AURORA, BIRCH))
-    one = run_batch(engine, reply, BATCH + " LIMIT 1")
-    other = run_batch(engine, reply, BATCH + " ORDER BY url DESC LIMIT 1")
+    one = run_batch(engine, reply, cte_batch(limit=1))
+    other = run_batch(engine, reply, cte_batch(order="url DESC", limit=1))
     first = engine.record_lead_batch(request_id(2), reply["lead_set_id"], one["result_id"])
     assert engine.record_lead_batch(request_id(2), reply["lead_set_id"], one["result_id"]) == first
     assert engine.record_lead_batch(request_id(3), reply["lead_set_id"], one["result_id"]) == first
@@ -201,7 +210,7 @@ def test_record_is_idempotent_per_request_and_per_batch(tmp_path):
 def test_next_batch_neither_refetches_nor_skips(tmp_path):
     engine = make(tmp_path)
     reply = engine.add_leads(request_id(1), leads_of(AURORA, BIRCH, MISSING))
-    batch = run_batch(engine, reply, BATCH + " ORDER BY url LIMIT 2")
+    batch = run_batch(engine, reply, cte_batch(order="url", limit=2))
     record = engine.record_lead_batch(request_id(2), reply["lead_set_id"], batch["result_id"])
     pending = engine.query(
         query="SELECT url FROM input.l WHERE lead_status = 'pending'",
@@ -303,7 +312,7 @@ def test_over_cap_batch_fetches_the_cap_and_leaves_the_rest_pending(tmp_path):
     engine = make(tmp_path)
     urls = [AURORA, BIRCH, VENDOR] + [f"https://site{n}.example/page" for n in range(38)]
     reply = engine.add_leads(request_id(1), leads_of(*urls))
-    batch = run_batch(engine, reply, BATCH + " ORDER BY host_rank")
+    batch = run_batch(engine, reply, cte_batch(limit=41))
     assert len(batch["fetch_outcomes"]) == 40
     receipt = batch["receipt"]
     assert (receipt["fetch_cap_hit"], receipt["not_fetched_count"]) == (True, 1)
@@ -468,3 +477,118 @@ def test_importing_a_long_chain_validates_each_result_once(tmp_path, monkeypatch
     )
     Engine(tmp_path / "fresh", worker=reference_worker).import_bundle(bundle)
     assert len(calls) <= 2 * len(bundle["results"]), f"{len(calls)} validations"
+
+
+def ranked_leads(engine):
+    """Forty leads at ranks 1 to 40 that fail to fetch, and the fixture page Aurora at rank 41."""
+    urls = [f"https://rank{n}.example/page" for n in range(1, 41)] + [AURORA]
+    return urls, engine.add_leads(request_id(1), leads_of(*urls))
+
+
+def test_cte_order_and_limit_choose_the_fetched_leads(tmp_path):
+    engine = make(tmp_path)
+    urls, reply = ranked_leads(engine)
+    batch = run_batch(engine, reply, cte_batch(limit=41))
+    assert {o["url"] for o in batch["fetch_outcomes"]} == set(urls[:40])
+    assert batch["receipt"]["fetch_cap_hit"] is True
+    assert batch["receipt"]["not_fetched_count"] == 1
+    record = engine.record_lead_batch(request_id(2), reply["lead_set_id"], batch["result_id"])
+    state = statuses(engine, record)
+    assert state[AURORA] == ("pending", None)
+    assert {state[url] for url in urls[:40]} == {("failed", "http_error")}
+
+
+REFUSED_SHAPES = [
+    "SELECT host_rank, lead_id, WEB_FETCH(url) AS page FROM input.l ORDER BY host_rank LIMIT 41",
+    "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l ORDER BY host_rank",
+    "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l LIMIT 41",
+    "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l LIMIT 5 OFFSET 2",
+    "WITH l2 AS (SELECT lead_id FROM input.l) SELECT url FROM WEB_FETCH($u1) LIMIT 1",
+    "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l UNION ALL "
+    "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l ORDER BY lead_id",
+]
+
+
+@pytest.mark.parametrize("query", REFUSED_SHAPES)
+def test_fetch_with_its_own_order_or_limit_is_refused_before_any_fetch(tmp_path, query):
+    from sourcesql.sql.admission import public_refusal_reason
+
+    engine = make(tmp_path)
+    reply = engine.add_leads(request_id(1), leads_of(AURORA, BIRCH))
+
+    def runs():
+        with engine.store.db() as db:
+            return db.execute("SELECT count(*) FROM runs").fetchone()[0]
+
+    before = runs()
+    request = {
+        "query": query,
+        "parameters": {"u1": AURORA} if "$u1" in query else {},
+        "inputs": {"l": lead_view(reply)},
+    }
+    for call in (engine.query, engine.explain):
+        error = refused(lambda: call(**request))
+        assert (error.code, error.stage) == ("invalid_query", "admission"), query
+        assert error.safe_message == error_codes.refusal("lead_batch_fetch_order")
+        assert public_refusal_reason(error) == error.safe_message
+    assert runs() == before
+
+
+def test_the_refusal_names_the_cte_shape():
+    assert error_codes.refusal("lead_batch_fetch_order") == (
+        "In a lead batch, put ORDER BY and LIMIT in a CTE before WEB_FETCH. An ORDER BY or "
+        "LIMIT in the same SELECT as WEB_FETCH does not choose which pages are fetched."
+    )
+
+
+def test_the_same_shape_without_a_lead_set_keeps_111_rules(tmp_path):
+    engine = make(tmp_path)
+    table = engine.import_table(
+        columns=[
+            {"key": "lead_id", "logical_type": "VARCHAR", "nullable": False},
+            {"key": "url", "logical_type": "VARCHAR", "nullable": False},
+            {"key": "host_rank", "logical_type": "BIGINT", "nullable": False},
+        ],
+        rows=[
+            {"lead_id": f"x{n}", "url": f"https://site{n}.example/page", "host_rank": n}
+            for n in range(41)
+        ],
+        data_classification="public_web",
+    )
+    pin = {"l": {"result_id": table["result_id"], "view": "original", "amendment_revision": None}}
+    query = (
+        "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l "
+        "WHERE host_rank <= 3 ORDER BY host_rank LIMIT 3"
+    )
+    assert len(engine.query(query=query, inputs=pin)["rows"]) == 3
+    over = "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l ORDER BY host_rank LIMIT 41"
+    error = refused(lambda: engine.query(query=over, inputs=pin))
+    assert error.code == "budget_exhausted"
+    assert "CTE" not in error.safe_message
+
+
+def test_unordered_fetch_over_pending_leads_stops_at_the_cap(tmp_path):
+    engine = make(tmp_path)
+    urls, reply = ranked_leads(engine)
+    query = "SELECT lead_id, WEB_FETCH(url) AS page FROM input.l WHERE lead_status = 'pending'"
+    batch = run_batch(engine, reply, query)
+    assert len(batch["fetch_outcomes"]) == 40
+    assert batch["receipt"]["not_fetched_count"] == 1
+    stored = [row["url"] for row in stored_leads(engine, reply)]
+    assert [o["url"] for o in batch["fetch_outcomes"]] == stored[:40]
+
+
+def test_lead_inputs_read_lists_the_results_the_sql_referenced(tmp_path):
+    engine = make(tmp_path)
+    reply = engine.add_leads(request_id(1), leads_of(AURORA))
+    hits = engine.store.lead_set_head(reply["lead_set_id"])["hits_result_id"]
+    over_leads = run_batch(engine, reply, cte_batch())
+    assert over_leads["lead_inputs_read"] == [reply["result_id"]]
+    over_hits = engine.query(
+        query="SELECT lead_id, host_rank FROM input.h",
+        inputs={"h": lead_view(reply, "hits")},
+    )
+    assert over_hits["lead_inputs_read"] == sorted([reply["result_id"], hits])
+    newer = engine.add_leads(request_id(2), leads_of(BIRCH), lead_set_id=reply["lead_set_id"])
+    record = engine.record_lead_batch(request_id(3), reply["lead_set_id"], over_leads["result_id"])
+    assert record["revision"] == newer["revision"] + 1

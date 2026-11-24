@@ -2472,9 +2472,6 @@ export function createServer(
           amendment_revision: materialization.amendment_revision,
         };
       }
-      const readsLeadSet = Object.values(args.inputs).some(
-        (pin) => pin.view === "leads" || pin.view === "hits",
-      );
       const result = await engine.call(method, { ...args, inputs });
       if (Object.hasOwn(result, "job_id")) return jobResult(result);
       if (method === "query" && typeof result.result_id === "string") {
@@ -2491,6 +2488,11 @@ export function createServer(
         authorizeSnapshot(resultSnapshotForAccess(page), options.access);
       }
       const reply = engineResult(result);
+      // The engine records which lead-set results the SQL referenced; a pin it never used
+      // does not make a query a batch.
+      const readsLeadSet =
+        Array.isArray(result.lead_inputs_read) &&
+        result.lead_inputs_read.length > 0;
       const outcomes = (
         Array.isArray(result.fetch_outcomes) ? result.fetch_outcomes : []
       ) as { status?: string }[];

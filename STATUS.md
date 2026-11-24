@@ -50,11 +50,14 @@ holds at most 64 results, so a set recorded from more than about 30 batches does
 not re-import. A batch query that read a lead set and fetched pages is told to
 record it and to ask the user before the next batch. A query over a lead set
 stops at the 40-fetch cap instead of being refused: it fetches the first 40 URLs
-in the order the query reaches them (an outer ORDER BY or LIMIT does not choose
-which; put them in a CTE before WEB_FETCH, as the guidance says), reports the
-rest as not fetched (they stay pending), and records normally. A query that does
-not select from a lead-set input, even if one is bound, keeps #111's refusal over
-the cap. The reply and the receipt name the job's actual fetch limit, and an
+in the order of the rows that reach the fetch, reports the rest as not fetched
+(they stay pending), and records normally. In a query that reads a lead set, a
+SELECT that calls WEB_FETCH and has its own ORDER BY, LIMIT or OFFSET is refused at
+admission (also by explain), because the fetch would run before they apply; the
+supported shape puts them in a CTE ahead of the fetch. "Reads a lead set" is
+recorded by the engine (`lead_inputs_read`) from the inputs the SQL references, so
+a lead input that is bound but unused does not make a batch and keeps #111's
+rules, and `record_lead_batch` refuses such a result. The reply and the receipt name the job's actual fetch limit, and an
 all-skipped result is not offered for recording. Lead-set reads and opens begin with a queue line, the table
 labels host-written columns as Host-asserted (in a table built from a lead set,
 every column no cell cites a source for), and a lead set cannot be corrected in
