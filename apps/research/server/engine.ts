@@ -68,14 +68,32 @@ export interface ResearchEngine {
     args: Record<string, unknown>,
     imports?: Record<string, EffectiveMaterialization>,
   ): Promise<Record<string, unknown> | undefined>;
+  /** Profiles fixed at construction, when the engine can know them without a call. */
+  readonly staticProfiles?: readonly { name: string; mode: string }[];
   readonly supportsExplain?: boolean;
   readonly supportsAsyncJobs?: boolean;
+  /** True when `query` already returns the authorized first result page. */
+  readonly queryReturnsAuthorizedPage?: boolean;
   readonly supportsUsageReporting?: boolean;
   call<T = Record<string, unknown>>(
     method: string,
     params?: Record<string, unknown>,
   ): Promise<T>;
 }
+const declaredFeatures = (
+  capabilities: Record<string, unknown>,
+): Record<string, unknown> => {
+  const declared = capabilities.worker_feature_contracts;
+  return declared && typeof declared === "object" && !Array.isArray(declared)
+    ? (declared as Record<string, unknown>)
+    : {};
+};
+type BridgeReply =
+  { ok: true; result: unknown } | { ok: false; code?: string; message: string };
+const readMemo = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
+/** Scopes repeated identical result reads inside one tool call to one process. */
+export const withEngineReadScope = <T>(run: () => Promise<T>): Promise<T> =>
+  readMemo.run(new Map(), run);
 /** Mirrors DEFAULT_LIMITS["dispatch_deadline_seconds"] in src/sourcesql/contracts.py. */
 export const LOCAL_DISPATCH_DEADLINE_SECONDS = 180;
 // Above the engine's own deadline so it can answer cleanly first, and below
@@ -155,7 +173,28 @@ export type BridgeProcessOptions = {
   command?: string;
   args?: string[];
 };
+/** An engine refusal. Its message keeps the `code: message` shape callers match on. */
+export class EngineCallError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+  }
+}
+const failure = (reply: { code?: string; message: string }): Error =>
+  reply.code === undefined
+    ? new Error(reply.message)
+    : new EngineCallError(reply.code, reply.message);
 export class PythonEngine implements ResearchEngine {
+  // Engine.query returns read_result(result_id), including the
+  // data_classification that store.authorize computed.
+  readonly queryReturnsAuthorizedPage = true;
+  private featuresPromise?: Promise<Record<string, unknown>>;
+  // bridge.py loads profiles only from SOURCESQL_PROFILES_FILE; without it
+  // Engine.__init__ has exactly the built-in fixture profile. A profiles file
+  // may redefine "fixture", so only its absence makes the list static.
+  readonly staticProfiles?: readonly { name: string; mode: string }[];
   constructor(
     private projectRoot = fileURLToPath(new URL("../../../", import.meta.url)),
     private environment: NodeJS.ProcessEnv = process.env,
@@ -167,6 +206,8 @@ export class PythonEngine implements ResearchEngine {
         processOptions.timeoutMs < 1)
     )
       throw new Error("Invalid bridge deadline");
+    if (!environment.SOURCESQL_PROFILES_FILE)
+      this.staticProfiles = [{ name: "fixture", mode: "fixture" }];
   }
   async guardLegacyRequest(
     args: Record<string, unknown>,
@@ -206,21 +247,47 @@ export class PythonEngine implements ResearchEngine {
             receipt: await this.call("run_status", { run_id: prior.run_id }),
           };
   }
-  private async features(): Promise<Record<string, unknown>> {
-    const capabilities =
-      await this.bridgeCall<Record<string, unknown>>("capabilities");
-    const declared = capabilities.worker_feature_contracts;
-    return declared && typeof declared === "object" && !Array.isArray(declared)
-      ? (declared as Record<string, unknown>)
-      : {};
+  // Worker feature contracts are fixed by the installed engine, so one lookup
+  // serves the app's lifetime; a replaced engine is picked up on restart. A
+  // failed lookup is not cached, so a crashed worker cannot poison later calls.
+  private features(): Promise<Record<string, unknown>> {
+    this.featuresPromise ??= this.loadFeatures().catch((error: unknown) => {
+      this.featuresPromise = undefined;
+      throw error;
+    });
+    return this.featuresPromise;
+  }
+  private async loadFeatures(): Promise<Record<string, unknown>> {
+    return declaredFeatures(
+      await this.bridgeCall<Record<string, unknown>>("capabilities"),
+    );
   }
   async inspectResult(params: Record<string, unknown>) {
+    if (this.featuresPromise) {
+      if (
+        (await this.features()).result_inspection !==
+        WORKER_FEATURE_CONTRACTS.result_inspection
+      )
+        return undefined;
+      return this.bridgeCall<Record<string, unknown>>("inspect_result", params);
+    }
+    // Fresh engine: ask for the contract and the page in one process. The page is
+    // discarded unless the engine declares the matching contract, as before.
+    const [capabilities, inspected] = await this.bridgeBatch([
+      { method: "capabilities", params: {} },
+      { method: "inspect_result", params },
+    ]);
+    if (!capabilities.ok) throw failure(capabilities);
+    const features = declaredFeatures(
+      capabilities.result as Record<string, unknown>,
+    );
+    this.featuresPromise ??= Promise.resolve(features);
     if (
-      (await this.features()).result_inspection !==
-      WORKER_FEATURE_CONTRACTS.result_inspection
+      features.result_inspection !== WORKER_FEATURE_CONTRACTS.result_inspection
     )
       return undefined;
-    return this.bridgeCall<Record<string, unknown>>("inspect_result", params);
+    if (!inspected.ok) throw failure(inspected);
+    return inspected.result as Record<string, unknown>;
   }
   async call<T = Record<string, unknown>>(
     method: string,
@@ -251,39 +318,64 @@ export class PythonEngine implements ResearchEngine {
           "unsupported_capability: Update the local worker to support this citation/materialization contract before retrying",
         );
     }
+    const memo = readMemo.getStore();
+    if (method !== "read_result") memo?.clear();
+    else if (memo) {
+      // Results are immutable, so one tool call that reads the same page twice
+      // (resolving a reference, then verifying it on save) starts one process.
+      const key = JSON.stringify(params);
+      let page = memo.get(key);
+      if (!page) {
+        page = this.bridgeCall<T>(method, params);
+        memo.set(key, page);
+        page.catch(() => memo.delete(key));
+      }
+      return structuredClone(await (page as Promise<T>));
+    }
     const result = await this.bridgeCall<T>(method, params);
-    return method === "capabilities"
-      ? ({
-          ...result,
-          execution: {
-            mode: "synchronous",
-            jobs: false,
-            note: "Queries return their result in the same call. There are no jobs to poll.",
-            dispatch_deadline_seconds: LOCAL_DISPATCH_DEADLINE_SECONDS,
-            enforced_limit_seconds: LOCAL_DISPATCH_LIMIT_MS / 1000,
-          },
-        } as T)
-      : result;
+    if (method !== "capabilities") return result;
+    // An ordinary capabilities call already carries the feature map.
+    if (!this.featuresPromise)
+      this.featuresPromise = Promise.resolve(
+        declaredFeatures(result as Record<string, unknown>),
+      );
+    return {
+      ...result,
+      execution: {
+        mode: "synchronous",
+        jobs: false,
+        note: "Queries return their result in the same call. There are no jobs to poll.",
+        dispatch_deadline_seconds: LOCAL_DISPATCH_DEADLINE_SECONDS,
+        enforced_limit_seconds: LOCAL_DISPATCH_LIMIT_MS / 1000,
+      },
+    } as T;
   }
-  private bridgeCall<T = Record<string, unknown>>(
+  private async bridgeCall<T = Record<string, unknown>>(
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
+    const [reply] = await this.bridgeBatch([{ method, params }]);
+    if (!reply.ok) throw failure(reply);
+    return reply.result as T;
+  }
+  /** One process answers every request; replies are matched by id, not order. */
+  private bridgeBatch(
+    requests: { method: string; params: Record<string, unknown> }[],
+  ): Promise<BridgeReply[]> {
     const budget = callBudget.getStore();
     if (budget) budget.active++;
-    return this.runBridge<T>(method, params).finally(() => {
+    return this.runBridge(requests).finally(() => {
       if (budget) budget.active--;
     });
   }
-  private runBridge<T>(
-    method: string,
-    params: Record<string, unknown>,
-  ): Promise<T> {
+  private runBridge(
+    requests: { method: string; params: Record<string, unknown> }[],
+  ): Promise<BridgeReply[]> {
     return new Promise((resolve, reject) => {
-      const id = randomUUID();
+      const ids = requests.map(() => randomUUID());
       const ownLimitMs =
         this.processOptions.timeoutMs ??
-        (LOCAL_DISPATCH_METHODS.has(method)
+        (requests.some(({ method }) => LOCAL_DISPATCH_METHODS.has(method))
           ? (this.processOptions.dispatchTimeoutMs ?? LOCAL_DISPATCH_LIMIT_MS)
           : (this.processOptions.readTimeoutMs ?? LOCAL_READ_LIMIT_MS));
       const budget = callBudget.getStore();
@@ -310,7 +402,7 @@ export class PythonEngine implements ResearchEngine {
       );
       let output = "",
         settled = false;
-      const finish = (error: Error | null, result?: T) => {
+      const finish = (error: Error | null, result?: BridgeReply[]) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -358,25 +450,45 @@ export class PythonEngine implements ResearchEngine {
       );
       child.on("close", () => {
         try {
-          const lines = output.trim().split("\n");
-          if (lines.length !== 1) throw new Error();
-          const result = JSON.parse(lines[0]);
-          if (result.id !== id) throw new Error();
-          if (result.error)
-            finish(
-              new Error(
-                `${String(result.error.code)}: ${String(result.error.message)}`,
-              ),
-            );
-          else if (Object.hasOwn(result, "result"))
-            finish(null, result.result as T);
-          else throw new Error();
+          const byId = new Map<string, Record<string, any>>();
+          for (const line of output.trim().split("\n")) {
+            const reply = JSON.parse(line);
+            if (!ids.includes(reply.id) || byId.has(reply.id))
+              throw new Error();
+            byId.set(reply.id, reply);
+          }
+          // A reply the engine never wrote fails only its own request, so a
+          // complete refusal in another reply is still reported as itself.
+          finish(
+            null,
+            ids.map((id): BridgeReply => {
+              const reply = byId.get(id);
+              if (reply?.error)
+                return {
+                  ok: false,
+                  code: String(reply.error.code),
+                  message: String(reply.error.message),
+                };
+              if (!reply || !Object.hasOwn(reply, "result"))
+                return {
+                  ok: false,
+                  message: "Invalid engine bridge response.",
+                };
+              return { ok: true, result: reply.result };
+            }),
+          );
         } catch {
           finish(new Error("Invalid engine bridge response."));
         }
       });
       child.stdin.on("error", () => {});
-      child.stdin.end(JSON.stringify({ id, method, params }) + "\n");
+      child.stdin.end(
+        requests
+          .map(({ method, params }, i) =>
+            JSON.stringify({ id: ids[i], method, params }),
+          )
+          .join("\n") + "\n",
+      );
     });
   }
 }

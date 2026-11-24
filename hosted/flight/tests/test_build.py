@@ -101,6 +101,7 @@ def test_full_current_source_flight_retains_the_reviewed_200kb_limit(tmp_path):
     for resource in (
         builder.TOKENIZER_RESOURCE,
         "sourcesql/_resources/tokenizers/TIKTOKEN_LICENSE.txt",
+        builder.ERROR_CODES_RESOURCE,
     ):
         files[resource] = (root / "src" / resource).read_bytes()
     files["sourcesql/_resources/personal-cloud.zip"] = build_personal_cloud_archive(root)
