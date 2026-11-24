@@ -17,7 +17,7 @@ from sourcesql.engine import Engine
 from sourcesql.execution.worker_process import evaluate
 from sourcesql.providers import FixtureProvider, ProviderRegistry, SafeFetcher
 from sourcesql.providers.fixture import DOCUMENTS
-from sourcesql.sql.admission import SOURCE_COLUMNS
+from sourcesql.sql.admission import PUBLIC_REASON, SOURCE_COLUMNS, public_refusal_reason
 
 
 def reference_worker(sql, tables, parameters=None, timeout=30):
@@ -131,6 +131,27 @@ def test_strict_policy_still_refuses_when_a_fetch_fails(tmp_path):
         )
     assert (refused.value.code, refused.value.stage) == ("provider_unavailable", "fetch")
     assert latest_run(engine)["fetch_failed"] == 1
+
+
+def test_strict_refusal_counts_every_failed_url_of_the_call(tmp_path):
+    engine = make(tmp_path)
+    misses = [f"https://nowhere.example/{n}" for n in range(3)]
+    with pytest.raises(SourcesQLError):
+        engine.query(
+            query="SELECT url FROM WEB_FETCH($u1, $u2, $u3)",
+            parameters=urls(*misses),
+            partial_policy="strict",
+        )
+    assert latest_run(engine)["fetch_failed"] == 3
+
+
+def test_web_fetch_without_urls_says_what_to_pass_in_a_hosted_safe_sentence(tmp_path):
+    with pytest.raises(SourcesQLError) as refused:
+        make(tmp_path).query(query="SELECT url FROM WEB_FETCH()")
+    assert refused.value.code == "invalid_query"
+    assert refused.value.safe_message.startswith("WEB_FETCH needs at least one URL")
+    assert PUBLIC_REASON.fullmatch(refused.value.safe_message)
+    assert public_refusal_reason(refused.value) == refused.value.safe_message
 
 
 def test_scalar_web_fetch_list_carries_the_status_fields(tmp_path):

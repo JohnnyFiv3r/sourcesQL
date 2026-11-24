@@ -1391,10 +1391,14 @@ class Engine:
                         if operator == "WEB_FETCH":
                             fetch_summary["failed"] += getattr(registry, "failed_before_error", 0)
                         raise
+                    # Counted before any row is handled, so a strict refusal at the
+                    # first failure still reports every URL of the call that failed.
+                    fetch_summary["failed"] += sum(
+                        row.get("status") == "fetch_failed" for row in rows
+                    )
                     normalized = []
                     for row in rows:
                         if row.get("status") == "fetch_failed":
-                            fetch_summary["failed"] += 1
                             receipt["errors"].append(
                                 {
                                     "code": row.get("error_code", "fetch_failed"),

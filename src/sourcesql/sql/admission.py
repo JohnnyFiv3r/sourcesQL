@@ -792,6 +792,13 @@ class _Binder:
                 "Operator arguments must be deterministic scalar expressions from the source row"
             )
         if name in ("WEB_SEARCH", "WEB_FETCH"):
+            if name == "WEB_FETCH" and not args:
+                # Plain words only: a hosted caller sees this sentence, and `$` is not in its gate.
+                refuse(
+                    "WEB_FETCH needs at least one URL. Search with your own tool first, "
+                    "then pass the URLs as parameters named u1 to u32",
+                    "invalid_query",
+                )
             if not 1 <= len(args) <= 32:
                 refuse("Web source operators require one to 32 strings", "invalid_query")
             allowed = (
