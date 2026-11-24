@@ -41,6 +41,12 @@ import {
 import { Button, Input, Textarea, GrowingTextarea, Select } from "./ui.js";
 import { SourceList } from "./source-list.js";
 import {
+  LeadColumnLabel,
+  LeadSetBanner,
+  LeadSetEmpty,
+  leadFetchFailure,
+} from "./lead-set.js";
+import {
   displayValue,
   effectiveValue,
   snapshotSchema,
@@ -98,6 +104,8 @@ import {
   nextTableSort,
   sourceLinksForValue,
   needsSourcePicker,
+  markLeadSources,
+  leadQueueLine,
 } from "./presentation.js";
 
 const MAX_PAGE_SIZE = 25;
@@ -1364,11 +1372,19 @@ function Workspace() {
     view && row && field ? effectiveValue(view, row, field) : null;
   const selectedCellDiagnostic =
     row && field ? cellDiagnosticSummary(row, field) : undefined;
-  const sources = sourceLinksForValue(
-    row && view
-      ? assertedSourcesForViewSelection(view, row, field || undefined)
-      : [],
-    currentValue,
+  const sources = markLeadSources(
+    sourceLinksForValue(
+      row && view
+        ? assertedSourcesForViewSelection(view, row, field || undefined)
+        : [],
+      currentValue,
+    ),
+    view?.snapshot.leadSet,
+  );
+  const leadFailure =
+    row && view?.snapshot.leadSet ? leadFetchFailure(row.values) : undefined;
+  const leadSetEmpty = Boolean(
+    view?.snapshot.leadSet && !view.snapshot.rows.length,
   );
   const sourcePicker = needsSourcePicker(sources);
   function changePage(next: number) {
@@ -2123,6 +2139,13 @@ function Workspace() {
                 </span>
               </div>
             )}
+            {view.snapshot.leadSet && (
+              <LeadSetBanner
+                key={view.snapshot.id}
+                leadSet={view.snapshot.leadSet}
+                queueLine={leadQueueLine(view.snapshot.leadSet)}
+              />
+            )}
             <table
               style={{ minWidth: Math.max(340, columns.length * 112 + 36) }}
             >
@@ -2171,6 +2194,9 @@ function Workspace() {
                         <span>{c.label}</span>
                         <ArrowUpDown size={12} />
                       </button>
+                      {view.snapshot.leadSet && (
+                        <LeadColumnLabel field={c.key} />
+                      )}
                     </th>
                   ))}
                 </tr>
@@ -2302,6 +2328,13 @@ function Workspace() {
                             >
                               <span
                                 className={`cell-value${missing ? " missing-value" : sourceUrl ? " source-url-value" : ""}`}
+                                title={
+                                  view.snapshot.leadSet &&
+                                  c.key === "lead_status" &&
+                                  leadFetchFailure(r.values)
+                                    ? `Fetch failure: ${leadFetchFailure(r.values)}`
+                                    : undefined
+                                }
                                 aria-hidden={
                                   missing || sourceUrl ? true : undefined
                                 }
@@ -2351,7 +2384,8 @@ function Workspace() {
                 })}
               </tbody>
             </table>
-            {!rows.length && (
+            {leadSetEmpty && <LeadSetEmpty />}
+            {!rows.length && !leadSetEmpty && (
               <div className="empty">
                 <Search size={22} />
                 <h2>No matching results</h2>
@@ -2583,6 +2617,7 @@ function Workspace() {
                     {selectedCellDiagnostic ? (
                       <p>Original research: {selectedCellDiagnostic}</p>
                     ) : null}
+                    {leadFailure ? <p>Fetch failure: {leadFailure}</p> : null}
                   </div>
                 )}
                 {tab === "correct" &&

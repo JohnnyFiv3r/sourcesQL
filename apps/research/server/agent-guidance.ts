@@ -347,13 +347,3 @@ export function leadBatchText(attempted: number, resultId: string): string {
 /** What follows an over-cap lead batch error: nothing was fetched or recorded. */
 export const LEAD_BATCH_OVER_CAP_TEXT =
   "This batch selected more leads than the 40 pages one job can fetch, so it was stopped and nothing was recorded. The lead set is unchanged and its leads are still pending. Run the batch again with LIMIT 40 or fewer on lead_status = 'pending'. Ask the user before running further batches.";
-
-/** The top line of a lead-set read or open: where the set stands. */
-export function leadQueueLine(leadSet: {
-  leadSetId: string;
-  revision: number;
-  totals: { leads: number; fetched: number; failed: number; pending: number };
-}): string {
-  const { totals } = leadSet;
-  return `Lead set ${leadSet.leadSetId}, revision ${leadSet.revision}: ${count(totals.leads, "lead")}, ${totals.fetched} fetched, ${totals.failed} failed, ${totals.pending} pending.`;
-}

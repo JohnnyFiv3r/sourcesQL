@@ -21,10 +21,10 @@ import {
   SOURCESQL_LEAD_FANOUT_GUIDANCE,
   SOURCESQL_SERVER_INSTRUCTIONS,
   leadBatchText,
-  leadQueueLine,
   leadRecordText,
   type LeadRecordReply,
 } from "../server/agent-guidance.js";
+import { leadQueueLine } from "../src/presentation.js";
 import { snapshotSchema } from "../src/schema.js";
 import sample from "../fixtures/water-procurement.json";
 import { testEnv } from "./python.js";

@@ -27,6 +27,7 @@ import {
   hostAssertedSummary,
   hostQuoteText,
   hostSourceText,
+  leadQueueLine,
   HOST_ASSERTED_NOTICE,
   snapshotAssertion,
 } from "../src/presentation.js";
@@ -103,7 +104,6 @@ import {
   leadIntakeText,
   leadRecordText,
   leadBatchText,
-  leadQueueLine,
   LEAD_BATCH_OVER_CAP_TEXT,
   RECORD_LEAD_BATCH_DESCRIPTION,
   type LeadRecordReply,

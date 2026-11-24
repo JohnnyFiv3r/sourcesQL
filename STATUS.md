@@ -22,7 +22,7 @@ or scripted host session has been done. Hosted fetch-only profiles are not offer
 Behaviour changes: failed `WEB_FETCH` URLs are no longer dropped from rows, and
 `WEB_FETCH` has two more columns.
 
-## Unreleased host-found lead sets (part 1)
+## Unreleased host-found lead sets (parts 1 and 2)
 
 The local app has an `add_research_leads` tool. A host agent sends the hits from
 its own search, up to 150 per call, and sourcesQL keeps them as a lead set: one
@@ -32,12 +32,27 @@ class. Anything derived from it keeps that class through queries, imports of
 derived tables, exports and re-imports, unless it also depends on private data,
 which makes the result `private_derived` and keeps its restrictions. The class is
 never importable directly. A lead set has no source versions, evidence or search
-provenance, so no lead can be cited. Every lead reads `lead_status = 'pending'`:
-recording fetch outcomes, the batch reply wording, the table labels and the
-guidance are not built yet. A set holds at most 2000 leads, and every submission
-is kept as a hit, limited only by the storage quota; revoking one revision revokes
-the set. Hosted deployments do not offer the tool, and an exported lead set re-
-imports as data but cannot be appended to in the new store. Fixture-tested only.
+provenance, so no lead can be cited. A set holds at most 2000 leads, and every
+submission is kept as a hit, limited only by the storage quota; revoking one
+revision revokes the set. Hosted deployments do not offer the tools, and an
+exported lead set re-imports as data but cannot be appended to in the new store.
+
+Part 2 adds `record_lead_batch`. While a query runs, `WEB_FETCH` writes its own
+per-URL record of each attempt (`fetch_outcomes`, keyed by the URL the query
+asked for) into the published result. Recording a batch matches that record to
+the newest lead-set revision by normalized URL and writes a new immutable
+revision with `lead_status` (`pending`, `fetched`, `failed`), `fetch_failure` and
+`batch_result_id`. It never reads an output column, so a query that writes
+`'ok' AS fetch_status` changes nothing. The revision lists the previous leads
+revision and the batch as parents, so an export carries every batch that set a
+status; a long chain of batches therefore makes a large export, and a bundle
+holds at most 64 results, so a set recorded from more than about 30 batches does
+not re-import. A batch query that read a lead set and fetched pages is told to
+record it and to ask the user before the next batch. A batch that selects more
+than 40 leads is refused whole by the existing fetch cap and records nothing.
+Lead-set reads and opens begin with a queue line, and the table labels the
+host-written columns as Host-asserted. A failed `WEB_FETCH` row no longer breaks
+the next step of the same query. Fixture-tested only; no live provider run.
 
 ## Unreleased citation and result-read correction
 
