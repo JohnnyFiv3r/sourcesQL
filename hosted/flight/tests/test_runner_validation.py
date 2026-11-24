@@ -154,6 +154,11 @@ def test_hosted_query_owns_one_binding_pass_and_sandbox_without_explain(tmp_path
             "Pass a value for missing in parameters, with the same name as in the SQL "
             "but without the dollar sign.",
         ),
+        (
+            "SELECT url FROM WEB_FETCH()",
+            "WEB_FETCH needs at least one URL. Search with your own tool first, "
+            "then pass the URLs as query parameters named u1 to u32.",
+        ),
     ],
 )
 def test_admission_refusal_hands_its_own_reason_to_the_job_store(

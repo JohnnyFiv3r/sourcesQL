@@ -239,6 +239,8 @@ class FixtureProvider:
                         "content_basis": None,
                         "status": "fetch_failed",
                         "error_code": "provider_unavailable",
+                        # A fixture miss stands in for a 404.
+                        "failure_reason": "http_error",
                     }
                 )
         return records

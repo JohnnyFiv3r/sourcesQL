@@ -20,7 +20,7 @@ The installed signatures are:
 - `WEB_SEARCH(q1, ..., q32, per_query_limit := 1..100, published_after := 'ISO date or offset-bearing instant', published_before := ..., undated_policy := 'include'|'exclude'|'error', allow_post_filter := true|false)`
 Exa accepts up to 100 results per query; other providers and fixture mode accept at most 20. Profile limits and explicitly chosen run budgets also apply. Ordinary defaults remain eight search queries and 200 candidates.
 
-- `WEB_FETCH(url1, ..., url32, mode := 'cache_preferred'|'live')`
+- `WEB_FETCH(url1, ..., url32, mode := 'cache_preferred'|'live')` returns the source columns plus `fetch_status` (`ok` or `failed`) and `fetch_failure`. See [Researching URLs your agent found](#researching-urls-your-agent-found).
 - `SEM_MATCH(text, 'predicate')` is an LLM semantic predicate returning Boolean or SQL NULL. It does not require embeddings.
 - `SEM_EXTRACT(text, 'definition', type := 'VARCHAR'|'BOOLEAN'|'BIGINT'|'DOUBLE'|'DECIMAL(18,2)'|'DATE'|'TIMESTAMPTZ', evidence := true|false)` returns a nullable scalar. Alternatively, named `field := 'definition'` options produce a compile-time VARCHAR struct; `type` cannot combine with named fields.
 - `SEM_EXTRACT_ALL(text, 'entity definition', field := 'definition', ..., evidence := 'per_field')` returns a list of structs, or a list of VARCHAR scalars without named fields.
@@ -142,6 +142,65 @@ Publication, observation and retrieval times remain separate source fields.
 configured item ceiling. Reaching the ceiling means more items may exist; fewer
 items do not prove an exhaustive catalog. Use explicit source windows or further
 bounded extraction to investigate omitted material.
+
+## Researching URLs your agent found
+
+A host agent can search with its own web search tool and have sourcesQL fetch the
+pages. This needs no sourcesQL search provider. It needs a profile that may fetch:
+`allow_public_source_hosts: true` or a non-empty `allowed_source_hosts`, plus a
+model for extraction. `sourcesql_capabilities` reports it per profile as
+`host_search_route.available`; `search.configured` is false and `fetch.configured`
+is true. `WEB_SEARCH` on such a profile is refused with `provider_unavailable`
+before any fetch or model call. This route has not been live-qualified: it is
+tested with fixtures and controlled HTML, and `fetch.live_qualified` stays false
+until a live run over real pages is recorded.
+
+1. Search with your own tool. Treat every title, snippet and date as a lead.
+2. Remove duplicate URLs and keep public HTML or text pages.
+3. Pass the URLs as parameters to `FROM WEB_FETCH(...)`, then extract from the
+   fetched text:
+
+```sql
+SELECT url AS source_url,
+       fetch_status,
+       fetch_failure,
+       SEM_EXTRACT(content, 'the name of the project', evidence := true) AS project_name
+FROM WEB_FETCH($u1, $u2, $u3)
+```
+
+sourcesQL fetches each URL itself and stores a source version, so a cited quote
+always comes from text sourcesQL fetched. Titles, snippets and dates reported by a
+host search are never evidence and never become source text. Importing host
+results as a snapshot is different: the imported rows have no sources and no
+citations.
+
+Limits: at most 32 URLs per call, 40 fetches per job by default, 2 MiB per page,
+HTML or text only. PDFs fail. sourcesQL reads the HTML as served and runs no
+scripts, so a page that builds its content with JavaScript can fetch as `ok` with
+only its shell as content; check that the extracted text is what you expected.
+
+A URL that cannot be fetched stays in the result as a row with
+`fetch_status = 'failed'`, a `fetch_failure` code and no content, so it cannot be
+cited. This is different from a fetched page where extraction found nothing,
+which stays NULL with its usual diagnostic. The rest of the job completes and the
+receipt reports `fetch_failed`.
+
+| `fetch_failure` | Meaning |
+|---|---|
+| `blocked_host` | Not on the allowlist, a private or non-public address, or a disallowed port. The URL is never requested. |
+| `unsupported_type` | Not HTML or text (for example a PDF), or text that cannot be decoded. |
+| `too_large` | The page is over 2 MiB. |
+| `http_error` | The server answered with an error status, or a fixture URL is unknown. |
+| `too_many_redirects` | More than three redirects, or a redirect with no target. |
+| `timeout` | The server did not answer in time. |
+| `transport_error` | The connection failed for another reason. |
+| `provider_error` | A provider fetch adapter reported a failure without a reason. |
+
+The job does not split itself at the fetch limit. A call that goes over the limit
+is refused with `budget_exhausted`, and its receipt says `fetch_cap_hit: true`
+and lists `not_fetched_urls` (up to 100, with `not_fetched_count`) for that call.
+Pages fetched before the limit are kept; `sourcesql_recover_run` returns them.
+Choose the most relevant URLs yourself and say which you left out.
 
 ## Missing facts and declared requirements
 

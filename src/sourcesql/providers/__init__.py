@@ -22,6 +22,7 @@ from .semantic import OpenAIEmbeddingProvider, PydanticSemanticProvider, TYPES
 
 __all__ = [
     "ProviderRegistry",
+    "route_capabilities",
     "FixtureProvider",
     "BraveProvider",
     "ExaProvider",
@@ -31,6 +32,84 @@ __all__ = [
     "PydanticSemanticProvider",
     "OpenAIEmbeddingProvider",
 ]
+
+
+SEARCH_PROVIDERS = ("brave", "exa", "serper", "deepseek")
+HOST_SEARCH_NOTE = (
+    "Search with your own tool and pass the URLs to WEB_FETCH. Titles, snippets and dates "
+    "from your search are leads, not citations. Only text sourcesQL fetches itself is cited."
+)
+
+
+def _search_credential(profile: dict) -> str:
+    credential = profile.get("api_key")
+    if credential is None and profile.get("api_key_env"):
+        credential = os.environ.get(profile["api_key_env"])
+    return credential or ""
+
+
+def _semantic_configured(profile: dict) -> bool:
+    """Mirrors how ProviderRegistry builds its semantic provider, without building it."""
+    if profile.get("semantic_provider") is not None:
+        return True
+    model = profile.get("model")
+    if isinstance(model, dict):
+        return bool(model.get("api_key") or os.environ.get(model.get("api_key_env", "")))
+    return model is not None
+
+
+def route_capabilities(profile: dict | None) -> dict:
+    """Which acquisition routes a profile can run, without building providers or dialing out.
+
+    Only booleans and reason codes are reported, never credential names or values.
+    """
+    profile = profile or {}
+    mode = profile.get("mode", "fixture")
+    if mode == "fixture":
+        search_configured = fetch_configured = True
+    else:
+        search_configured = profile.get("provider", "brave") in SEARCH_PROVIDERS and bool(
+            _search_credential(profile)
+        )
+        hosts = profile.get("allowed_source_hosts")
+        fetch_configured = profile.get("allow_public_source_hosts") is True or (
+            isinstance(hosts, list) and bool(hosts)
+        )
+    available = fetch_configured and (mode == "fixture" or not search_configured)
+    route: dict[str, Any] = {"available": available}
+    if available:
+        route["operators"] = ["WEB_FETCH"] + (
+            ["SEM_MATCH", "SEM_EXTRACT", "SEM_EXTRACT_ALL"]
+            if mode == "fixture" or _semantic_configured(profile)
+            else []
+        )
+        route["note"] = HOST_SEARCH_NOTE
+    else:
+        route["reason"] = (
+            "fetch_not_configured" if not fetch_configured else "search_provider_configured"
+        )
+    return {
+        "search": {"configured": search_configured},
+        "fetch": {
+            "implemented": True,
+            "configured": fetch_configured,
+            "live_qualified": False,
+            "formats": ["html", "text"],
+            "max_urls_per_call": 32,
+        },
+        "host_search_route": route,
+    }
+
+
+def blocked_fetch_record(url: str) -> dict:
+    return {
+        "url": url,
+        "status": "fetch_failed",
+        "error_code": "unauthorized",
+        "failure_reason": "blocked_host",
+        "content": None,
+        "content_basis": None,
+    }
 
 
 class ProviderRegistry:
@@ -45,6 +124,11 @@ class ProviderRegistry:
         self.embedding_provider: Any = self.fixture
         self.fetch_provider: Any = self.fixture
         self._extra_events: list[dict] = []
+        # URLs of a WEB_FETCH call that stopped at the fetch limit; read by the
+        # engine for the receipt because the exception may not survive checkpointing.
+        self.not_fetched_urls: list[str] = []
+        # Failed URLs of a WEB_FETCH call that raised before returning its rows.
+        self.failed_before_error = 0
         if self.mode == "live":
             provider = self.profile.get("provider", "brave")
             providers = {
@@ -55,10 +139,10 @@ class ProviderRegistry:
             }
             if provider not in providers:
                 raise SourcesQLError("unsupported_capability", "Unknown search provider")
-            credentials = self.profile.get("api_key")
-            if credentials is None and self.profile.get("api_key_env"):
-                credentials = os.environ.get(self.profile["api_key_env"])
-            kwargs = {"api_key": credentials or "", "client": self.profile.get("http_client")}
+            kwargs = {
+                "api_key": _search_credential(self.profile),
+                "client": self.profile.get("http_client"),
+            }
             if provider == "exa":
                 kwargs["search_type"] = self.profile.get("search_type", "auto")
             if provider == "deepseek":
@@ -164,7 +248,7 @@ class ProviderRegistry:
             },
             "metering": "fixture" if self.mode == "fixture" else "estimated_only",
             "token_limits": "output_per_request_and_reported_totals",
-            "fetch": {"implemented": True, "live_qualified": False, "formats": ["html", "text"]},
+            "fetch": route_capabilities(self.profile)["fetch"],
         }
 
     def _authorize(self, budget: Budget) -> None:
@@ -213,7 +297,11 @@ class ProviderRegistry:
             "configured", True
         ):
             raise SourcesQLError(
-                "provider_unavailable", "Search credentials are not configured", "acquisition"
+                "provider_unavailable",
+                "No search provider is configured for this profile, so WEB_SEARCH cannot run. "
+                "To research with your own search tool, search yourself and pass the URLs to "
+                "WEB_FETCH. Otherwise ask the user to configure a search provider.",
+                "acquisition",
             )
         if "SEM_SCORE" in operators and self.embedding_provider is None:
             raise SourcesQLError(
@@ -361,6 +449,7 @@ class ProviderRegistry:
     def fetch(self, urls: list[str], options: dict, budget: Budget) -> list[dict]:
         self._authorize(budget)
         prepared_fetch = None
+        refused: set[int] = set()
         if not isinstance(urls, list) or any(not isinstance(url, str) for url in urls):
             raise SourcesQLError("invalid_request", "Fetch URLs must be strings", "acquisition")
         if self.mode == "live":
@@ -375,36 +464,73 @@ class ProviderRegistry:
                     urls, options, allowed_hosts=None if public_sources else allowed
                 )
             else:
-                for url in urls:
+                # A URL this profile may not fetch is reported as a failed row and
+                # never dispatched; the rest of the job still runs.
+                for index, url in enumerate(urls):
                     host = urlsplit(normalized_url(url)).hostname
                     if not public_sources and host not in (
                         allowed if isinstance(allowed, list) else []
                     ):
-                        raise SourcesQLError(
-                            "unauthorized", "Source destination is not permitted", "acquisition"
-                        )
+                        refused.add(index)
+                        continue
                     resolver = self.profile.get("resolver")
-                    resolve_public(url, resolver) if resolver else resolve_public(url)
-        if hasattr(self, "stage_call"):
-            rows = []
-            for index, url in enumerate(urls):
-                found, _ = self.stage_call(
-                    "WEB_FETCH",
-                    [url],
-                    options,
-                    lambda url=url, index=index: (
-                        self.fetch_provider.fetch_prepared(prepared_fetch, budget, index=index)
-                        if prepared_fetch is not None
-                        else self.fetch_provider.fetch([url], options, budget)
-                    ),
+                    try:
+                        resolve_public(url, resolver) if resolver else resolve_public(url)
+                    except SourcesQLError:
+                        refused.add(index)
+        self.not_fetched_urls = []
+        self.failed_before_error = 0
+        by_url: dict[int, list[dict]] = {}
+        done = 0
+        try:
+            if hasattr(self, "stage_call"):
+                for index, url in enumerate(urls):
+                    if index in refused:
+                        continue
+                    by_url[index], _ = self.stage_call(
+                        "WEB_FETCH",
+                        [url],
+                        options,
+                        lambda url=url, index=index: (
+                            self.fetch_provider.fetch_prepared(prepared_fetch, budget, index=index)
+                            if prepared_fetch is not None
+                            else self.fetch_provider.fetch([url], options, budget)
+                        ),
+                    )
+                    done = index + 1
+                rows = [
+                    row
+                    for index, url in enumerate(urls)
+                    for row in ([blocked_fetch_record(url)] if index in refused else by_url[index])
+                ]
+            else:
+                fetched = iter(
+                    self.fetch_provider.fetch_prepared(prepared_fetch, budget)
+                    if prepared_fetch is not None
+                    else self.fetch_provider.fetch(
+                        [url for index, url in enumerate(urls) if index not in refused],
+                        options,
+                        budget,
+                    )
                 )
-                rows.extend(found)
-        else:
-            rows = (
-                self.fetch_provider.fetch_prepared(prepared_fetch, budget)
-                if prepared_fetch is not None
-                else self.fetch_provider.fetch(urls, options, budget)
-            )
+                # Adapters answer one record per URL, in order.
+                rows = [
+                    blocked_fetch_record(url) if index in refused else next(fetched)
+                    for index, url in enumerate(urls)
+                ]
+        except SourcesQLError as error:
+            # The rows of a refused call are lost, but its failed URLs were still attempted.
+            self.failed_before_error = sum(
+                any(row.get("status") == "fetch_failed" for row in rows) for rows in by_url.values()
+            ) + sum(1 for index in refused if index < done)
+            if (
+                error.code == "budget_exhausted"
+                and budget.counts.get("fetches", 0) >= budget.limits["max_fetches"]
+            ):
+                self.not_fetched_urls = [
+                    url for index, url in enumerate(urls) if index >= done and index not in refused
+                ]
+            raise
         if options.get("source_mode") == "require_document" and any(
             row.get("status") == "acquired" and not row.get("coverage", {}).get("complete")
             for row in rows
