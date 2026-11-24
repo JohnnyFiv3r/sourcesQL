@@ -174,6 +174,24 @@ def test_padding_a_type_within_the_nesting_limit_keeps_the_length_refusal(admitt
     )
 
 
+@pytest.mark.parametrize(
+    "faulty",
+    [
+        # An extra closing parenthesis.
+        "STRUCT(a " * 9 + "INTEGER" + ")" * 10,
+        # MAP is outside the allowlist, however it is nested.
+        "MAP(VARCHAR," * 9 + "INTEGER" + ")" * 9,
+    ],
+)
+def test_long_type_with_another_fault_keeps_the_length_refusal(faulty):
+    padded = faulty + " " * 4096
+    for value in (faulty, padded):
+        with pytest.raises(SourcesQLError) as error:
+            validate_type(value)
+        assert error.value.code == "invalid_output"
+    assert error.value.safe_message == "Invalid logical type"
+
+
 def test_unbalanced_or_untokenizable_long_type_keeps_the_length_refusal():
     for long_type in (")" * 5000, "STRUCT(" + "'" * 5000):
         with pytest.raises(SourcesQLError) as error:

@@ -18,7 +18,6 @@ from sqlglot import exp
 from sqlglot.dialects.duckdb import DuckDB
 from sqlglot.errors import SqlglotError
 from sqlglot.parsers.duckdb import DuckDBParser
-from sqlglot.tokens import TokenType
 
 from sourcesql.contracts import Column, SourcesQLError
 
@@ -398,52 +397,32 @@ def _fields(logical_type: str) -> list[Column]:
     ]
 
 
-_TYPE_NESTING_LIMIT = 8
-
-
-_NESTED_TYPE_TOKENS = {
-    TokenType.STRUCT,
-    TokenType.MAP,
-    TokenType.UNION,
-    TokenType.ARRAY,
-}
-
-
-def _constructor_nesting(logical_type: str) -> int:
-    """Deepest nesting of STRUCT/MAP/UNION/ARRAY constructors, counted on tokens.
-
-    Tokens, not characters, so parentheses in comments or around DECIMAL
-    precision do not count as type levels. The tokenizer does not recurse.
-    """
-    try:
-        tokens = _ClosedDuckDB.Tokenizer().tokenize(logical_type)
-    except SqlglotError:
-        return 0
-    stack: list[bool] = []
-    depth = deepest = 0
-    previous = None
-    for token in tokens:
-        if token.token_type == TokenType.L_PAREN:
-            constructor = previous in _NESTED_TYPE_TOKENS
-            stack.append(constructor)
-            depth += constructor
-            deepest = max(deepest, depth)
-        elif token.token_type == TokenType.R_PAREN and stack:
-            depth -= stack.pop()
-        previous = token.token_type
-    return deepest
+_TYPE_LENGTH_LIMIT = 4096
+# Types longer than the limit are parsed only to tell deep nesting from other
+# faults, so the work is bounded.
+_TYPE_PARSE_LIMIT = 65536
+_TYPE_NESTING_REFUSAL = "Logical type exceeds the supported nesting"
 
 
 def validate_type(logical_type: str) -> str:
     """Validate a declared type as an AST before it enters trusted worker SQL."""
     if type(logical_type) is not str:
         refuse("Invalid logical type", "invalid_output")
-    if len(logical_type) > 4096:
-        # Too long to parse. An extra, earlier refusal only: it names deep
-        # nesting when that is why the type is long, and never admits anything.
-        if _constructor_nesting(logical_type) > _TYPE_NESTING_LIMIT:
-            refuse("Logical type exceeds the supported nesting", "invalid_output")
+    if len(logical_type) > _TYPE_LENGTH_LIMIT:
+        # Never admitted. The one reason named is nesting, and only when the
+        # ordinary checks themselves give it; any other fault keeps the generic
+        # refusal a long type has always had.
+        if len(logical_type) <= _TYPE_PARSE_LIMIT:
+            try:
+                _validate_type_ast(logical_type)
+            except SourcesQLError as error:
+                if error.safe_message == _TYPE_NESTING_REFUSAL:
+                    raise
         refuse("Invalid logical type", "invalid_output")
+    return _validate_type_ast(logical_type)
+
+
+def _validate_type_ast(logical_type: str) -> str:
     try:
         statements = sqlglot.parse(f"SELECT CAST(NULL AS {logical_type})", read=_ClosedDuckDB)
         if (
@@ -470,7 +449,7 @@ def validate_type(logical_type: str) -> str:
     except SqlglotError:
         refuse("Invalid logical type", "invalid_output")
     except RecursionError:
-        refuse("Logical type exceeds the supported nesting", "invalid_output")
+        refuse(_TYPE_NESTING_REFUSAL, "invalid_output")
 
     scalar = {
         "TEXT": "VARCHAR",
@@ -493,8 +472,8 @@ def validate_type(logical_type: str) -> str:
     }
 
     def walk(node: exp.DataType, depth: int = 0) -> str:
-        if depth > _TYPE_NESTING_LIMIT or not isinstance(node, exp.DataType):
-            refuse("Logical type exceeds the supported nesting", "invalid_output")
+        if depth > 8 or not isinstance(node, exp.DataType):
+            refuse(_TYPE_NESTING_REFUSAL, "invalid_output")
         if any(
             v is not None and v != [] and k not in {"this", "expressions", "nested"}
             for k, v in node.args.items()
