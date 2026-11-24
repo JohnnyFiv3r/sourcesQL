@@ -143,6 +143,11 @@ def test_hosted_query_owns_one_binding_pass_and_sandbox_without_explain(tmp_path
             "SQL could not be parsed in the installed dialect",
         ),
         ("SELECT random() AS n", "Unsupported SQL construct: Rand"),
+        (
+            "SELECT url FROM WEB_FETCH()",
+            "WEB_FETCH needs at least one URL. Search with your own tool first, "
+            "then pass the URLs as query parameters named u1 to u32.",
+        ),
     ],
 )
 def test_admission_refusal_hands_its_own_reason_to_the_job_store(

@@ -145,13 +145,44 @@ def test_strict_refusal_counts_every_failed_url_of_the_call(tmp_path):
     assert latest_run(engine)["fetch_failed"] == 3
 
 
-def test_web_fetch_without_urls_says_what_to_pass_in_a_hosted_safe_sentence(tmp_path):
+EMPTY_FETCH = (
+    "WEB_FETCH needs at least one URL. Search with your own tool first, "
+    "then pass the URLs as query parameters named u1 to u32."
+)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT url FROM WEB_FETCH()",
+        "SELECT url, WEB_FETCH() AS f FROM WEB_SEARCH($q)",
+    ],
+)
+def test_web_fetch_without_urls_says_what_to_pass_in_a_hosted_safe_sentence(tmp_path, query):
     with pytest.raises(SourcesQLError) as refused:
-        make(tmp_path).query(query="SELECT url FROM WEB_FETCH()")
+        make(tmp_path).query(query=query, parameters={"q": "aurora"})
     assert refused.value.code == "invalid_query"
-    assert refused.value.safe_message.startswith("WEB_FETCH needs at least one URL")
+    assert refused.value.safe_message == EMPTY_FETCH
+    assert "$" not in refused.value.safe_message
     assert PUBLIC_REASON.fullmatch(refused.value.safe_message)
-    assert public_refusal_reason(refused.value) == refused.value.safe_message
+    assert public_refusal_reason(refused.value) == EMPTY_FETCH
+
+
+@pytest.mark.parametrize(
+    ("query", "parameters"),
+    [
+        ("SELECT url FROM WEB_SEARCH()", {}),
+        (
+            "SELECT url FROM WEB_FETCH(" + ", ".join(f"$u{n}" for n in range(1, 34)) + ")",
+            {f"u{n}": f"https://example.com/{n}" for n in range(1, 34)},
+        ),
+    ],
+)
+def test_empty_web_search_and_over_limit_web_fetch_keep_their_refusals(tmp_path, query, parameters):
+    with pytest.raises(SourcesQLError) as refused:
+        make(tmp_path).query(query=query, parameters=parameters)
+    assert refused.value.code == "invalid_query"
+    assert refused.value.safe_message == "Web source operators require one to 32 strings"
 
 
 def test_scalar_web_fetch_list_carries_the_status_fields(tmp_path):

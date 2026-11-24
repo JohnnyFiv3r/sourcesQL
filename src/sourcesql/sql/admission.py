@@ -796,7 +796,7 @@ class _Binder:
                 # Plain words only: a hosted caller sees this sentence, and `$` is not in its gate.
                 refuse(
                     "WEB_FETCH needs at least one URL. Search with your own tool first, "
-                    "then pass the URLs as parameters named u1 to u32",
+                    "then pass the URLs as query parameters named u1 to u32.",
                     "invalid_query",
                 )
             if not 1 <= len(args) <= 32:
