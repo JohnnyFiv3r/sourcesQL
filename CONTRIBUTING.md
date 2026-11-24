@@ -33,6 +33,10 @@ commands list it, and [docs/coverage.md](docs/coverage.md) says how each file is
 checked instead. There is no coverage threshold; the figures are a baseline,
 not a gate.
 
+The Python command splits the test files across up to two processes and combines
+their data, because tracing makes one process slow. `COVERAGE_SHARDS=1` runs it in
+one process.
+
 ## Main branch policy
 
 The versioned rules in `.github/rulesets/` describe the repository's active
