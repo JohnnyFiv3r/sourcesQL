@@ -418,10 +418,32 @@ def _fields(logical_type: str) -> list[Column]:
     ]
 
 
+_TYPE_LENGTH_LIMIT = 4096
+# Types longer than the limit are parsed only to tell deep nesting from other
+# faults, so the work is bounded.
+_TYPE_PARSE_LIMIT = 65536
+_TYPE_NESTING_REFUSAL = "Logical type exceeds the supported nesting"
+
+
 def validate_type(logical_type: str) -> str:
     """Validate a declared type as an AST before it enters trusted worker SQL."""
-    if type(logical_type) is not str or len(logical_type) > 4096:
+    if type(logical_type) is not str:
         refuse("Invalid logical type", "invalid_output")
+    if len(logical_type) > _TYPE_LENGTH_LIMIT:
+        # Never admitted. The one reason named is nesting, and only when the
+        # ordinary checks themselves give it; any other fault keeps the generic
+        # refusal a long type has always had.
+        if len(logical_type) <= _TYPE_PARSE_LIMIT:
+            try:
+                _validate_type_ast(logical_type)
+            except SourcesQLError as error:
+                if error.safe_message == _TYPE_NESTING_REFUSAL:
+                    raise
+        refuse("Invalid logical type", "invalid_output")
+    return _validate_type_ast(logical_type)
+
+
+def _validate_type_ast(logical_type: str) -> str:
     try:
         statements = sqlglot.parse(f"SELECT CAST(NULL AS {logical_type})", read=_ClosedDuckDB)
         if (
@@ -447,6 +469,8 @@ def validate_type(logical_type: str) -> str:
         tree = expression.args["to"]
     except SqlglotError:
         refuse("Invalid logical type", "invalid_output")
+    except RecursionError:
+        refuse(_TYPE_NESTING_REFUSAL, "invalid_output")
 
     scalar = {
         "TEXT": "VARCHAR",
@@ -470,7 +494,7 @@ def validate_type(logical_type: str) -> str:
 
     def walk(node: exp.DataType, depth: int = 0) -> str:
         if depth > 8 or not isinstance(node, exp.DataType):
-            refuse("Logical type exceeds the supported nesting", "invalid_output")
+            refuse(_TYPE_NESTING_REFUSAL, "invalid_output")
         if any(
             v is not None and v != [] and k not in {"this", "expressions", "nested"}
             for k, v in node.args.items()
@@ -516,7 +540,11 @@ def validate_type(logical_type: str) -> str:
                     or not parameter.this.this.isdigit()
                 ):
                     refuse("Invalid decimal precision", "invalid_output")
-                values.append(int(parameter.this.this))
+                # Leading zeros do not change the value. Past 18 significant digits it is
+                # far over the DECIMAL limits; the cap keeps Python's integer-conversion
+                # digit limit out of reach for long types.
+                digits = parameter.this.this.lstrip("0") or "0"
+                values.append(int(digits) if len(digits) <= 18 else 10**18)
             precision, scale = values[0], values[1] if len(values) == 2 else 0
             if 1 <= precision <= 38 and 0 <= scale <= precision:
                 return f"DECIMAL({precision},{scale})"
@@ -1128,6 +1156,10 @@ def admit(
         schemas[key] = [Column(c.key, validate_type(c.logical_type), c.nullable) for c in cols]
     try:
         statements = sqlglot.parse(query, read=_ClosedDuckDB)
+    except RecursionError:
+        # The parser recurses per nesting level, so input too deep to parse is the same
+        # condition as the post-parse depth limit in _closed_tree.
+        refuse("Query exceeds the AST depth limit", "invalid_query")
     except SqlglotError as error:
         refuse(_parse_refusal(error), "invalid_query")
     if len(statements) != 1 or not isinstance(statements[0], (exp.Select, exp.SetOperation)):
