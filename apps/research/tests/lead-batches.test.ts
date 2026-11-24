@@ -16,7 +16,6 @@ import type { EngineResult } from "../server/engine.js";
 import { ResearchStore } from "../server/store.js";
 import { createServer } from "../server/mcp.js";
 import {
-  LEAD_BATCH_OVER_CAP_TEXT,
   SOURCESQL_LEAD_BATCH_EXAMPLE,
   SOURCESQL_LEAD_FANOUT_GUIDANCE,
   SOURCESQL_SERVER_INSTRUCTIONS,
@@ -201,8 +200,11 @@ test("a lead-set batch query reply links rows by lead_id and adds the batch repl
   assert.ok(rows.every((row) => row.lead_id.startsWith("lead_")));
   const [, second] = texts(ran);
   const id = (ran.structuredContent as { result_id: string }).result_id;
-  assert.equal(second, leadBatchText(3, id));
-  assert.match(second, /^Fetched 3 of 3 selected leads\./);
+  assert.equal(
+    second,
+    leadBatchText({ fetched: 2, failed: 1, notFetched: 0 }, id),
+  );
+  assert.match(second, /^Fetched 2 of 3 selected leads\. 1 failed to fetch\./);
   assert.match(second, /record_lead_batch with this result_id/);
   assert.match(second, /ask the user whether to continue/i);
   // A query that read no lead set gets no such block.
@@ -216,19 +218,37 @@ test("a lead-set batch query reply links rows by lead_id and adds the batch repl
   assert.equal(texts(plain).length, 1);
 });
 
-test("an over-cap lead batch explains the limit and asks before continuing", async (t) => {
+test("an over-cap lead batch fetches the cap, says how many remain, and can be recorded", async (t) => {
   const { client } = await connect(t);
   const many = Array.from(
     { length: 41 },
     (_, n) => `https://site${n}.example/page`,
   );
   const set = await intake(client, many);
-  const refused = await batch(client, FETCH, set.result_id);
-  assert.equal(refused.isError, true);
-  assert.match(textOf(refused), /^budget_exhausted: /);
-  assert.ok(textOf(refused).endsWith(LEAD_BATCH_OVER_CAP_TEXT));
-  assert.match(textOf(refused), /Ask the user before running further batches/);
-  // A non-lead over-cap query keeps today's text exactly.
+  const ran = await batch(client, FETCH, set.result_id);
+  assert.notEqual(ran.isError, true, textOf(ran));
+  const [, second] = texts(ran);
+  assert.match(
+    second,
+    /^Fetched 0 of 41 selected leads\. 40 failed to fetch\. 1 was not fetched because one job fetches at most 40 pages\. Next, call record_lead_batch/,
+  );
+  assert.match(second, /ask the user whether to continue/i);
+  const recorded = await client.callTool({
+    name: "record_lead_batch",
+    arguments: {
+      request_id: randomUUID(),
+      lead_set_id: set.lead_set_id,
+      batch_result_id: (ran.structuredContent as { result_id: string })
+        .result_id,
+    },
+  });
+  assert.notEqual(recorded.isError, true, textOf(recorded));
+  assert.match(
+    textOf(recorded),
+    /40 failed \(40 http_error\), 1 was not fetched\./,
+  );
+  assert.match(textOf(recorded), /1 pending\./);
+  // A query that reads no lead set keeps #111's refusal over the cap.
   const other = await client.callTool({
     name: "sourcesql_query",
     arguments: {
@@ -244,7 +264,62 @@ test("an over-cap lead batch explains the limit and asks before continuing", asy
     },
   });
   assert.equal(other.isError, true);
-  assert.ok(!textOf(other).includes(LEAD_BATCH_OVER_CAP_TEXT));
+});
+
+test("the batch text separates fetched from failed attempts", () => {
+  assert.match(
+    leadBatchText({ fetched: 0, failed: 1, notFetched: 0 }, "wq_x"),
+    /^Fetched 0 of 1 selected lead\. 1 failed to fetch\. Next, call record_lead_batch with this result_id, wq_x,/,
+  );
+  assert.match(
+    leadBatchText({ fetched: 37, failed: 0, notFetched: 0 }, "wq_x"),
+    /^Fetched 37 of 37 selected leads\. Next,/,
+  );
+});
+
+test("a lead set cannot be corrected, so the queue and the table agree", async (t) => {
+  const { client } = await connect(t);
+  const set = await intake(client, [AURORA, MISSING]);
+  const ran = await batch(client, FETCH, set.result_id);
+  const recorded = await client.callTool({
+    name: "record_lead_batch",
+    arguments: {
+      request_id: randomUUID(),
+      lead_set_id: set.lead_set_id,
+      batch_result_id: (ran.structuredContent as { result_id: string })
+        .result_id,
+    },
+  });
+  const { result_id } = recorded.structuredContent as { result_id: string };
+  const opened = await client.callTool({
+    name: "open_research",
+    arguments: {
+      result_ref: { result_id, snapshot_id: "leads-1", title: "Leads" },
+    },
+  });
+  const view = opened.structuredContent as {
+    revision: number;
+    snapshot: { rows: { id: string; values: { lead_status: string } }[] };
+  };
+  const failed = view.snapshot.rows.find(
+    (r) => r.values.lead_status === "failed",
+  )!;
+  const amended = await client.callTool({
+    name: "amend_observation",
+    arguments: {
+      snapshot_id: "leads-1",
+      row_id: failed.id,
+      field: "lead_status",
+      value: "fetched",
+      expected_revision: view.revision,
+      mutation_id: randomUUID(),
+    },
+  });
+  assert.equal(amended.isError, true);
+  assert.match(
+    textOf(amended),
+    /A lead set records fetch outcomes itself and cannot be corrected/,
+  );
 });
 
 test("read_result and open_research of a lead set start with the queue line", async (t) => {

@@ -14,11 +14,13 @@ import {
   LEAD_HOST_COLUMNS,
   LEAD_SET_EMPTY,
   LEAD_SET_NOTE,
+  hostAssertedColumn,
   leadQueueLine,
   markLeadSources,
   needsSourcePicker,
 } from "../src/presentation.js";
 import { SourceList } from "../src/source-list.js";
+import type { Snapshot } from "../src/schema.js";
 
 const leadSet = {
   leadSetId: "7d0c2c1e-6a38-4f3c-9d77-2f4b0d4a6f10",
@@ -26,10 +28,45 @@ const leadSet = {
   totals: { leads: 412, fetched: 117, failed: 9, pending: 286 },
 };
 
+const leadSnapshot = { leadSet } as unknown as Snapshot;
+const derived = (rows: unknown[]) =>
+  ({ dataClassification: "host_reported", rows }) as unknown as Snapshot;
+
+test("a table built from a lead set labels the columns no cell cites a source for", () => {
+  const snapshot = derived([
+    {
+      id: "r1",
+      values: {
+        title: "Known",
+        campus: "Aurora Campus",
+        lead_status: "fetched",
+      },
+      evidence: {
+        campus: ["Aurora Campus is a fictional planned data-center project."],
+      },
+      cellSources: { campus: [{ url: "https://aurora.example/project" }] },
+    },
+  ]);
+  assert.equal(hostAssertedColumn(snapshot, "title"), true);
+  assert.equal(hostAssertedColumn(snapshot, "campus"), false);
+  assert.equal(hostAssertedColumn(snapshot, "lead_status"), false);
+  assert.equal(
+    hostAssertedColumn(
+      { dataClassification: "public_web", rows: [] } as unknown as Snapshot,
+      "title",
+    ),
+    false,
+  );
+  const html = renderToStaticMarkup(
+    createElement(LeadColumnLabel, { snapshot, field: "title" }),
+  );
+  assert.ok(html.includes(`>${HOST_ASSERTED_LABEL}</span>`));
+});
+
 test("host-asserted columns carry the label and engine-recorded columns do not", () => {
   for (const field of LEAD_HOST_COLUMNS) {
     const html = renderToStaticMarkup(
-      createElement(LeadColumnLabel, { field }),
+      createElement(LeadColumnLabel, { snapshot: leadSnapshot, field }),
     );
     assert.ok(html.includes(`>${HOST_ASSERTED_LABEL}</span>`), field);
     assert.ok(html.includes(`title="${HOST_ASSERTED_TITLE}"`), field);
@@ -42,7 +79,9 @@ test("host-asserted columns carry the label and engine-recorded columns do not",
     "url",
   ])
     assert.equal(
-      renderToStaticMarkup(createElement(LeadColumnLabel, { field })),
+      renderToStaticMarkup(
+        createElement(LeadColumnLabel, { snapshot: leadSnapshot, field }),
+      ),
       "",
       field,
     );

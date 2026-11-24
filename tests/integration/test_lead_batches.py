@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import threading
 
-import pytest
 
 from sourcesql import error_codes
-from sourcesql.contracts import SourcesQLError
 from sourcesql.engine import Engine
 from sourcesql.providers import fixture
 
@@ -301,13 +299,71 @@ def test_concurrent_records_of_one_batch_make_one_revision(tmp_path):
     assert first.store.lead_set_head(reply["lead_set_id"])["revision"] == 2
 
 
-def test_over_cap_batch_is_refused_and_records_nothing(tmp_path):
+def test_over_cap_batch_fetches_the_cap_and_leaves_the_rest_pending(tmp_path):
     engine = make(tmp_path)
-    reply = engine.add_leads(request_id(1), rows(41))
-    with pytest.raises(SourcesQLError) as refusal:
-        run_batch(engine, reply)
-    assert refusal.value.code == "budget_exhausted"
-    assert engine.store.lead_set_head(reply["lead_set_id"])["revision"] == 1
+    urls = [AURORA, BIRCH, VENDOR] + [f"https://site{n}.example/page" for n in range(38)]
+    reply = engine.add_leads(request_id(1), leads_of(*urls))
+    batch = run_batch(engine, reply, BATCH + " ORDER BY host_rank")
+    assert len(batch["fetch_outcomes"]) == 40
+    receipt = batch["receipt"]
+    assert (receipt["fetch_cap_hit"], receipt["not_fetched_count"]) == (True, 1)
+    (left_over,) = receipt["not_fetched_urls"]
+    assert left_over not in {o["url"] for o in batch["fetch_outcomes"]}
+    record = engine.record_lead_batch(request_id(2), reply["lead_set_id"], batch["result_id"])
+    assert (record["fetched"], record["failed"], record["not_fetched"]) == (3, 37, 1)
+    assert record["totals"] == {"leads": 41, "fetched": 3, "failed": 37, "pending": 1}
+    assert statuses(engine, record)[left_over] == ("pending", None)
+    # The unfetched lead shows as not fetched in the batch rows, never as failed.
+    cells = {row["lead_id"]: row["page"][0] for row in batch["rows"]}
+    unfetched = [cell for cell in cells.values() if cell["fetch_status"] == "not_fetched"]
+    assert [(c["url"], c["fetch_failure"]) for c in unfetched] == [(left_over, "fetch_cap")]
+
+
+def test_a_direct_fetch_in_a_lead_bound_query_is_capped_the_same_way(tmp_path):
+    # A query that reads a lead set is a batch, whichever form fetches. Without a lead set the
+    # direct route still refuses over the cap (#111, test_host_found_urls).
+    engine = make(tmp_path)
+    reply = engine.add_leads(request_id(1), leads_of(AURORA))
+    many = ", ".join(f"$u{n}" for n in range(32))
+    parameters = {f"u{n}": f"https://site{n}.example/page" for n in range(32)}
+    batch = engine.query(
+        query=f"SELECT url FROM WEB_FETCH({many})",
+        parameters=parameters,
+        budgets={"max_fetches": 10},
+        inputs={"l": lead_view(reply)},
+    )
+    assert len(batch["fetch_outcomes"]) == 10
+    assert batch["receipt"]["not_fetched_count"] == 22
+
+
+def test_authorizing_a_long_chain_of_recorded_revisions_visits_each_result_once(
+    tmp_path, monkeypatch
+):
+    engine = make(tmp_path)
+    reply = engine.add_leads(
+        request_id(1), leads_of(*[f"https://p{n}.example/" for n in range(1, 17)])
+    )
+    query = (
+        "WITH b AS (SELECT lead_id, url FROM input.l WHERE lead_status = 'pending' "
+        "ORDER BY host_rank LIMIT 1) SELECT lead_id, WEB_FETCH(url) AS page FROM b"
+    )
+    for call in range(16):
+        batch = engine.query(query=query, inputs={"l": lead_view(reply)})
+        record = engine.record_lead_batch(
+            request_id(10 + call), reply["lead_set_id"], batch["result_id"]
+        )
+        reply = {**reply, "result_id": record["result_id"]}
+    visits = []
+    original = type(engine.store)._authorize
+
+    def counted(self, db, result_id, seen, memo=None):
+        visits.append(result_id)
+        return original(self, db, result_id, seen, memo)
+
+    monkeypatch.setattr(type(engine.store), "_authorize", counted)
+    engine.store.authorize(reply["result_id"])
+    ancestors = 2 * 16 + 2
+    assert len(visits) <= 3 * ancestors, f"{len(visits)} visits for {ancestors} results"
 
 
 def test_private_batch_makes_the_revision_private(tmp_path):

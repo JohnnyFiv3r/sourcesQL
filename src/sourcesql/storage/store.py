@@ -197,7 +197,15 @@ class Store(StageJournalMixin, InspectionMixin):
         with self.db() as db:
             return self._authorize(db, result_id, set() if seen is None else seen)
 
-    def _authorize(self, db, result_id: str, seen: set[str]) -> dict:
+    def _authorize(
+        self, db, result_id: str, seen: set[str], memo: dict[str, dict] | None = None
+    ) -> dict:
+        # A result several of its descendants reach is checked once per call: without the memo
+        # a chain of lead-set revisions, each reachable directly and through its batch, is
+        # walked once per path, which doubles with every recorded batch.
+        memo = {} if memo is None else memo
+        if result_id in memo:
+            return memo[result_id]
         if result_id in seen:
             raise SourcesQLError("invalid_output", "Cyclic result dependencies", "read")
         seen.add(result_id)
@@ -206,9 +214,10 @@ class Store(StageJournalMixin, InspectionMixin):
             raise SourcesQLError("unauthorized", "Result or dependency unavailable", "read")
         meta = json.loads(row[0])
         for parent in meta.get("parents", []):
-            ancestor = self._authorize(db, parent["result_id"], set(seen))
+            ancestor = self._authorize(db, parent["result_id"], set(seen), memo)
             if ancestor.get("data_classification") in ("private_local", "private_derived"):
                 meta = {**meta, "data_classification": "private_derived"}
+        memo[result_id] = meta
         return meta
 
     def read(self, result_id: str) -> tuple[dict, Table]:

@@ -1200,6 +1200,12 @@ export class ResearchStore {
     return this.serial(async () => {
       const state = await this.read();
       const view = this.view(state, amendment.snapshot_id);
+      // Fetch outcomes are the engine's record, and the queue counts them; a correction here
+      // would show a status the lead set does not hold.
+      if (view.snapshot.leadSet)
+        throw new Error(
+          "A lead set records fetch outcomes itself and cannot be corrected. Run the next batch and record it with record_lead_batch.",
+        );
       const existing = state.amendments.find(
         (a) => a.mutation_id === amendment.mutation_id,
       );

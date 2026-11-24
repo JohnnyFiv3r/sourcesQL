@@ -3,15 +3,21 @@ import { X } from "lucide-react";
 import {
   HOST_ASSERTED_LABEL,
   HOST_ASSERTED_TITLE,
-  LEAD_HOST_COLUMNS,
   LEAD_SET_EMPTY,
   LEAD_SET_NOTE,
+  hostAssertedColumn,
 } from "./presentation.js";
 import type { Snapshot } from "./schema.js";
 
 /** Real header text, so a screen reader reads it with the column name. */
-export function LeadColumnLabel({ field }: { field: string }) {
-  if (!LEAD_HOST_COLUMNS.includes(field)) return null;
+export function LeadColumnLabel({
+  snapshot,
+  field,
+}: {
+  snapshot: Snapshot;
+  field: string;
+}) {
+  if (!hostAssertedColumn(snapshot, field)) return null;
   return (
     <span className="column-assertion" title={HOST_ASSERTED_TITLE}>
       {HOST_ASSERTED_LABEL}

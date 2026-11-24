@@ -2194,9 +2194,7 @@ function Workspace() {
                         <span>{c.label}</span>
                         <ArrowUpDown size={12} />
                       </button>
-                      {view.snapshot.leadSet && (
-                        <LeadColumnLabel field={c.key} />
-                      )}
+                      <LeadColumnLabel snapshot={view.snapshot} field={c.key} />
                     </th>
                   ))}
                 </tr>
@@ -2829,17 +2827,20 @@ function Workspace() {
                 disabled={
                   busy ||
                   wholeRow ||
+                  Boolean(view.snapshot.leadSet) ||
                   (valueKind === "structured" && !cellProposals.length) ||
                   (Boolean(view.refresh) &&
                     !refreshChange &&
                     !cellProposals.length)
                 }
                 title={
-                  wholeRow
-                    ? "Select a cell to review or correct"
-                    : view.refresh || cellProposals.length
-                      ? "Review update"
-                      : "Correct"
+                  view.snapshot.leadSet
+                    ? "A lead set records fetch outcomes itself and cannot be corrected"
+                    : wholeRow
+                      ? "Select a cell to review or correct"
+                      : view.refresh || cellProposals.length
+                        ? "Review update"
+                        : "Correct"
                 }
                 onClick={(e) => {
                   actionTrigger.current = e.currentTarget;

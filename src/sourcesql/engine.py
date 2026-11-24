@@ -915,6 +915,10 @@ class Engine:
         # The engine's own record of each WEB_FETCH attempt, keyed by the URL the query asked
         # for. record_lead_batch reads this and never an output column, which a host can write.
         fetch_outcomes: dict[str, dict] = {}
+        # A query over a lead set is a batch: the fetch cap ends it rather than refusing it, so
+        # the leads it did fetch can be recorded and the rest stay pending (spec AC9).
+        lead_batch = any(parent.get("view") in ("leads", "hits") for parent in parents)
+        capped_fetches: list[str] = []
 
         def note_fetch_outcome(requested: str, row: dict, failure: str | None) -> None:
             outcome = {
@@ -934,7 +938,7 @@ class Engine:
                 return
             if fetch_summary["used"]:
                 # Both the finished and the refused run say what a fetch call left out.
-                not_fetched = list(getattr(registry, "not_fetched_urls", []))
+                not_fetched = [*getattr(registry, "not_fetched_urls", []), *capped_fetches]
                 receipt.update(
                     fetch_failed=fetch_summary["failed"],
                     fetch_cap_hit=bool(not_fetched),
@@ -1434,11 +1438,19 @@ class Engine:
                 if operator in ("WEB_SEARCH", "WEB_FETCH"):
                     options["source_mode"] = request.get("source_mode", "require_document")
                     fetch_summary["used"] |= operator == "WEB_FETCH"
+                    beyond_cap: list[str] = []
+                    if operator == "WEB_FETCH" and lead_batch and isinstance(args, list):
+                        room = max(
+                            0, budget.limits["max_fetches"] - budget.counts.get("fetches", 0)
+                        )
+                        args, beyond_cap = args[:room], args[room:]
                     try:
                         rows = (
                             registry.search(args, options, budget)
                             if operator == "WEB_SEARCH"
                             else registry.fetch(args, options, budget)
+                            if args or not beyond_cap
+                            else []
                         )
                     except SourcesQLError:
                         if operator == "WEB_FETCH":
@@ -1492,6 +1504,12 @@ class Engine:
                             row["fetch_status"], row["fetch_failure"] = "ok", None
                             note_fetch_outcome(args[index], row, None)
                         normalized.append(row)
+                    # Past the cap a lead stays unfetched and visibly so, never failed.
+                    capped_fetches.extend(beyond_cap)
+                    normalized.extend(
+                        {"url": url, "fetch_status": "not_fetched", "fetch_failure": "fetch_cap"}
+                        for url in beyond_cap
+                    )
                     target = context.get("_lineage_output")
                     if isinstance(target, dict):
                         for index, row in enumerate(normalized, 1):
@@ -2507,10 +2525,7 @@ class Engine:
                 )
                 changed["failed"] += 1
                 failures[code] = failures.get(code, 0) + 1
-        skipped = {
-            self._safe_lead_url(url) for url in batch_meta["receipt"].get("not_fetched_urls", [])
-        }
-        not_fetched = sum(1 for row in leads if row["url"] in skipped)
+        not_fetched = batch_meta["receipt"].get("not_fetched_count", 0)
         revision = head["revision"] + 1
         totals = self._lead_totals(leads)
         provenance = {

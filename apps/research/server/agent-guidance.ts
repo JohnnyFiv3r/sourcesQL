@@ -334,16 +334,22 @@ export function leadRecordText(reply: LeadRecordReply): string {
   return parts.join(" ");
 }
 
-/** The sentence appended to a query reply that read a lead set and fetched pages. */
-export function leadBatchText(attempted: number, resultId: string): string {
+/** The sentence appended to a query reply that read a lead set and tried to fetch pages. */
+export function leadBatchText(
+  counts: { fetched: number; failed: number; notFetched: number },
+  resultId: string,
+): string {
+  const selected = counts.fetched + counts.failed + counts.notFetched;
   return [
-    `Fetched ${attempted} of ${attempted} selected ${attempted === 1 ? "lead" : "leads"}.`,
+    `Fetched ${counts.fetched} of ${selected} selected ${selected === 1 ? "lead" : "leads"}.`,
+    ...(counts.failed ? [`${counts.failed} failed to fetch.`] : []),
+    ...(counts.notFetched
+      ? [
+          `${counts.notFetched} ${counts.notFetched === 1 ? "was" : "were"} not fetched because one job fetches at most 40 pages.`,
+        ]
+      : []),
     `Next, call record_lead_batch with this result_id, ${resultId}, so the lead set shows what was fetched.`,
     "Then ask the user whether to continue before running the next batch.",
     "A next batch is a new query with a new request_id on the newest lead set revision; it picks up the leads that are still pending.",
   ].join(" ");
 }
-
-/** What follows an over-cap lead batch error: nothing was fetched or recorded. */
-export const LEAD_BATCH_OVER_CAP_TEXT =
-  "This batch selected more leads than the 40 pages one job can fetch, so it was stopped and nothing was recorded. The lead set is unchanged and its leads are still pending. Run the batch again with LIMIT 40 or fewer on lead_status = 'pending'. Ask the user before running further batches.";

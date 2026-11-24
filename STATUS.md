@@ -48,10 +48,14 @@ revision and the batch as parents, so an export carries every batch that set a
 status; a long chain of batches therefore makes a large export, and a bundle
 holds at most 64 results, so a set recorded from more than about 30 batches does
 not re-import. A batch query that read a lead set and fetched pages is told to
-record it and to ask the user before the next batch. A batch that selects more
-than 40 leads is refused whole by the existing fetch cap and records nothing.
-Lead-set reads and opens begin with a queue line, and the table labels the
-host-written columns as Host-asserted. A failed `WEB_FETCH` row no longer breaks
+record it and to ask the user before the next batch. A query over a lead set
+stops at the 40-fetch cap instead of being refused: it fetches the first 40 URLs
+in the order the query reaches them, reports the rest as not fetched (they stay
+pending), and records normally; a query that reads no lead set keeps #111's
+refusal over the cap. Lead-set reads and opens begin with a queue line, the table
+labels host-written columns as Host-asserted (in a table built from a lead set,
+every column no cell cites a source for), and a lead set cannot be corrected in
+the app. A failed `WEB_FETCH` row no longer breaks
 the next step of the same query. Fixture-tested only; no live provider run.
 
 ## Unreleased citation and result-read correction

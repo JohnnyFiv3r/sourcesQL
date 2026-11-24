@@ -104,7 +104,6 @@ import {
   leadIntakeText,
   leadRecordText,
   leadBatchText,
-  LEAD_BATCH_OVER_CAP_TEXT,
   RECORD_LEAD_BATCH_DESCRIPTION,
   type LeadRecordReply,
   type LeadIntakeReply,
@@ -2476,20 +2475,7 @@ export function createServer(
       const readsLeadSet = Object.values(args.inputs).some(
         (pin) => pin.view === "leads" || pin.view === "hits",
       );
-      let result: Record<string, unknown>;
-      try {
-        result = await engine.call(method, { ...args, inputs });
-      } catch (error) {
-        // A batch over the fetch cap is refused whole: say so, and that nothing was recorded.
-        if (
-          method === "query" &&
-          readsLeadSet &&
-          error instanceof Error &&
-          /^budget_exhausted: .*max_fetches/.test(error.message)
-        )
-          throw new Error(`${error.message} ${LEAD_BATCH_OVER_CAP_TEXT}`);
-        throw error;
-      }
+      const result = await engine.call(method, { ...args, inputs });
       if (Object.hasOwn(result, "job_id")) return jobResult(result);
       if (method === "query" && typeof result.result_id === "string") {
         // Fail safe: without a classification on the query's own page, read it.
@@ -2505,21 +2491,29 @@ export function createServer(
         authorizeSnapshot(resultSnapshotForAccess(page), options.access);
       }
       const reply = engineResult(result);
-      const attempted = Array.isArray(result.fetch_outcomes)
-        ? result.fetch_outcomes.length
-        : 0;
+      const outcomes = (
+        Array.isArray(result.fetch_outcomes) ? result.fetch_outcomes : []
+      ) as { status?: string }[];
+      const receipt = result.receipt as
+        { not_fetched_count?: number } | undefined;
+      const notFetched = Number(receipt?.not_fetched_count ?? 0);
       // A lead-set batch tells the agent what to do next; the engine's fetch record, not
       // the query's columns, decides that pages were fetched.
       if (
         method === "query" &&
         readsLeadSet &&
-        attempted > 0 &&
+        outcomes.length > 0 &&
         typeof result.result_id === "string"
-      )
+      ) {
+        const fetched = outcomes.filter((o) => o.status === "ok").length;
         reply.content.push({
           type: "text",
-          text: leadBatchText(attempted, result.result_id),
+          text: leadBatchText(
+            { fetched, failed: outcomes.length - fetched, notFetched },
+            result.result_id,
+          ),
         });
+      }
       return reply;
     };
     tools.registerTool(

@@ -22,6 +22,13 @@ export const LEAD_HOST_COLUMNS = [
   "host_date",
   "times_found",
 ];
+// Columns the engine fills from its own work, in a lead set or in a table built from one.
+export const LEAD_ENGINE_COLUMNS = [
+  "lead_id",
+  "lead_status",
+  "fetch_failure",
+  "batch_result_id",
+];
 export const LEAD_SET_NOTE =
   "These rows are leads your agent found with its own search. They are host-asserted and not citations. Fetched pages carry citations.";
 export const LEAD_SET_EMPTY =
@@ -227,4 +234,18 @@ export function leadQueueLine(
 ): string {
   const { totals } = leadSet;
   return `Lead set ${leadSet.leadSetId}, revision ${leadSet.revision}: ${totals.leads} ${totals.leads === 1 ? "lead" : "leads"}, ${totals.fetched} fetched, ${totals.failed} failed, ${totals.pending} pending.`;
+}
+
+/**
+ * Whether a column holds host-reported values. In a lead set that is its fixed host columns.
+ * In a table built from one, it is every column no cell cites a fetched source for, because
+ * the engine does not track which input a derived column came from.
+ */
+export function hostAssertedColumn(snapshot: Snapshot, key: string): boolean {
+  if (snapshot.leadSet) return LEAD_HOST_COLUMNS.includes(key);
+  if (snapshot.dataClassification !== "host_reported") return false;
+  if (LEAD_ENGINE_COLUMNS.includes(key)) return false;
+  return !snapshot.rows.some(
+    (row) => row.cellSources?.[key]?.length || row.evidence[key]?.length,
+  );
 }
