@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..contracts import Budget, SemanticOutcome, SourcesQLError
+from ..error_codes import refusal
 from .common import (
     SafeFetcher,
     normalized_url,
@@ -177,8 +178,19 @@ class ProviderRegistry:
             or budget.limits.get("max_cost_microusd", 0) <= 0
             or budget.limits["max_cost_microusd"] > approved
         ):
+            # Only a profile that is otherwise authorised is told what is missing.
+            unset = (
+                self.profile.get("allow_live") is True
+                and type(approved) is int
+                and approved > 0
+                and budget.limits.get("max_cost_microusd", 0) <= 0
+            )
             raise SourcesQLError(
-                "unauthorized", "Live dispatch requires a trusted finite spending grant", "dispatch"
+                "unauthorized",
+                refusal("missing_cost_budget", approved=approved)
+                if unset
+                else "Live dispatch requires a trusted finite spending grant",
+                "dispatch",
             )
         if self.profile.get("metering_policy", "strict") != "estimated":
             raise SourcesQLError(

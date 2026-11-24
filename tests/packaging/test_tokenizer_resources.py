@@ -37,7 +37,8 @@ def test_cold_zip_package_counts_tokens_without_network_or_tokenizer_cache(tmp_p
         for path in (root / "src/sourcesql").rglob("*"):
             if path.is_file() and (
                 path.suffix == ".py"
-                or path.name in {"cl100k_base.tiktoken.gz", "TIKTOKEN_LICENSE.txt"}
+                or path.name
+                in {"cl100k_base.tiktoken.gz", "TIKTOKEN_LICENSE.txt", "error_codes.json"}
             ):
                 archive.write(path, path.relative_to(root / "src").as_posix())
     script = """
