@@ -34,3 +34,14 @@ test("refusal reasons are dropped for other codes and for text outside the fixed
       "The query could not be executed. Review its SQL and input bindings before starting new work.",
   });
 });
+
+test("shared codes keep their own code on the hosted job path", () => {
+  for (const code of [
+    "not_found",
+    "result_unavailable",
+    "idempotency_conflict",
+    "revision_conflict",
+  ])
+    assert.equal(safeExecutionError(code).code, code);
+  assert.equal(safeExecutionError("not_in_the_table").code, "execution_failed");
+});

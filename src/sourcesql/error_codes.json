@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "codes": {
+    "unsupported_query": {
+      "summary": "The query is not supported. Review its SQL against sourcesql_capabilities before starting new work.",
+      "hosted_visible": true
+    },
+    "invalid_query": {
+      "summary": "The query could not be executed. Review its SQL and input bindings before starting new work.",
+      "hosted_visible": true
+    },
+    "invalid_request": {
+      "summary": "The request is invalid. Review its arguments before starting new work.",
+      "hosted_visible": true
+    },
+    "budget_exhausted": {
+      "summary": "A configured execution allowance was exhausted. Inspect this job or run before authorizing further work.",
+      "hosted_visible": true
+    },
+    "unsupported_capability": {
+      "summary": "A required capability is unavailable in this configuration. Check sourcesql_capabilities before starting new work.",
+      "hosted_visible": true
+    },
+    "unauthorized": {
+      "summary": "The operation is not authorized for this connection.",
+      "hosted_visible": true
+    },
+    "disclosure_required": {
+      "summary": "The operation requires explicit disclosure authorization.",
+      "hosted_visible": true
+    },
+    "evidence_invalid": {
+      "summary": "Source evidence failed validation. Inspect the saved run before continuing.",
+      "hosted_visible": true
+    },
+    "invalid_output": {
+      "summary": "Research output failed validation. Inspect the saved run before continuing.",
+      "hosted_visible": true
+    },
+    "provider_unavailable": {
+      "summary": "A required provider or dependency is unavailable. Inspect this job or run before continuing.",
+      "hosted_visible": true
+    },
+    "provider_timeout": {
+      "summary": "A provider request timed out. Its remote outcome may be unknown; inspect the saved run before retrying.",
+      "hosted_visible": true
+    },
+    "provider_connection_error": {
+      "summary": "A provider connection failed. Its remote outcome may be unknown; inspect the saved run before retrying.",
+      "hosted_visible": true
+    },
+    "provider_http_error": {
+      "summary": "A provider rejected a request. Inspect the saved run before continuing.",
+      "hosted_visible": true
+    },
+    "provider_error": {
+      "summary": "A provider request failed. Inspect the saved run before continuing.",
+      "hosted_visible": true
+    },
+    "storage_conflict": {
+      "summary": "Stored state changed concurrently. Inspect this job or run before continuing.",
+      "hosted_visible": true
+    },
+    "storage_unavailable": {
+      "summary": "Durable storage is unavailable. Inspect this job or run before continuing.",
+      "hosted_visible": true
+    },
+    "cancelled": {
+      "summary": "Execution was cancelled. No further work starts from status inspection.",
+      "hosted_visible": true
+    },
+    "flight_definition_changed": {
+      "summary": "The pinned worker configuration changed. Review the worker configuration before starting new work.",
+      "hosted_visible": true
+    },
+    "execution_outcome_unknown": {
+      "summary": "Execution outcome is unknown. Inspect this job or run; do not automatically resubmit it.",
+      "hosted_visible": true
+    },
+    "execution_failed": {
+      "summary": "Research execution failed safely. Inspect this job or run before continuing.",
+      "hosted_visible": true
+    },
+    "not_found": {
+      "summary": "Not found.",
+      "hosted_visible": true
+    },
+    "result_unavailable": {
+      "summary": "Result or dependency unavailable.",
+      "hosted_visible": true
+    },
+    "idempotency_conflict": {
+      "summary": "That request ID was already used with different parameters. Use a new request ID, or repeat the original request unchanged.",
+      "hosted_visible": true
+    },
+    "revision_conflict": {
+      "summary": "The research changed since you read it. Reread it and apply your change again.",
+      "hosted_visible": true
+    }
+  },
+  "refusals": {}
+}

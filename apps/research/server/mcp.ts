@@ -10,8 +10,10 @@ import { buildMaterializationPayload } from "./materialization.js";
 import { authorizeSnapshot, type AccessPolicy } from "./access.js";
 import {
   resolveResult,
+  withEngineReadScope,
   boundedPreview,
   resultSnapshot,
+  EngineCallError,
   localJobsUnavailable,
   withLocalCallBudget,
   LOCAL_READ_LIMIT_MS,
@@ -85,6 +87,7 @@ import {
 import { capacitySchema, researchJobView } from "../src/job-view.js";
 import { encodeResearchView, type ResearchViewWire } from "../src/view-wire.js";
 import {
+  knownErrorCode,
   safeExecutionError,
   safeRunErrors,
   safeFailureContext,
@@ -441,7 +444,7 @@ export function createServer(
     work: () => Promise<CallToolResult>,
   ): Promise<CallToolResult> => {
     try {
-      const result = await work();
+      const result = await withEngineReadScope(work);
       if (
         options.responseByteLimit &&
         Buffer.byteLength(JSON.stringify(result)) > options.responseByteLimit &&
@@ -468,18 +471,15 @@ export function createServer(
         };
       return result;
     } catch (error) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text:
-              error instanceof Error
-                ? error.message
-                : "Unable to complete the operation.",
-          },
-        ],
-      };
+      // An engine code outside the shared table gets its fixed summary, never
+      // the engine's own text.
+      const text =
+        error instanceof EngineCallError && !knownErrorCode(error.code)
+          ? `execution_failed: ${safeExecutionError("execution_failed").message}`
+          : error instanceof Error
+            ? error.message
+            : "Unable to complete the operation.";
+      return { isError: true, content: [{ type: "text", text }] };
     }
   };
   // Read-only tools do no provider work: every bridge step they start shares
@@ -2348,19 +2348,28 @@ export function createServer(
       method: "query" | "explain",
       args: z.infer<typeof querySchema>,
     ): Promise<CallToolResult> => {
-      const capabilities = await engine.call<{
-        profiles?: { name: string; mode: string }[];
-        execution_mode?: string;
-      }>("capabilities");
+      // Only hosted engines report async_jobs, and only anonymous access checks
+      // the profile mode, so other local calls skip an engine start.
+      const anonymous = options.access?.mode === "fixture-anonymous";
+      const needsCapabilities =
+        engine.supportsAsyncJobs === true ||
+        (anonymous && !engine.staticProfiles);
+      const capabilities = needsCapabilities
+        ? await engine.call<{
+            profiles?: { name: string; mode: string }[];
+            execution_mode?: string;
+          }>("capabilities")
+        : {};
       if (capabilities.execution_mode === "async_jobs" && !args.request_id)
         throw new Error(
           `Hosted ${method === "explain" ? "validation" : "execution"} requires request_id before materializing inputs or submitting work.`,
         );
+      const profiles =
+        capabilities.profiles ??
+        (anonymous ? engine.staticProfiles : undefined);
       if (
-        options.access?.mode === "fixture-anonymous" &&
-        !capabilities.profiles?.some(
-          (p) => p.name === args.profile && p.mode === "fixture",
-        )
+        anonymous &&
+        !profiles?.some((p) => p.name === args.profile && p.mode === "fixture")
       )
         throw new Error(
           "Anonymous mode only executes fixture profiles; use a configured protected endpoint for other profiles.",
@@ -2441,11 +2450,16 @@ export function createServer(
       const result = await engine.call(method, { ...args, inputs });
       if (Object.hasOwn(result, "job_id")) return jobResult(result);
       if (method === "query" && typeof result.result_id === "string") {
-        const page = await engine.call<EngineResult>("read_result", {
-          result_id: result.result_id,
-          offset: 0,
-          limit: 1,
-        });
+        // Fail safe: without a classification on the query's own page, read it.
+        const page =
+          engine.queryReturnsAuthorizedPage &&
+          typeof result.data_classification === "string"
+            ? (result as EngineResult)
+            : await engine.call<EngineResult>("read_result", {
+                result_id: result.result_id,
+                offset: 0,
+                limit: 1,
+              });
         authorizeSnapshot(resultSnapshotForAccess(page), options.access);
       }
       return engineResult(result);
