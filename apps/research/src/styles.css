@@ -2034,3 +2034,9 @@ label .input {
   cursor: pointer;
   padding: 2px;
 }
+.lead-failure-detail {
+  margin: 0 12px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}

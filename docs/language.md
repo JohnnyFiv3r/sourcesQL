@@ -224,7 +224,8 @@ writes a new revision in which each lead whose URL sourcesQL fetched is
 `fetched`, or `failed` with its `fetch_failure`. It uses sourcesQL's own record of
 the fetches and never the query's output columns. Bind the revision it returns for
 the next batch and select `lead_status = 'pending'`; ask the user before each
-further batch.
+further batch. Put `ORDER BY` and `LIMIT 40` in a CTE before `WEB_FETCH`: an outer
+`ORDER BY` or `LIMIT` does not choose which pages are fetched.
 
 ```sql
 WITH batch AS (

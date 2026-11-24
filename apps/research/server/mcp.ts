@@ -2495,21 +2495,26 @@ export function createServer(
         Array.isArray(result.fetch_outcomes) ? result.fetch_outcomes : []
       ) as { status?: string }[];
       const receipt = result.receipt as
-        { not_fetched_count?: number } | undefined;
+        { not_fetched_count?: number; fetch_limit?: number } | undefined;
       const notFetched = Number(receipt?.not_fetched_count ?? 0);
       // A lead-set batch tells the agent what to do next; the engine's fetch record, not
       // the query's columns, decides that pages were fetched.
       if (
         method === "query" &&
         readsLeadSet &&
-        outcomes.length > 0 &&
+        (outcomes.length > 0 || notFetched > 0) &&
         typeof result.result_id === "string"
       ) {
         const fetched = outcomes.filter((o) => o.status === "ok").length;
         reply.content.push({
           type: "text",
           text: leadBatchText(
-            { fetched, failed: outcomes.length - fetched, notFetched },
+            {
+              fetched,
+              failed: outcomes.length - fetched,
+              notFetched,
+              limit: receipt?.fetch_limit,
+            },
             result.result_id,
           ),
         });

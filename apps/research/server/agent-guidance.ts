@@ -48,7 +48,7 @@ export const SOURCESQL_FETCH_EXAMPLE = `SELECT url AS source_url,
 FROM WEB_FETCH($u1, $u2, $u3)`;
 
 export const SOURCESQL_LEAD_FANOUT_GUIDANCE =
-  "If sourcesql_capabilities reports host_search_route.available, for a large search with your own web search tool, send the hits to sourcesQL with add_research_leads, up to 150 per call, reusing the lead_set_id and including each hit's query and rank. Leads are host-asserted: titles, queries, ranks and dates are what you reported, not what sourcesQL observed, and they are never citations. Filter and rank the leads with SQL over the leads view of the newest revision. Fetch the chosen ones with WEB_FETCH, at most 40 per job; select only lead_status = 'pending' and keep lead_id in the output. After every batch, call record_lead_batch with the batch result_id; sourcesQL records what it fetched, so nothing you write in the query output changes the status. Bind the revision it returns for the next batch, so no lead is fetched twice or skipped. Before each batch after the first, tell the user how many leads are fetched, failed and pending, and ask whether to continue. Do not split a job to get around the 40-page limit and do not start a new batch without the user's agreement. Report failed leads and why. Cite only text sourcesQL fetched.";
+  "If sourcesql_capabilities reports host_search_route.available, for a large search with your own web search tool, send the hits to sourcesQL with add_research_leads, up to 150 per call, reusing the lead_set_id and including each hit's query and rank. Leads are host-asserted: titles, queries, ranks and dates are what you reported, not what sourcesQL observed, and they are never citations. Filter and rank the leads with SQL over the leads view of the newest revision. Fetch the chosen ones with WEB_FETCH, at most 40 per job; select only lead_status = 'pending' and keep lead_id in the output. Put ORDER BY and LIMIT 40 in a CTE before WEB_FETCH: an outer ORDER BY or LIMIT does not choose which pages are fetched. After every batch, call record_lead_batch with the batch result_id; sourcesQL records what it fetched, so nothing you write in the query output changes the status. Bind the revision it returns for the next batch, so no lead is fetched twice or skipped. Before each batch after the first, tell the user how many leads are fetched, failed and pending, and ask whether to continue. Do not split a job to get around the 40-page limit and do not start a new batch without the user's agreement. Report failed leads and why. Cite only text sourcesQL fetched.";
 
 export const SOURCESQL_LEAD_BATCH_EXAMPLE = `WITH batch AS (
   SELECT lead_id, url FROM input.leads
@@ -334,20 +334,29 @@ export function leadRecordText(reply: LeadRecordReply): string {
   return parts.join(" ");
 }
 
-/** The sentence appended to a query reply that read a lead set and tried to fetch pages. */
+/** The sentence appended to a query reply that read a lead set and was asked to fetch pages. */
 export function leadBatchText(
-  counts: { fetched: number; failed: number; notFetched: number },
+  counts: {
+    fetched: number;
+    failed: number;
+    notFetched: number;
+    limit?: number;
+  },
   resultId: string,
 ): string {
-  const selected = counts.fetched + counts.failed + counts.notFetched;
+  const { fetched, failed, notFetched } = counts;
+  const limit = counts.limit ?? 40;
+  const selected = fetched + failed + notFetched;
+  const skipped = `${notFetched} ${notFetched === 1 ? "was" : "were"} not fetched because this job can fetch at most ${limit} ${limit === 1 ? "page" : "pages"}.`;
+  if (fetched + failed === 0)
+    return [
+      `Nothing was fetched: ${skipped}`,
+      "There is nothing to record. Ask the user before running another batch.",
+    ].join(" ");
   return [
-    `Fetched ${counts.fetched} of ${selected} selected ${selected === 1 ? "lead" : "leads"}.`,
-    ...(counts.failed ? [`${counts.failed} failed to fetch.`] : []),
-    ...(counts.notFetched
-      ? [
-          `${counts.notFetched} ${counts.notFetched === 1 ? "was" : "were"} not fetched because one job fetches at most 40 pages.`,
-        ]
-      : []),
+    `Fetched ${fetched} of ${selected} selected ${selected === 1 ? "lead" : "leads"}.`,
+    ...(failed ? [`${failed} failed to fetch.`] : []),
+    ...(notFetched ? [skipped] : []),
     `Next, call record_lead_batch with this result_id, ${resultId}, so the lead set shows what was fetched.`,
     "Then ask the user whether to continue before running the next batch.",
     "A next batch is a new query with a new request_id on the newest lead set revision; it picks up the leads that are still pending.",

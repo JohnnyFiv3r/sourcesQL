@@ -319,23 +319,6 @@ def test_over_cap_batch_fetches_the_cap_and_leaves_the_rest_pending(tmp_path):
     assert [(c["url"], c["fetch_failure"]) for c in unfetched] == [(left_over, "fetch_cap")]
 
 
-def test_a_direct_fetch_in_a_lead_bound_query_is_capped_the_same_way(tmp_path):
-    # A query that reads a lead set is a batch, whichever form fetches. Without a lead set the
-    # direct route still refuses over the cap (#111, test_host_found_urls).
-    engine = make(tmp_path)
-    reply = engine.add_leads(request_id(1), leads_of(AURORA))
-    many = ", ".join(f"$u{n}" for n in range(32))
-    parameters = {f"u{n}": f"https://site{n}.example/page" for n in range(32)}
-    batch = engine.query(
-        query=f"SELECT url FROM WEB_FETCH({many})",
-        parameters=parameters,
-        budgets={"max_fetches": 10},
-        inputs={"l": lead_view(reply)},
-    )
-    assert len(batch["fetch_outcomes"]) == 10
-    assert batch["receipt"]["not_fetched_count"] == 22
-
-
 def test_authorizing_a_long_chain_of_recorded_revisions_visits_each_result_once(
     tmp_path, monkeypatch
 ):
@@ -434,3 +417,54 @@ def test_three_batches_over_300_leads_end_fetched_failed_or_pending(tmp_path):
     assert cited["evidence"], "fetched text is cited"
     assert all(e["source_version_id"] for e in cited["evidence"])
     assert not engine.read_result(record["result_id"])["evidence"], "the lead set cites nothing"
+
+
+def test_an_unused_lead_pin_leaves_the_direct_route_as_it_was(tmp_path):
+    engine = make(tmp_path)
+    reply = engine.add_leads(request_id(1), leads_of(AURORA))
+    direct = f"SELECT url, fetch_status FROM WEB_FETCH('{AURORA}','{BIRCH}')"
+    for inputs in ({}, {"l": lead_view(reply)}):
+        error = refused(
+            lambda: engine.query(query=direct, budgets={"max_fetches": 1}, inputs=inputs)
+        )
+        assert error.code == "budget_exhausted", inputs
+    # Reading the lead set is what makes a query a batch.
+    batch = run_batch(engine, reply, BATCH)
+    assert batch["receipt"]["fetch_limit"] == 40
+
+
+def test_the_receipt_names_the_limit_that_stopped_a_batch(tmp_path):
+    engine = make(tmp_path)
+    reply = engine.add_leads(request_id(1), leads_of(AURORA, BIRCH))
+    one = engine.query(query=BATCH, budgets={"max_fetches": 1}, inputs={"l": lead_view(reply)})
+    assert (one["receipt"]["fetch_limit"], one["receipt"]["not_fetched_count"]) == (1, 1)
+    none = engine.query(query=BATCH, budgets={"max_fetches": 0}, inputs={"l": lead_view(reply)})
+    assert none["receipt"]["fetch_limit"] == 0 and none["receipt"]["not_fetched_count"] == 2
+    assert "fetch_outcomes" in none and none["fetch_outcomes"] == []
+
+
+def test_importing_a_long_chain_validates_each_result_once(tmp_path, monkeypatch):
+    engine = make(tmp_path)
+    reply = engine.add_leads(
+        request_id(1), leads_of(*[f"https://p{n}.example/" for n in range(1, 21)])
+    )
+    query = (
+        "WITH b AS (SELECT lead_id, url FROM input.l WHERE lead_status = 'pending' "
+        "ORDER BY host_rank LIMIT 1) SELECT lead_id, WEB_FETCH(url) AS page FROM b"
+    )
+    for call in range(20):
+        batch = engine.query(query=query, inputs={"l": lead_view(reply)})
+        record = engine.record_lead_batch(
+            request_id(10 + call), reply["lead_set_id"], batch["result_id"]
+        )
+        reply = {**reply, "result_id": record["result_id"]}
+    bundle = engine.export(reply["result_id"])
+    calls = []
+    from sourcesql import engine as engine_module
+
+    original = engine_module.validate_table
+    monkeypatch.setattr(
+        engine_module, "validate_table", lambda *a, **k: (calls.append(1), original(*a, **k))[1]
+    )
+    Engine(tmp_path / "fresh", worker=reference_worker).import_bundle(bundle)
+    assert len(calls) <= 2 * len(bundle["results"]), f"{len(calls)} validations"

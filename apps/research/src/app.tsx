@@ -2615,7 +2615,6 @@ function Workspace() {
                     {selectedCellDiagnostic ? (
                       <p>Original research: {selectedCellDiagnostic}</p>
                     ) : null}
-                    {leadFailure ? <p>Fetch failure: {leadFailure}</p> : null}
                   </div>
                 )}
                 {tab === "correct" &&
@@ -2764,6 +2763,11 @@ function Workspace() {
                 )}
               </section>
             )}
+            {leadFailure ? (
+              <p className="lead-failure-detail" role="status">
+                Fetch failure: {leadFailure}
+              </p>
+            ) : null}
             <div
               className="action-bar"
               id="cell-actions"

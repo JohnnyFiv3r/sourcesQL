@@ -230,7 +230,7 @@ test("an over-cap lead batch fetches the cap, says how many remain, and can be r
   const [, second] = texts(ran);
   assert.match(
     second,
-    /^Fetched 0 of 41 selected leads\. 40 failed to fetch\. 1 was not fetched because one job fetches at most 40 pages\. Next, call record_lead_batch/,
+    /^Fetched 0 of 41 selected leads\. 40 failed to fetch\. 1 was not fetched because this job can fetch at most 40 pages\. Next, call record_lead_batch/,
   );
   assert.match(second, /ask the user whether to continue/i);
   const recorded = await client.callTool({
@@ -264,6 +264,39 @@ test("an over-cap lead batch fetches the cap, says how many remain, and can be r
     },
   });
   assert.equal(other.isError, true);
+});
+
+test("a lower allowance is named in the batch text and an all-skipped batch is not recorded", async (t) => {
+  const { client } = await connect(t);
+  const set = await intake(client, [AURORA, BIRCH]);
+  const run = (max_fetches: number) =>
+    client.callTool({
+      name: "sourcesql_query",
+      arguments: {
+        request_id: randomUUID(),
+        query: FETCH,
+        budgets: { max_fetches },
+        inputs: { l: view(set.result_id) },
+      },
+    });
+  const one = await run(1);
+  assert.match(
+    texts(one)[1],
+    /^Fetched 1 of 2 selected leads\. 1 was not fetched because this job can fetch at most 1 page\. Next, call record_lead_batch/,
+  );
+  const none = await run(0);
+  assert.notEqual(none.isError, true, textOf(none));
+  assert.equal(
+    texts(none)[1],
+    "Nothing was fetched: 2 were not fetched because this job can fetch at most 0 pages. There is nothing to record. Ask the user before running another batch.",
+  );
+});
+
+test("the guidance tells agents to order and limit before the fetch", () => {
+  assert.match(
+    SOURCESQL_LEAD_FANOUT_GUIDANCE,
+    /Put ORDER BY and LIMIT 40 in a CTE before WEB_FETCH/,
+  );
 });
 
 test("the batch text separates fetched from failed attempts", () => {

@@ -917,7 +917,10 @@ class Engine:
         fetch_outcomes: dict[str, dict] = {}
         # A query over a lead set is a batch: the fetch cap ends it rather than refusing it, so
         # the leads it did fetch can be recorded and the rest stay pending (spec AC9).
-        lead_batch = any(parent.get("view") in ("leads", "hits") for parent in parents)
+        bindings = request.get("inputs", {})
+        lead_batch = any(
+            bindings.get(alias, {}).get("view") in ("leads", "hits") for alias in plan.input_aliases
+        )
         capped_fetches: list[str] = []
 
         def note_fetch_outcome(requested: str, row: dict, failure: str | None) -> None:
@@ -941,6 +944,7 @@ class Engine:
                 not_fetched = [*getattr(registry, "not_fetched_urls", []), *capped_fetches]
                 receipt.update(
                     fetch_failed=fetch_summary["failed"],
+                    fetch_limit=budget.limits["max_fetches"],
                     fetch_cap_hit=bool(not_fetched),
                     not_fetched_urls=not_fetched[:100],
                     not_fetched_count=len(not_fetched),
@@ -2641,6 +2645,10 @@ class Engine:
         def check(rid):
             if rid in visiting:
                 raise SourcesQLError("invalid_request", "Cyclic imported graph")
+            # A result several descendants reach is validated once per import; without this a
+            # chain of lead-set revisions, each reachable by two paths, is walked once per path.
+            if rid in classifications:
+                return
             record = results[rid]
             meta = record["metadata"]
             table = record["table"]
