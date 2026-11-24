@@ -18,6 +18,9 @@ class _LeadSetMoved(Exception):
 
 
 class Store(StageJournalMixin, InspectionMixin):
+    # The hosted store keeps no lead-set index, so it revokes only the result it is given.
+    has_lead_sets = True
+
     def __init__(self, root: Path | str, quota: int = 100 * 1024 * 1024):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -229,10 +232,14 @@ class Store(StageJournalMixin, InspectionMixin):
             db.execute("UPDATE results SET revoked=1 WHERE id=?", (result_id,))
             # A lead set is one body of host-reported data in many revisions: withdrawing
             # one revision withdraws them all.
-            sets = db.execute(
-                "SELECT DISTINCT lead_set_id FROM lead_sets WHERE leads_result_id=?1 OR hits_result_id=?1",
-                (result_id,),
-            ).fetchall()
+            sets = (
+                ()
+                if not self.has_lead_sets
+                else db.execute(
+                    "SELECT DISTINCT lead_set_id FROM lead_sets WHERE leads_result_id=?1 OR hits_result_id=?1",
+                    (result_id,),
+                ).fetchall()
+            )
             for (lead_set_id,) in sets:
                 for revision in db.execute(
                     "SELECT leads_result_id,hits_result_id FROM lead_sets WHERE lead_set_id=?",
