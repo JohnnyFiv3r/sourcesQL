@@ -172,6 +172,33 @@ function effectiveClassification(
   }
   return snapshot.dataClassification;
 }
+export const LOCAL_STORE_UNAVAILABLE =
+  "The local research store location is not writable or is not a usable directory. Check RESEARCH_DATA_DIR.";
+/**
+ * A filesystem failure of the local store location. The message is the only
+ * text an agent sees; the errno and path are for the server's own log.
+ */
+export class StoreLocationError extends Error {
+  constructor(
+    readonly operation: string,
+    readonly errno: string | undefined,
+    readonly location: string,
+  ) {
+    super(LOCAL_STORE_UNAVAILABLE);
+    this.name = "StoreLocationError";
+  }
+}
+export const logStoreFailure = (error: StoreLocationError) =>
+  console.error(
+    `research store: ${error.operation} failed: ${error.errno ?? "unknown"} ${error.location}`,
+  );
+const locationError = (operation: string, cause: unknown, location: string) =>
+  new StoreLocationError(
+    operation,
+    (cause as NodeJS.ErrnoException | undefined)?.code,
+    location,
+  );
+
 export class ResearchStore {
   private queue: Promise<unknown> = Promise.resolve();
   private versions = new WeakMap<State, string>();
@@ -216,7 +243,10 @@ export class ResearchStore {
           await readFile(join(this.directory, "research.json"), "utf8"),
         ) as State;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        const code = (error as NodeJS.ErrnoException).code;
+        if (typeof code === "string" && code !== "ENOENT")
+          throw locationError("read", error, this.directory);
+        if (code !== "ENOENT")
           throw new Error(
             "Cannot read the research store. Restore its JSON file before continuing.",
           );
@@ -280,13 +310,23 @@ export class ResearchStore {
       await this.options.backend.write(state, version);
       return;
     }
-    await mkdir(this.directory, { recursive: true });
-    const temporary = join(this.directory, `${randomUUID()}.tmp`);
-    await writeFile(temporary, JSON.stringify(state, null, 2), { mode: 0o600 });
-    await rename(temporary, join(this.directory, "research.json"));
+    try {
+      await mkdir(this.directory, { recursive: true });
+      const temporary = join(this.directory, `${randomUUID()}.tmp`);
+      await writeFile(temporary, JSON.stringify(state, null, 2), {
+        mode: 0o600,
+      });
+      await rename(temporary, join(this.directory, "research.json"));
+    } catch (error) {
+      throw locationError("write", error, this.directory);
+    }
   }
   private async withWriterLock<T>(operation: () => Promise<T>): Promise<T> {
-    await mkdir(this.directory, { recursive: true });
+    try {
+      await mkdir(this.directory, { recursive: true });
+    } catch (error) {
+      throw locationError("lock", error, this.directory);
+    }
     const lock = join(this.directory, ".writer-lock"),
       token = randomUUID(),
       owner = join(lock, `owner-${token}.json`),
@@ -297,7 +337,7 @@ export class ResearchStore {
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST")
-          throw new Error("Cannot acquire the research writer lock");
+          throw locationError("lock", error, this.directory);
         if (Date.now() >= deadline)
           throw new Error(
             "Research store is busy. Retry the same mutation after the writer finishes. A crash lock requires explicit owner recovery; it is never taken over automatically.",
@@ -305,25 +345,41 @@ export class ResearchStore {
         await waitForLock(Math.min(25, Math.max(1, deadline - Date.now())));
       }
     }
-    let recorded = false;
+    let recorded = false,
+      primary: unknown;
     try {
-      await writeFile(
-        owner,
-        canonicalJson({
-          token,
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-        }),
-        { flag: "wx", mode: 0o600 },
-      );
+      try {
+        await writeFile(
+          owner,
+          canonicalJson({
+            token,
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+          }),
+          { flag: "wx", mode: 0o600 },
+        );
+      } catch (error) {
+        throw locationError("lock", error, this.directory);
+      }
       recorded = true;
       return await operation();
+    } catch (error) {
+      primary = error;
+      throw error;
     } finally {
+      // A failed cleanup is logged when an earlier failure is already on its
+      // way out, so the agent hears the original one.
+      const cleanupFailed = (error: unknown) => {
+        const failure = locationError("lock cleanup", error, this.directory);
+        if (primary === undefined) throw failure;
+        logStoreFailure(failure);
+      };
       if (recorded) {
         let lease: { token?: string };
         try {
           lease = JSON.parse(await readFile(owner, "utf8"));
         } catch {
+          // Lock integrity is lost, not a cleanup fault: it always replaces.
           throw new Error(
             "Research writer lock ownership changed; explicit recovery is required",
           );
@@ -332,15 +388,21 @@ export class ResearchStore {
           throw new Error(
             "Research writer lock ownership changed; explicit recovery is required",
           );
-        await unlink(owner);
-        await rmdir(lock);
+        try {
+          await unlink(owner);
+          await rmdir(lock);
+        } catch (error) {
+          cleanupFailed(error);
+        }
       } else {
         try {
           await rmdir(lock);
-        } catch {
-          throw new Error(
-            "Research writer lock initialization failed; explicit recovery is required",
-          );
+        } catch (error) {
+          if (primary === undefined)
+            throw new Error(
+              "Research writer lock initialization failed; explicit recovery is required",
+            );
+          logStoreFailure(locationError("lock cleanup", error, this.directory));
         }
       }
     }
