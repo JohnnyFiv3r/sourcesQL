@@ -294,7 +294,8 @@ def test_lead_set_has_no_sources(tmp_path):
     assert engine.read_result(reply["result_id"])["evidence"] == []
 
 
-JOIN = """WITH f AS (SELECT lead_id, WEB_FETCH(url)[1].content AS content FROM input.l LIMIT 3),
+JOIN = """WITH b AS (SELECT lead_id, url FROM input.l LIMIT 3),
+f AS (SELECT lead_id, WEB_FETCH(url)[1].content AS content FROM b),
 e AS (SELECT lead_id, SEM_EXTRACT(content, 'the campus name', evidence := true) AS campus FROM f)
 SELECT l.title, l.host_query, l.host_rank, e.campus
 FROM e JOIN input.l AS l ON l.lead_id = e.lead_id"""

@@ -28,7 +28,7 @@ class Store(StageJournalMixin, InspectionMixin):
         self.quota = quota
         with self.db() as db:
             db.executescript(
-                """CREATE TABLE IF NOT EXISTS results(id TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, receipt TEXT NOT NULL);CREATE INDEX IF NOT EXISTS runs_request_uuid ON runs(lower(request_id));CREATE TABLE IF NOT EXISTS lead_sets(lead_set_id TEXT NOT NULL, revision INTEGER NOT NULL, leads_result_id TEXT NOT NULL, hits_result_id TEXT NOT NULL, PRIMARY KEY(lead_set_id, revision));CREATE TABLE IF NOT EXISTS lead_requests(request_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, reply TEXT NOT NULL);"""
+                """CREATE TABLE IF NOT EXISTS results(id TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, receipt TEXT NOT NULL);CREATE INDEX IF NOT EXISTS runs_request_uuid ON runs(lower(request_id));CREATE TABLE IF NOT EXISTS lead_sets(lead_set_id TEXT NOT NULL, revision INTEGER NOT NULL, leads_result_id TEXT NOT NULL, hits_result_id TEXT NOT NULL, PRIMARY KEY(lead_set_id, revision));CREATE TABLE IF NOT EXISTS lead_requests(request_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, reply TEXT NOT NULL);CREATE TABLE IF NOT EXISTS lead_batches(lead_set_id TEXT NOT NULL, batch_result_id TEXT NOT NULL, revision INTEGER NOT NULL, reply TEXT NOT NULL, PRIMARY KEY(lead_set_id, batch_result_id));"""
             )
         self.initialize_stage_journal()
 
@@ -197,7 +197,15 @@ class Store(StageJournalMixin, InspectionMixin):
         with self.db() as db:
             return self._authorize(db, result_id, set() if seen is None else seen)
 
-    def _authorize(self, db, result_id: str, seen: set[str]) -> dict:
+    def _authorize(
+        self, db, result_id: str, seen: set[str], memo: dict[str, dict] | None = None
+    ) -> dict:
+        # A result several of its descendants reach is checked once per call: without the memo
+        # a chain of lead-set revisions, each reachable directly and through its batch, is
+        # walked once per path, which doubles with every recorded batch.
+        memo = {} if memo is None else memo
+        if result_id in memo:
+            return memo[result_id]
         if result_id in seen:
             raise SourcesQLError("invalid_output", "Cyclic result dependencies", "read")
         seen.add(result_id)
@@ -206,9 +214,10 @@ class Store(StageJournalMixin, InspectionMixin):
             raise SourcesQLError("unauthorized", "Result or dependency unavailable", "read")
         meta = json.loads(row[0])
         for parent in meta.get("parents", []):
-            ancestor = self._authorize(db, parent["result_id"], set(seen))
+            ancestor = self._authorize(db, parent["result_id"], set(seen), memo)
             if ancestor.get("data_classification") in ("private_local", "private_derived"):
                 meta = {**meta, "data_classification": "private_derived"}
+        memo[result_id] = meta
         return meta
 
     def read(self, result_id: str) -> tuple[dict, Table]:
@@ -265,6 +274,32 @@ class Store(StageJournalMixin, InspectionMixin):
             else None
         )
 
+    def lead_set_results(self, lead_set_id: str) -> set[str]:
+        """Every leads and hits result of every revision of a lead set."""
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT leads_result_id,hits_result_id FROM lead_sets WHERE lead_set_id=?",
+                (lead_set_id,),
+            ).fetchall()
+        return {result for row in rows for result in row}
+
+    def lead_batch_reply(self, lead_set_id: str, batch_result_id: str) -> str | None:
+        """The reply that recorded this batch, or None when it was never recorded."""
+        with self.db() as db:
+            row = db.execute(
+                "SELECT reply FROM lead_batches WHERE lead_set_id=? AND batch_result_id=?",
+                (lead_set_id, batch_result_id),
+            ).fetchone()
+        return row[0] if row else None
+
+    def remember_lead_request(self, request_id: str, request_hash: str, reply: str) -> None:
+        """Keep a request ID answering with the reply it was given, whichever call first made it."""
+        with self.db() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO lead_requests(request_id,request_hash,reply) VALUES(?,?,?)",
+                (request_id, request_hash, reply),
+            )
+
     def lead_request(self, request_id: str) -> tuple[str, str] | None:
         """The stored (request hash, reply) of an earlier intake call."""
         with self.db() as db:
@@ -280,13 +315,19 @@ class Store(StageJournalMixin, InspectionMixin):
         request_id: str,
         request_hash: str,
         reply: dict,
+        batch_result_id: str | None = None,
+        hits_result_id: str | None = None,
     ) -> bool:
         """Publish a lead-set revision, its index row and its request record together.
+
+        A revision that records a batch adds only the leads result: it keeps the hits result
+        of the revision before it, and its batch is noted so recording it twice is a no-op.
 
         Returns False without writing when another writer already added this revision, so the
         caller can merge onto the new head and try again.
         """
-        leads_id, hits_id = items[0][1]["result_id"], items[1][1]["result_id"]
+        leads_id = items[0][1]["result_id"]
+        hits_id = hits_result_id or items[1][1]["result_id"]
 
         def check(db):
             head = self.lead_set_head(lead_set_id, db)
@@ -295,6 +336,14 @@ class Store(StageJournalMixin, InspectionMixin):
             if db.execute(
                 "SELECT 1 FROM lead_requests WHERE request_id=?", (request_id,)
             ).fetchone():
+                raise _LeadSetMoved
+            if (
+                batch_result_id
+                and db.execute(
+                    "SELECT 1 FROM lead_batches WHERE lead_set_id=? AND batch_result_id=?",
+                    (lead_set_id, batch_result_id),
+                ).fetchone()
+            ):
                 raise _LeadSetMoved
 
         def record(db):
@@ -307,6 +356,12 @@ class Store(StageJournalMixin, InspectionMixin):
                 "INSERT INTO lead_requests(request_id,request_hash,reply) VALUES(?,?,?)",
                 (request_id, request_hash, canonical(reply).decode()),
             )
+            if batch_result_id:
+                db.execute(
+                    "INSERT INTO lead_batches(lead_set_id,batch_result_id,revision,reply) "
+                    "VALUES(?,?,?,?)",
+                    (lead_set_id, batch_result_id, revision, canonical(reply).decode()),
+                )
 
         try:
             self.commit_many(items, before_write=check, after_write=record)

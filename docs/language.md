@@ -213,14 +213,36 @@ kept. Each call returns the `result_id` of a new revision. Bind it with
 `batch_result_id`) or `view: "hits"` (one row per submission). A set holds at most
 2000 leads. Every submission is kept as a hit, limited only by the storage quota.
 
-Everything in a lead set was reported by the host. It has no source versions, so
-it never appears in the `sources` view and no lead is a citation; a table built
-from one is classed `host_reported`, whatever public data it joins. A table that
+The URL, title, query, rank and date of a lead were reported by the host.
+`times_found` is counted by sourcesQL from the hits submitted, and `lead_id` is
+derived from the URL. `lead_status`, `fetch_failure` and `batch_result_id` are
+recorded by sourcesQL from its own fetches. A lead set has no source
+versions, so it never appears in the `sources` view and no lead is a citation; a
+table built from one is classed `host_reported`, whatever public data it joins. A table that
 also reads private data is `private_derived`, and keeps the private restrictions.
 Fetch the leads you choose with `WEB_FETCH`, at most 40 per job, and join the
-fetched rows back on `lead_id` using a staged query (a join needs its own CTE). In
-this version every `lead_status` is `pending`; recording which leads were fetched
-is not built yet.
+fetched rows back on `lead_id` using a staged query (a join needs its own CTE).
+Then call `record_lead_batch` with the batch's `result_id` and the `lead_set_id`: it
+writes a new revision in which each lead whose URL sourcesQL fetched is
+`fetched`, or `failed` with its `fetch_failure`. It uses sourcesQL's own record of
+the fetches and never the query's output columns. Bind the revision it returns for
+the next batch and select `lead_status = 'pending'`; ask the user before each
+further batch. Put `ORDER BY` and `LIMIT` in a CTE before `WEB_FETCH`. The order of pages
+fetched is the order of the rows reaching `WEB_FETCH`. A SELECT with `WEB_FETCH`
+and no `ORDER BY` or `LIMIT` fetches in stored row order, which is not a ranking,
+and stops at the job's fetch limit. In a query that reads a lead set, a SELECT
+that calls `WEB_FETCH` and has its own `ORDER BY`, `LIMIT` or `OFFSET` is refused
+before any fetch.
+
+```sql
+WITH batch AS (
+  SELECT lead_id, url FROM input.leads
+  WHERE lead_status = 'pending'
+  ORDER BY times_found DESC, host_rank
+  LIMIT 40
+)
+SELECT lead_id, WEB_FETCH(url) AS page FROM batch
+```
 
 ## Missing facts and declared requirements
 

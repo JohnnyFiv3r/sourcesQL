@@ -13,6 +13,7 @@ import {
   withEngineReadScope,
   boundedPreview,
   resultSnapshot,
+  leadSetMarker,
   EngineCallError,
   localJobsUnavailable,
   withLocalCallBudget,
@@ -26,6 +27,7 @@ import {
   hostAssertedSummary,
   hostQuoteText,
   hostSourceText,
+  leadQueueLine,
   HOST_ASSERTED_NOTICE,
   snapshotAssertion,
 } from "../src/presentation.js";
@@ -100,6 +102,10 @@ import {
 import {
   ADD_RESEARCH_LEADS_DESCRIPTION,
   leadIntakeText,
+  leadRecordText,
+  leadBatchText,
+  RECORD_LEAD_BATCH_DESCRIPTION,
+  type LeadRecordReply,
   type LeadIntakeReply,
   serverInstructions,
   queryDescription,
@@ -442,7 +448,7 @@ export function createServer(
       content: [
         {
           type: "text",
-          text: `${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.${hostSentence(fullView.snapshot, fullView.acceptedSources)}`,
+          text: `${view.snapshot.leadSet ? `${leadQueueLine(view.snapshot.leadSet)}\n` : ""}${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.${hostSentence(fullView.snapshot, fullView.acceptedSources)}`,
         },
       ],
       structuredContent: view,
@@ -2481,7 +2487,41 @@ export function createServer(
               });
         authorizeSnapshot(resultSnapshotForAccess(page), options.access);
       }
-      return engineResult(result);
+      const reply = engineResult(result);
+      // The engine records which lead-set results the SQL referenced; a pin it never used
+      // does not make a query a batch.
+      const readsLeadSet =
+        Array.isArray(result.lead_inputs_read) &&
+        result.lead_inputs_read.length > 0;
+      const outcomes = (
+        Array.isArray(result.fetch_outcomes) ? result.fetch_outcomes : []
+      ) as { status?: string }[];
+      const receipt = result.receipt as
+        { not_fetched_count?: number; fetch_limit?: number } | undefined;
+      const notFetched = Number(receipt?.not_fetched_count ?? 0);
+      // A lead-set batch tells the agent what to do next; the engine's fetch record, not
+      // the query's columns, decides that pages were fetched.
+      if (
+        method === "query" &&
+        readsLeadSet &&
+        (outcomes.length > 0 || notFetched > 0) &&
+        typeof result.result_id === "string"
+      ) {
+        const fetched = outcomes.filter((o) => o.status === "ok").length;
+        reply.content.push({
+          type: "text",
+          text: leadBatchText(
+            {
+              fetched,
+              failed: outcomes.length - fetched,
+              notFetched,
+              limit: receipt?.fetch_limit,
+            },
+            result.result_id,
+          ),
+        });
+      }
+      return reply;
     };
     tools.registerTool(
       "sourcesql_materialize_research",
@@ -2756,7 +2796,7 @@ export function createServer(
               args,
             ))) as EngineResult & Record<string, unknown>;
           authorizeSnapshot(resultSnapshotForAccess(result), options.access);
-          return projected
+          const page = projected
             ? engineResult(
                 resultInspectionPage(
                   sanitizedResult(result) as EngineResult &
@@ -2766,8 +2806,42 @@ export function createServer(
                 true,
               )
             : engineResult(result);
+          const queue = leadSetMarker(result);
+          if (queue)
+            page.content.unshift({ type: "text", text: leadQueueLine(queue) });
+          return page;
         }),
     );
+    if (engine.supportsLeadSets === true)
+      tools.registerTool(
+        "record_lead_batch",
+        {
+          description: RECORD_LEAD_BATCH_DESCRIPTION,
+          inputSchema: z
+            .object({
+              request_id: z.string().uuid(),
+              lead_set_id: z.string().uuid(),
+              batch_result_id: z.string().max(128),
+            })
+            .strict(),
+          annotations: {
+            readOnlyHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        (args) =>
+          safeShort(async () => {
+            const reply = await engine.call<LeadRecordReply>(
+              "record_lead_batch",
+              args,
+            );
+            return {
+              content: [{ type: "text", text: leadRecordText(reply) }],
+              structuredContent: reply as unknown as Record<string, unknown>,
+            };
+          }),
+      );
     if (engine.supportsLeadSets === true)
       tools.registerTool(
         "add_research_leads",

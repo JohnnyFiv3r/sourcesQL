@@ -13,6 +13,26 @@ export const HOST_ASSERTED_NOTICE =
   'Sources and quotes in a snapshot marked assertion "host" were supplied by the agent that saved it: sourcesQL has not fetched or checked them.';
 export const HOST_EVIDENCE_REASON =
   "the evidence does not match any source text sourcesQL retained.";
+// Lead-set columns the host wrote. The engine records lead_status, fetch_failure and
+// batch_result_id itself, so those carry no label.
+export const LEAD_HOST_COLUMNS = [
+  "title",
+  "host_query",
+  "host_rank",
+  "host_date",
+  "times_found",
+];
+// Columns the engine fills from its own work, in a lead set or in a table built from one.
+export const LEAD_ENGINE_COLUMNS = [
+  "lead_id",
+  "lead_status",
+  "fetch_failure",
+  "batch_result_id",
+];
+export const LEAD_SET_NOTE =
+  "These rows are leads your agent found with its own search. They are host-asserted and not citations. Fetched pages carry citations.";
+export const LEAD_SET_EMPTY =
+  "No leads yet. Ask your agent to search and send its results with add_research_leads.";
 export const hostSourceText = (url: string) => `${url} (host-asserted)`;
 export const hostQuoteText = (quote: string) =>
   `"${quote}" (host-asserted, not checked against fetched text)`;
@@ -196,4 +216,38 @@ export function hostAssertedSummary(
       `${quotes} quotes on ${quoteRows} rows are host-asserted: sourcesQL has not checked them against fetched text.`,
     );
   return parts.join(" ");
+}
+
+/** Every URL a lead-set table shows was reported by the host, fetched or not. */
+export function markLeadSources<T extends { url: string }>(
+  sources: T[],
+  leadSet: Snapshot["leadSet"],
+): (T & { assertion?: Assertion })[] {
+  return leadSet
+    ? sources.map((source) => ({ ...source, assertion: "host" as const }))
+    : sources;
+}
+
+/** The top line of a lead-set read or open: where the set stands. */
+export function leadQueueLine(
+  leadSet: NonNullable<Snapshot["leadSet"]>,
+): string {
+  const { totals } = leadSet;
+  return `Lead set ${leadSet.leadSetId}, revision ${leadSet.revision}: ${totals.leads} ${totals.leads === 1 ? "lead" : "leads"}, ${totals.fetched} fetched, ${totals.failed} failed, ${totals.pending} pending.`;
+}
+
+/**
+ * Whether a column holds host-reported values. In a lead set that is its fixed host columns.
+ * In a table built from one, it is every column no cell cites a fetched source for, because
+ * the engine does not track which input a derived column came from.
+ */
+export function hostAssertedColumn(snapshot: Snapshot, key: string): boolean {
+  if (snapshot.leadSet) return LEAD_HOST_COLUMNS.includes(key);
+  // Only a result built on lead-set data, directly or through an earlier table: a lead input
+  // that was bound but never used leaves the table's own columns as the engine produced them.
+  if (!snapshot.leadDerived) return false;
+  if (LEAD_ENGINE_COLUMNS.includes(key)) return false;
+  return !snapshot.rows.some(
+    (row) => row.cellSources?.[key]?.length || row.evidence[key]?.length,
+  );
 }
