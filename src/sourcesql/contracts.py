@@ -7,6 +7,8 @@ import hashlib
 import json
 import threading
 
+from .error_codes import refusal
+
 
 class SourcesQLError(Exception):
     # Optional bounded diagnostics supplied by trusted adapters. Annotations do
@@ -109,7 +111,8 @@ class Budget:
                 raise SourcesQLError("invalid_request", "Invalid budget")
             if key != "max_cost_microusd" and value > HARD_LIMITS[key]:
                 raise SourcesQLError(
-                    "invalid_request", "Requested budget exceeds the supported ceiling"
+                    "invalid_request",
+                    refusal("budget_ceiling", key=key, max=HARD_LIMITS[key], value=value),
                 )
             self.limits[key] = value
         self.counts: dict[str, int] = {}
@@ -124,7 +127,13 @@ class Budget:
             cap = self.limits.get(limit or "max_" + counter)
             value = self.counts.get(counter, 0) + amount
             if cap is not None and value > cap:
-                raise SourcesQLError("budget_exhausted", "Work allowance exhausted", "dispatch")
+                key = limit or "max_" + counter
+                raisable = HARD_LIMITS.get(key, 0) > cap
+                raise SourcesQLError(
+                    "budget_exhausted",
+                    refusal("allowance_exhausted", counter=key, limit=cap, raisable=raisable),
+                    "dispatch",
+                )
             self.counts[counter] = value
             observer = self.on_reserve
         # Persistence/authorization observers finish before the caller can dispatch.
