@@ -27,15 +27,17 @@ Behaviour changes: failed `WEB_FETCH` URLs are no longer dropped from rows, and
 The local app has an `add_research_leads` tool. A host agent sends the hits from
 its own search, up to 150 per call, and sourcesQL keeps them as a lead set: one
 immutable revision per call, with one row per distinct URL (`leads` view) and one
-per submitted hit (`hits` view). The lead set has a new `host_reported` data class.
-Anything derived from it keeps that class through queries, imports of derived
-tables, exports and re-imports, and it is never importable directly. A lead set
-has no source versions, evidence or search provenance, so no lead can be cited.
-Every lead reads `lead_status = 'pending'`: recording fetch outcomes, the batch
-reply wording, the table labels and the guidance are not built yet. A set holds at
-most 2000 leads and 6000 hits. Hosted deployments do not offer the tool, and an
-exported lead set re-imports as data but cannot be appended to in the new store.
-Fixture-tested only.
+per submitted hit (`hits` view). The lead set has a new `host_reported` data
+class. Anything derived from it keeps that class through queries, imports of
+derived tables, exports and re-imports, unless it also depends on private data,
+which makes the result `private_derived` and keeps its restrictions. The class is
+never importable directly. A lead set has no source versions, evidence or search
+provenance, so no lead can be cited. Every lead reads `lead_status = 'pending'`:
+recording fetch outcomes, the batch reply wording, the table labels and the
+guidance are not built yet. A set holds at most 2000 leads and 20000 hits;
+revoking one revision revokes the set. Hosted deployments do not offer the tool,
+and an exported lead set re-imports as data but cannot be appended to in the new
+store. Fixture-tested only.
 
 ## Unreleased citation and result-read correction
 

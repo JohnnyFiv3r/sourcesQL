@@ -227,6 +227,20 @@ class Store(StageJournalMixin, InspectionMixin):
     def revoke(self, result_id: str):
         with self.db() as db:
             db.execute("UPDATE results SET revoked=1 WHERE id=?", (result_id,))
+            # A lead set is one body of host-reported data in many revisions: withdrawing
+            # one revision withdraws them all.
+            sets = db.execute(
+                "SELECT DISTINCT lead_set_id FROM lead_sets WHERE leads_result_id=?1 OR hits_result_id=?1",
+                (result_id,),
+            ).fetchall()
+            for (lead_set_id,) in sets:
+                for revision in db.execute(
+                    "SELECT leads_result_id,hits_result_id FROM lead_sets WHERE lead_set_id=?",
+                    (lead_set_id,),
+                ).fetchall():
+                    db.executemany(
+                        "UPDATE results SET revoked=1 WHERE id=?", [(rid,) for rid in revision]
+                    )
 
     def lead_set_head(self, lead_set_id: str, db=None) -> dict | None:
         """The newest revision of a lead set, or None when it has none."""

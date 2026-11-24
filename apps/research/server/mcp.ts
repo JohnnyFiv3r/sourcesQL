@@ -2778,17 +2778,18 @@ export function createServer(
               request_id: z.string().uuid(),
               lead_set_id: z.string().uuid().optional(),
               title: z.string().max(120).optional(),
-              // The schema lets 0 and over 150 rows through so the engine can
-              // refuse them in its own words; it bounds only the payload size.
+              // The schema bounds only the payload size. Missing fields, over-long
+              // text, bad ranks and 0 or over 150 rows reach the engine, which
+              // refuses a bad row by index and keeps the good ones.
               leads: z
                 .array(
                   z
                     .object({
-                      url: z.string().max(2048),
-                      title: z.string().max(300),
-                      query: z.string().max(300).optional(),
-                      rank: z.number().int().optional(),
-                      date: z.string().max(10).optional(),
+                      url: z.string().max(20000).optional(),
+                      title: z.string().max(20000).optional(),
+                      query: z.string().max(20000).optional(),
+                      rank: z.number().optional(),
+                      date: z.string().max(100).optional(),
                     })
                     .strict(),
                 )

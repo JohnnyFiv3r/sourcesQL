@@ -104,6 +104,37 @@ test("add_research_leads replies with counts, refusals and the host-asserted sen
   assert.match(textOf(second), /revision 2/);
 });
 
+test("a missing or over-long field refuses only its own row, through the MCP schema", async (t) => {
+  const { client } = await connect(t);
+  const result = await client.callTool({
+    name: "add_research_leads",
+    arguments: {
+      request_id: randomUUID(),
+      leads: [
+        lead(1),
+        { title: "no url" },
+        { url: "https://x.example/" + "a".repeat(2100), title: "long" },
+        { url: "https://notitle.example/" },
+        { url: "https://rank.example/", title: "rank", rank: 1.5 },
+        { url: "https://query.example/", title: "q", query: "q".repeat(400) },
+      ],
+    },
+  });
+  assert.notEqual(result.isError, true, textOf(result));
+  const reply = result.structuredContent as {
+    stored: number;
+    refused: { index: number; reason: string }[];
+  };
+  assert.equal(reply.stored, 1);
+  assert.deepEqual(reply.refused, [
+    { index: 1, reason: "missing URL" },
+    { index: 2, reason: "URL is longer than 2048 characters" },
+    { index: 3, reason: "missing title" },
+    { index: 4, reason: "rank must be a whole number from 1 to 1000" },
+    { index: 5, reason: "query is longer than 300 characters" },
+  ]);
+});
+
 test("add_research_leads names the engine's own refusal for too many rows", async (t) => {
   const { client } = await connect(t);
   const result = await client.callTool({

@@ -2094,7 +2094,7 @@ class Engine:
     ]
     MAX_LEADS_PER_CALL = 150
     MAX_LEADS_PER_SET = 2000
-    MAX_HITS_PER_SET = 6000
+    MAX_HITS_PER_SET = 20000
     LEAD_FIELDS = {"url", "title", "query", "rank", "date"}
 
     @staticmethod
@@ -2118,8 +2118,10 @@ class Engine:
             cls._lead_url(url.strip())
         except SourcesQLError:
             return "not an http or https URL"
-        title = row.get("title", "")
-        if not isinstance(title, str) or len(title.strip()) > 300:
+        title = row.get("title")
+        if not isinstance(title, str) or not title.strip():
+            return "missing title"
+        if len(title.strip()) > 300:
             return "title is longer than 300 characters"
         query = row.get("query")
         if query is not None and (not isinstance(query, str) or len(query) > 300):
@@ -2250,7 +2252,7 @@ class Engine:
                 by_id[lead_id] = {
                     "lead_id": lead_id,
                     "url": url,
-                    "title": row.get("title", "").strip(),
+                    "title": row["title"].strip(),
                     "host_query": host_query,
                     "host_rank": rank,
                     "host_date": host_date,
@@ -2284,17 +2286,6 @@ class Engine:
         all_leads = [by_id[key] for key in sorted(by_id)]
         all_hits = hit_rows + new_hits
 
-        # Each table chains to its own earlier revision. The authorisation walk follows every
-        # path, so a parent link from each table to both earlier tables would grow
-        # exponentially with the number of revisions.
-        def pinned(rid):
-            return {
-                "result_id": rid,
-                "content_sha256": self.store.authorize(rid)["content_sha256"],
-            }
-
-        previous_leads = [pinned(head["leads_result_id"])] if head else []
-        previous_hits = [pinned(head["hits_result_id"])] if head else []
         hit_ids = [
             "hit_" + digest([set_key, revision, i])[:24] if i >= len(hit_rows) else None
             for i in range(len(all_hits))
@@ -2314,7 +2305,7 @@ class Engine:
                 "title": title,
                 "assertion": "host",
             },
-            previous_hits,
+            [],
             stamp,
         )
         leads_table, leads_meta = self._publish_lead_table(
@@ -2331,9 +2322,10 @@ class Engine:
                 "hits_result_id": hits_meta["result_id"],
             },
             # The leads revision lists its hits as a parent, so an export of anything built on
-            # the leads carries the hits view with it.
-            previous_leads
-            + [
+            # the leads carries the hits view with it. Earlier revisions are not parents:
+            # chaining them would make every export carry the whole history. Revoking any
+            # revision revokes the set (Store.revoke).
+            [
                 {
                     "result_id": hits_meta["result_id"],
                     "content_sha256": digest(hits_table.to_dict()),

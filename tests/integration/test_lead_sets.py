@@ -172,6 +172,53 @@ def test_bad_rows_are_refused_by_index_and_the_others_are_stored(tmp_path):
     assert dated["host_date"] is None
 
 
+def test_a_row_with_no_title_is_refused_by_index_and_the_others_are_stored(tmp_path):
+    reply = make(tmp_path).add_leads(
+        request_id(1),
+        [
+            {"url": "https://ok.example/a", "title": "ok"},
+            {"url": "https://notitle.example/"},
+            {"url": "https://blank.example/", "title": "   "},
+        ],
+    )
+    assert reply["refused"] == [
+        {"index": 1, "reason": "missing title"},
+        {"index": 2, "reason": "missing title"},
+    ]
+    assert reply["stored"] == 1
+
+
+def test_duplicate_submissions_are_all_kept_as_hits_below_the_lead_cap(tmp_path):
+    engine = make(tmp_path)
+    reply = None
+    for call in range(41):
+        reply = engine.add_leads(
+            request_id(call + 1),
+            [{"url": "https://repeat.example/page", "title": "repeat", "query": "q", "rank": 1}]
+            * 150,
+            lead_set_id=reply["lead_set_id"] if reply else None,
+        )
+    assert reply["totals"]["leads"] == 1
+    counted = engine.query(
+        query="SELECT count(*) AS n FROM input.h", inputs={"h": lead_view(reply, "hits")}
+    )
+    assert counted["rows"] == [{"n": "6150"}]
+
+
+def test_hits_cap_refuses_the_whole_call_and_keeps_the_head(tmp_path):
+    engine = make(tmp_path)
+    engine.MAX_HITS_PER_SET = 200
+    first = engine.add_leads(request_id(1), rows(150))
+    error = refused(
+        lambda: engine.add_leads(request_id(2), rows(100), lead_set_id=first["lead_set_id"])
+    )
+    assert (error.code, error.safe_message) == (
+        "budget_exhausted",
+        error_codes.refusal("lead_set_hits_full"),
+    )
+    assert engine.store.lead_set_head(first["lead_set_id"])["revision"] == 1
+
+
 def test_unknown_lead_field_refuses_the_call(tmp_path):
     error = refused(
         lambda: make(tmp_path).add_leads(
@@ -306,6 +353,48 @@ def test_derived_result_is_host_reported_and_export_keeps_it(tmp_path):
     assert fresh.query(query="SELECT url FROM input.h", inputs={"h": lead_view(local, "hits")})[
         "rows"
     ]
+
+
+def test_a_long_history_exports_and_re_imports(tmp_path):
+    engine = make(tmp_path)
+    reply = None
+    for call in range(33):
+        reply = engine.add_leads(
+            request_id(call + 1),
+            [{"url": "https://same.example/page", "title": "Same", "query": f"Search {call}"}],
+            lead_set_id=reply["lead_set_id"] if reply else None,
+        )
+    bundle = engine.export(reply["result_id"])
+    assert len(bundle["results"]) == 2, "only the newest revision and its hits travel"
+    fresh = Engine(tmp_path / "fresh", worker=reference_worker)
+    mapping = fresh.import_bundle(bundle)["result_mapping"]
+    local = {**reply, "result_id": mapping[reply["result_id"]]}
+    assert fresh.query(query="SELECT url FROM input.l", inputs={"l": lead_view(local)})["rows"]
+
+
+def test_revoking_any_revision_revokes_the_whole_set(tmp_path):
+    engine = make(tmp_path)
+    first = engine.add_leads(request_id(1), rows(2))
+    second = engine.add_leads(request_id(2), rows(2, start=10), lead_set_id=first["lead_set_id"])
+    engine.store.revoke(first["result_id"])
+    for result_id in (second["result_id"], second["hits_result_id"]):
+        error = refused(lambda: engine.read_result(result_id))
+        assert (error.code, error.safe_message) == (
+            "unauthorized",
+            "Result or dependency unavailable",
+        )
+        assert refused(lambda: engine.export(result_id)).code == "unauthorized"
+
+
+def test_a_private_input_keeps_a_derived_result_private(tmp_path):
+    engine = make(tmp_path)
+    reply = engine.add_leads(request_id(1), rows(2))
+    private = engine.import_table([{"key": "label"}], [{"label": "private example"}])
+    result = engine.query(
+        query="SELECT l.title, p.label FROM input.l AS l CROSS JOIN input.p AS p",
+        inputs={"l": lead_view(reply), "p": pin(private)},
+    )
+    assert result["data_classification"] == "private_derived"
 
 
 def test_import_table_cannot_claim_host_reported(tmp_path):

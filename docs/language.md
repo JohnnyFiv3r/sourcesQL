@@ -211,14 +211,16 @@ kept. Each call returns the `result_id` of a new revision. Bind it with
 `view: "leads"` (one row per URL: `lead_id`, `url`, `title`, `host_query`,
 `host_rank`, `host_date`, `times_found`, `lead_status`, `fetch_failure`,
 `batch_result_id`) or `view: "hits"` (one row per submission). A set holds at most
-2000 leads and 6000 hits.
+2000 leads and 20000 hits.
 
 Everything in a lead set was reported by the host. It has no source versions, so
 it never appears in the `sources` view and no lead is a citation; a table built
-from one is classed `host_reported`, whatever else it joins. Fetch the leads you
-choose with `WEB_FETCH`, at most 40 per job, and join the fetched rows back on
-`lead_id` using a staged query (a join needs its own CTE). In this version every
-`lead_status` is `pending`; recording which leads were fetched is not built yet.
+from one is classed `host_reported`, whatever public data it joins. A table that
+also reads private data is `private_derived`, and keeps the private restrictions.
+Fetch the leads you choose with `WEB_FETCH`, at most 40 per job, and join the
+fetched rows back on `lead_id` using a staged query (a join needs its own CTE). In
+this version every `lead_status` is `pending`; recording which leads were fetched
+is not built yet.
 
 ## Missing facts and declared requirements
 
