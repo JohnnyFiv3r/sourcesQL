@@ -98,5 +98,63 @@
       "hosted_visible": true
     }
   },
-  "refusals": {}
+  "refusals": {
+    "parse_error": {
+      "code": "invalid_query",
+      "message": "SQL could not be parsed in the installed dialect",
+      "detail": "Line {line}, column {column}: {description}.",
+      "hint": "Fix the SQL at that position and run it again.",
+      "slots": {"line": "int", "column": "int", "description": "enum"},
+      "values": {"description": ["Unexpected token", "Invalid expression", "Unexpected end of query", "Syntax error"]}
+    },
+    "unknown_column": {
+      "code": "invalid_query",
+      "message": "Column is unknown or ambiguous; use an explicit relation alias",
+      "detail": "Column name: {name}.",
+      "hint": "Check the column names of the relations in FROM, or qualify it as alias.column.",
+      "slots": {"name": "name"}
+    },
+    "unbound_parameter": {
+      "code": "invalid_query",
+      "message": "A query parameter has no binding",
+      "detail": "Parameter name: {name}.",
+      "hint": "Pass a value for {name} in parameters, with the same name as in the SQL but without the dollar sign.",
+      "slots": {"name": "name"}
+    },
+    "profile_unavailable": {
+      "code": "unsupported_capability",
+      "message": "Profile unavailable",
+      "detail": "Requested profile: {requested}. Available profiles: {profiles}.",
+      "hint": "Choose one of these, or omit profile to use the default.",
+      "slots": {"requested": "name", "profiles": "names"}
+    },
+    "budget_ceiling": {
+      "code": "invalid_request",
+      "message": "Requested budget exceeds the supported ceiling",
+      "detail": "Budget key {key} is at most {max}; you sent {value}.",
+      "hint": "Lower it to {max} or less.",
+      "slots": {"key": "name", "max": "int", "value": "int"}
+    },
+    "allowance_exhausted": {
+      "code": "budget_exhausted",
+      "message": "Work allowance exhausted",
+      "detail": "The {counter} allowance of {limit} was used up.",
+      "hint": "Narrow the query.",
+      "hint_raisable": "Narrow the query, or ask the user to approve a higher limit.",
+      "slots": {"counter": "name", "limit": "int"}
+    },
+    "missing_cost_budget": {
+      "code": "unauthorized",
+      "message": "Live dispatch requires a trusted finite spending grant",
+      "detail": "This live request has no per-query cost budget. Approved amount: {approved} microusd.",
+      "hint": "Set budgets.max_cost_microusd to a positive amount no larger than the profile's approved amount.",
+      "slots": {"approved": "int"}
+    },
+    "unsupported_construct": {
+      "code": "unsupported_query",
+      "message": "Unsupported SQL construct: {construct}",
+      "hint": "Call sourcesql_capabilities to see the supported operators and constructs.",
+      "slots": {"construct": "name"}
+    }
+  }
 }
