@@ -18,6 +18,7 @@ import re
 import uuid
 
 from sourcesql.contracts import Table, Column, SourcesQLError, canonical, digest
+from sourcesql.error_codes import HOSTED_CODES
 from sourcesql.storage.store import Store
 
 # Mirrors sourcesql.sql.admission.PUBLIC_REASON without importing SQLGlot here.
@@ -525,26 +526,7 @@ class MotherDuckStore(Store):
                 return
             if str(job["claim_token"]) != claim_token:
                 raise SourcesQLError("unauthorized", "Job execution ownership unavailable", "jobs")
-            allowed = {
-                "unsupported_query",
-                "invalid_query",
-                "invalid_request",
-                "budget_exhausted",
-                "unsupported_capability",
-                "unauthorized",
-                "disclosure_required",
-                "evidence_invalid",
-                "provider_unavailable",
-                "provider_timeout",
-                "provider_connection_error",
-                "provider_http_error",
-                "provider_error",
-                "execution_outcome_unknown",
-                "storage_conflict",
-                "storage_unavailable",
-                "invalid_output",
-                "cancelled",
-            }
+            allowed = HOSTED_CODES
             code = code if isinstance(code, str) and code in allowed else "execution_failed"
             stages = {
                 "admission",

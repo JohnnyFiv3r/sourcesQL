@@ -359,6 +359,20 @@ def test_provider_failure_code_survives_reopen_without_retaining_provider_text(
     assert final["error_message"] == saved["error_message"]
 
 
+@pytest.mark.parametrize(
+    "code", ["not_found", "result_unavailable", "idempotency_conflict", "revision_conflict"]
+)
+def test_shared_error_codes_keep_their_code_on_a_failed_job(make_store, code):
+    store = make_store()
+    job_id, context = seed_job(store)
+    token, _ = claim(store, job_id, context)
+    store.fail_job(job_id, token, code, "PRIVATE-RAW-DETAILS")
+    saved = job(make_store(), job_id)
+    assert saved["status"] == "failed"
+    assert saved["error_code"] == code
+    assert "PRIVATE" not in json.dumps(saved, default=str)
+
+
 @pytest.mark.parametrize("unreviewed_code", ["unknown_provider_code", "", None])
 def test_unreviewed_failure_codes_fall_back_without_retaining_raw_details(
     make_store, unreviewed_code

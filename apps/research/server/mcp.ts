@@ -13,6 +13,7 @@ import {
   withEngineReadScope,
   boundedPreview,
   resultSnapshot,
+  EngineCallError,
   localJobsUnavailable,
   withLocalCallBudget,
   LOCAL_READ_LIMIT_MS,
@@ -79,6 +80,7 @@ import {
 import { capacitySchema, researchJobView } from "../src/job-view.js";
 import { encodeResearchView, type ResearchViewWire } from "../src/view-wire.js";
 import {
+  knownErrorCode,
   safeExecutionError,
   safeRunErrors,
   safeFailureContext,
@@ -302,18 +304,15 @@ export function createServer(
         };
       return result;
     } catch (error) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text:
-              error instanceof Error
-                ? error.message
-                : "Unable to complete the operation.",
-          },
-        ],
-      };
+      // An engine code outside the shared table gets its fixed summary, never
+      // the engine's own text.
+      const text =
+        error instanceof EngineCallError && !knownErrorCode(error.code)
+          ? `execution_failed: ${safeExecutionError("execution_failed").message}`
+          : error instanceof Error
+            ? error.message
+            : "Unable to complete the operation.";
+      return { isError: true, content: [{ type: "text", text }] };
     }
   };
   // Read-only tools do no provider work: every bridge step they start shares
