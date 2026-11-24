@@ -426,12 +426,6 @@ def test_admission_refuses_when_parser_version_differs_from_the_qualified_one(mo
     assert refused.value.code == "unsupported_capability"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RecursionError,
-    reason="Deeply nested parentheses raise RecursionError from the parser instead of an "
-    "admission refusal; see the item filed from #135.",
-)
 def test_deeply_nested_parentheses_are_refused_not_crashed():
     sql = "SELECT " + "(" * 100 + "1" + ")" * 100 + " AS x"
     with pytest.raises(SourcesQLError):
