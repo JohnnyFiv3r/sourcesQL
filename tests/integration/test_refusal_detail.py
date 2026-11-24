@@ -90,6 +90,33 @@ def test_more_than_twelve_profiles_are_cut(tmp_path):
     assert "p11" not in error.safe_message
 
 
+def test_fifteen_long_profile_names_fit_the_local_limit_and_are_cut_after_twelve(tmp_path):
+    many = Engine(
+        tmp_path / "engine",
+        profiles={f"research_profile_{i:02}": {"mode": "fixture"} for i in range(14)},
+        worker=reference_worker,
+    )
+    error = refused(lambda: many.query(query="SELECT 1 AS n", profile="absent"))
+    assert error.code == "unsupported_capability"
+    assert "research_profile_10, and 3 more." in error.safe_message
+    assert "research_profile_11" not in error.safe_message
+    assert 240 < len(error.safe_message) <= 400
+    assert error.safe_message.endswith("or omit profile to use the default.")
+
+
+@pytest.mark.parametrize(
+    ("sql", "name"),
+    [
+        ('SELECT t."nope" FROM (SELECT 1 AS a) t', "t.nope"),
+        ("SELECT t.nope FROM (SELECT 1 AS a) t", "t.nope"),
+        ('SELECT "nope" FROM (SELECT 1 AS a) t', "nope"),
+        ('SELECT "bad/name" FROM (SELECT 1 AS a) t', "(name omitted)"),
+    ],
+)
+def test_unknown_column_names_the_bare_identifier_quoted_or_not(sql, name):
+    assert f"Column name: {name}." in refused(lambda: admit(sql)).safe_message
+
+
 def test_budget_over_ceiling_names_key_and_max():
     error = refused(lambda: Budget({"max_fetches": 99}))
     assert error.code == "invalid_request"

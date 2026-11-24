@@ -585,7 +585,7 @@ class _Binder:
         if not found and outer:
             return self.resolve(node, outer, {})
         if len(found) != 1:
-            name = node.sql() if node.table else node.name
+            name = f"{node.table}.{node.name}" if node.table else node.name
             refuse(refusal("unknown_column", name=name), "invalid_query")
         return found[0].logical_type
 

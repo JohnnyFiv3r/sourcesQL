@@ -13,6 +13,7 @@ from sourcesql.storage import stages
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE = re.compile(r"[A-Za-z0-9 ,.;:()_'-]{1,240}\Z")
+CHARACTERS = re.compile(r"[A-Za-z0-9 ,.;:()_'-]+\Z")
 
 # Each call site that passes a code held in a variable or expression, keyed by
 # file, enclosing function and the code expression. A new site must be listed
@@ -241,8 +242,9 @@ def test_every_refusal_template_renders_inside_the_gate():
     for refusal_id, entry in error_codes.TABLE["refusals"].items():
         for raisable in (False, True):
             text = error_codes.refusal(refusal_id, raisable=raisable, **maximal_slots(entry))
-            assert GATE.match(text), refusal_id
-            assert len(text) <= 240, refusal_id
+            limit = entry.get("max_length", 240)
+            assert CHARACTERS.match(text), refusal_id
+            assert len(text) <= limit, refusal_id
             assert text.startswith(entry["message"].split("{")[0]), refusal_id
 
 
@@ -299,3 +301,17 @@ def test_loader_accepts_a_well_formed_refusal():
 def test_loader_rejects_a_bad_refusal_entry(changes):
     with pytest.raises(ValueError):
         error_codes._validate_refusals(error_codes.TABLE["codes"], refusal_table(**changes))
+
+
+def test_only_a_refusal_never_stored_as_a_hosted_reason_may_exceed_240():
+    for refusal_id, entry in error_codes.TABLE["refusals"].items():
+        if entry.get("max_length", 240) > 240:
+            assert entry["code"] not in {"invalid_query", "unsupported_query"}, refusal_id
+    base = {"code": "invalid_query", "message": "Fixed sentence", "max_length": 400}
+    with pytest.raises(ValueError, match="bad max_length"):
+        error_codes._validate_refusals(error_codes.TABLE["codes"], {"x": base})
+    with pytest.raises(ValueError, match="bad max_length"):
+        error_codes._validate_refusals(
+            error_codes.TABLE["codes"],
+            {"x": {**base, "code": "unsupported_capability", "max_length": 401}},
+        )

@@ -124,6 +124,7 @@
     "profile_unavailable": {
       "code": "unsupported_capability",
       "message": "Profile unavailable",
+      "max_length": 400,
       "detail": "Requested profile: {requested}. Available profiles: {profiles}.",
       "hint": "Choose one of these, or omit profile to use the default.",
       "slots": {"requested": "name", "profiles": "names"}

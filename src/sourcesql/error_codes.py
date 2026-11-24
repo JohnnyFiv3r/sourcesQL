@@ -19,6 +19,11 @@ _SLOT_TYPES = frozenset({"int", "name", "names", "enum"})
 _OMITTED = "(name omitted)"
 _MAX_NAMES = 12
 _MAX_LENGTH = 240
+# A refusal that is only ever shown to the local caller, never stored as a hosted reason, may
+# use the longer local length. Codes the hosted job path stores as reasons stay at 240.
+_LOCAL_MAX_LENGTH = 400
+_STORED_REASON_CODES = frozenset({"invalid_query", "unsupported_query"})
+_CHARACTERS = re.compile(r"[A-Za-z0-9 ,.;:()_'-]+\Z")
 
 
 def _validate_refusals(codes: dict, refusals: object) -> None:
@@ -28,6 +33,13 @@ def _validate_refusals(codes: dict, refusals: object) -> None:
     for refusal_id, entry in refusals.items():
         if not isinstance(entry, dict) or entry.get("code") not in codes:
             raise ValueError(f"error_codes.json refusal has an unknown code: {refusal_id}")
+        limit = entry.get("max_length", _MAX_LENGTH)
+        if (
+            type(limit) is not int
+            or not _MAX_LENGTH <= limit <= _LOCAL_MAX_LENGTH
+            or (limit > _MAX_LENGTH and entry["code"] in _STORED_REASON_CODES)
+        ):
+            raise ValueError(f"error_codes.json refusal has a bad max_length: {refusal_id}")
         slots = entry.get("slots", {})
         if not isinstance(slots, dict) or not set(slots.values()) <= _SLOT_TYPES:
             raise ValueError(f"error_codes.json refusal has a bad slot type: {refusal_id}")
@@ -112,7 +124,8 @@ def refusal(refusal_id: str, /, *, raisable: bool = False, **slots: object) -> s
 
     Detail comes only from typed slots, so it cannot carry free text. When a slot is not
     available the detail and the step that points at it are left out and the fixed sentence
-    stands alone. The result is always inside the stored-reason gate and 240 characters.
+    stands alone. The result is always inside the stored-reason character set and the refusal's length: 240,
+    or its own `max_length` up to 400 for a refusal that is never stored as a hosted reason.
     """
     entry = TABLE["refusals"][refusal_id]
     kinds = entry.get("slots", {})
@@ -142,9 +155,10 @@ def refusal(refusal_id: str, /, *, raisable: bool = False, **slots: object) -> s
         first, *rest = [part for part in parts if part]
         return " ".join([first if first.endswith(".") else first + ".", *rest]) if rest else first
 
+    limit = entry.get("max_length", _MAX_LENGTH)
     for candidate in (assemble(message, detail, hint), assemble(message, detail), message):
-        if len(candidate) <= _MAX_LENGTH:
+        if len(candidate) <= limit:
             break
-    if not _SUMMARY.fullmatch(candidate):
+    if len(candidate) > limit or not _CHARACTERS.fullmatch(candidate):
         raise ValueError(f"refusal {refusal_id} rendered outside the text gate")
     return candidate
