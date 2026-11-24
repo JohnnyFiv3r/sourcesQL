@@ -256,6 +256,7 @@ export const v2SnapshotSchema = z
     rowCount: z.number().int().nonnegative(),
     dataClassification: z.enum([
       "public_web",
+      "host_reported",
       "private_local",
       "private_derived",
       "synthetic_fixture",
@@ -386,7 +387,11 @@ export type Snapshot = {
   capturePrecision?: "day" | "instant";
   rowCount?: number;
   dataClassification?:
-    "public_web" | "private_local" | "private_derived" | "synthetic_fixture";
+    | "public_web"
+    | "host_reported"
+    | "private_local"
+    | "private_derived"
+    | "synthetic_fixture";
   coverage:
     | string
     | {

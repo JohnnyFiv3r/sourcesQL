@@ -391,6 +391,7 @@ test("MCP stdio handshake, UI resource, correction, import and follow-up round t
     assert.deepEqual(
       tools.map((t) => t.name).sort(),
       [
+        "add_research_leads",
         "amend_observation",
         "append_research",
         "append_research_updates",

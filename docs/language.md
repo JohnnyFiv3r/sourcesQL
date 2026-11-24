@@ -202,6 +202,26 @@ and lists `not_fetched_urls` (up to 100, with `not_fetched_count`) for that call
 Pages fetched before the limit are kept; `sourcesql_recover_run` returns them.
 Choose the most relevant URLs yourself and say which you left out.
 
+### Keeping many leads: lead sets
+
+With the local app, `add_research_leads` stores hits from your own search before
+you fetch any of them. Send up to 150 per call and reuse the `lead_set_id` the
+first call returns. A URL submitted again is merged, and every query and rank is
+kept. Each call returns the `result_id` of a new revision. Bind it with
+`view: "leads"` (one row per URL: `lead_id`, `url`, `title`, `host_query`,
+`host_rank`, `host_date`, `times_found`, `lead_status`, `fetch_failure`,
+`batch_result_id`) or `view: "hits"` (one row per submission). A set holds at most
+2000 leads. Every submission is kept as a hit, limited only by the storage quota.
+
+Everything in a lead set was reported by the host. It has no source versions, so
+it never appears in the `sources` view and no lead is a citation; a table built
+from one is classed `host_reported`, whatever public data it joins. A table that
+also reads private data is `private_derived`, and keeps the private restrictions.
+Fetch the leads you choose with `WEB_FETCH`, at most 40 per job, and join the
+fetched rows back on `lead_id` using a staged query (a join needs its own CTE). In
+this version every `lead_status` is `pending`; recording which leads were fetched
+is not built yet.
+
 ## Missing facts and declared requirements
 
 Unanswered cells remain NULL. Where available, `cell_diagnostics` distinguishes

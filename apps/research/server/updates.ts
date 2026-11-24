@@ -834,7 +834,11 @@ export function buildAcceptedUpdateSnapshot(
       ? "private_derived"
       : syntheticOnly
         ? "synthetic_fixture"
-        : "public_web",
+        : dependencies.some(
+              (snapshot) => snapshot.dataClassification === "host_reported",
+            )
+          ? "host_reported"
+          : "public_web",
     coverage: {
       planComplete: true,
       corpusComplete: "unknown",
