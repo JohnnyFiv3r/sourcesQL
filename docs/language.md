@@ -213,9 +213,10 @@ kept. Each call returns the `result_id` of a new revision. Bind it with
 `batch_result_id`) or `view: "hits"` (one row per submission). A set holds at most
 2000 leads. Every submission is kept as a hit, limited only by the storage quota.
 
-The URL, title, query, rank, date and count of a lead were reported by the host;
-`lead_status`, `fetch_failure` and `batch_result_id` are recorded by sourcesQL from
-its own fetches, and `lead_id` is derived from the URL. A lead set has no source
+The URL, title, query, rank and date of a lead were reported by the host.
+`times_found` is counted by sourcesQL from the hits submitted, and `lead_id` is
+derived from the URL. `lead_status`, `fetch_failure` and `batch_result_id` are
+recorded by sourcesQL from its own fetches. A lead set has no source
 versions, so it never appears in the `sources` view and no lead is a citation; a
 table built from one is classed `host_reported`, whatever public data it joins. A table that
 also reads private data is `private_derived`, and keeps the private restrictions.

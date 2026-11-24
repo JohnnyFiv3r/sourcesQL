@@ -329,9 +329,10 @@ export const v2SnapshotSchema = z
     // Set only from an engine lead-set result; a host cannot supply it, since a dataRef
     // snapshot is replaced by the engine's own copy when it is saved.
     leadSet: leadSetSchema.optional(),
-    // True when the engine recorded that this result's SQL read a lead set. A bound but
-    // unused lead input does not set it. Replaced by the engine's own copy when saved.
-    readsLeadSet: z.boolean().optional(),
+    // True when the engine recorded that this result holds lead-set data: its SQL read a lead
+    // set, or used a result that did. A bound but unused lead input does not set it.
+    // Replaced by the engine's own copy when saved.
+    leadDerived: z.boolean().optional(),
     previewOffset: z.number().int().nonnegative().default(0),
     researchQuality: researchQualitySchema.optional(),
     queryFeedback: queryFeedbackSchema.optional(),
@@ -439,7 +440,7 @@ export type Snapshot = {
     verificationNote: string;
   }[];
   dataRef?: { resultId: string; contentSha256: string };
-  readsLeadSet?: boolean;
+  leadDerived?: boolean;
   leadSet?: {
     leadSetId: string;
     revision: number;

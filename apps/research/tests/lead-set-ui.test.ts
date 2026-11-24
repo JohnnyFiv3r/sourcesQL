@@ -32,7 +32,7 @@ const leadSnapshot = { leadSet } as unknown as Snapshot;
 const derived = (rows: unknown[]) =>
   ({
     dataClassification: "host_reported",
-    readsLeadSet: true,
+    leadDerived: true,
     rows,
   }) as unknown as Snapshot;
 
@@ -57,7 +57,7 @@ test("a table built from a lead set labels the columns no cell cites a source fo
   // A host_reported table whose SQL never read the lead set (an unused pin) has no badges.
   const unused = {
     ...snapshot,
-    readsLeadSet: undefined,
+    leadDerived: undefined,
   } as unknown as Snapshot;
   assert.equal(hostAssertedColumn(unused, "title"), false);
   assert.equal(hostAssertedColumn(unused, "fetch_status"), false);

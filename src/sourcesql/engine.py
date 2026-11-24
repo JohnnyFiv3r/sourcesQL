@@ -443,6 +443,21 @@ class Engine:
                 read.add(meta["provenance"]["hits_result_id"])
         return sorted(read)
 
+    def _lead_derived(self, bindings, plan, lead_inputs_read) -> bool:
+        """Whether the result holds lead-set data: read from one, or built on a result that did.
+
+        Kept apart from lead_inputs_read, which says only what a batch read directly and so
+        what record_lead_batch may accept. This one lets a table made from an earlier table
+        keep its host badges, while an input the SQL never uses leaves them off.
+        """
+        if lead_inputs_read:
+            return True
+        for alias in plan.input_aliases:
+            meta = self.store.authorize(bindings[alias]["result_id"])
+            if meta.get("lead_derived") or meta.get("provenance", {}).get("kind") == "lead_set":
+                return True
+        return False
+
     @staticmethod
     def _refuse_ordered_fetch(plan) -> None:
         """A SELECT that fetches and also orders or limits itself does not choose its pages.
@@ -1929,6 +1944,11 @@ class Engine:
                             else {}
                         ),
                         **({"lead_inputs_read": lead_inputs_read} if lead_inputs_read else {}),
+                        **(
+                            {"lead_derived": True}
+                            if self._lead_derived(request.get("inputs", {}), plan, lead_inputs_read)
+                            else {}
+                        ),
                         "lineage_precision": "cell_where_proven" if bound_cells else "input_set",
                         "bound_evidence_cells": bound_cells,
                         "source_bindings": source_bindings,

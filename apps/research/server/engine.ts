@@ -43,7 +43,7 @@ export type EngineResult = {
   research_quality?: Record<string, unknown>;
   query_feedback?: unknown;
   provenance?: Record<string, unknown>;
-  lead_inputs_read?: string[];
+  lead_derived?: boolean;
   receipt: Record<string, unknown>;
   next_offset: number | null;
 };
@@ -785,9 +785,7 @@ export function resultSnapshot(
     },
     previewOffset: 0,
     ...(leadSetMarker(result) ? { leadSet: leadSetMarker(result) } : {}),
-    ...(Array.isArray(result.lead_inputs_read) && result.lead_inputs_read.length
-      ? { readsLeadSet: true }
-      : {}),
+    ...(result.lead_derived === true ? { leadDerived: true } : {}),
     ...(quality ? { researchQuality: quality } : {}),
     ...(feedback.success ? { queryFeedback: feedback.data } : {}),
   };

@@ -592,3 +592,27 @@ def test_lead_inputs_read_lists_the_results_the_sql_referenced(tmp_path):
     newer = engine.add_leads(request_id(2), leads_of(BIRCH), lead_set_id=reply["lead_set_id"])
     record = engine.record_lead_batch(request_id(3), reply["lead_set_id"], over_leads["result_id"])
     assert record["revision"] == newer["revision"] + 1
+
+
+def test_lead_derived_follows_reuse_but_not_an_unused_pin(tmp_path):
+    engine = make(tmp_path)
+    reply = engine.add_leads(request_id(1), leads_of(AURORA))
+    titles = engine.query(query="SELECT title FROM input.l", inputs={"l": lead_view(reply)})
+    assert titles["lead_derived"] is True
+    assert "lead_inputs_read" in titles, "a direct read is what a batch may record"
+    pin = {"result_id": titles["result_id"], "view": "original", "amendment_revision": None}
+    reused = engine.query(query="SELECT title FROM input.t", inputs={"t": pin})
+    assert reused["lead_derived"] is True
+    assert "lead_inputs_read" not in reused, "reuse is not a read of the lead set"
+    unused = engine.query(
+        query=f"SELECT url FROM WEB_FETCH('{AURORA}')", inputs={"unused": lead_view(reply)}
+    )
+    assert "lead_derived" not in unused and "lead_inputs_read" not in unused
+    plain = engine.query(query="SELECT 1 AS n")
+    again = engine.query(
+        query="SELECT n FROM input.p",
+        inputs={
+            "p": {"result_id": plain["result_id"], "view": "original", "amendment_revision": None}
+        },
+    )
+    assert "lead_derived" not in again

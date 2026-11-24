@@ -552,9 +552,8 @@ test("a table is badged as lead-derived only when its SQL read the lead set", as
       arguments: { result_ref: { result_id, snapshot_id: id, title: id } },
     });
     assert.notEqual(opened.isError, true, textOf(opened));
-    return (
-      opened.structuredContent as { snapshot: { readsLeadSet?: boolean } }
-    ).snapshot;
+    return (opened.structuredContent as { snapshot: { leadDerived?: boolean } })
+      .snapshot;
   };
   const unused = await client.callTool({
     name: "sourcesql_query",
@@ -564,11 +563,55 @@ test("a table is badged as lead-derived only when its SQL read the lead set", as
       inputs: { unused: view(set.result_id) },
     },
   });
-  assert.equal((await open(unused, "unused-pin")).readsLeadSet, undefined);
+  assert.equal((await open(unused, "unused-pin")).leadDerived, undefined);
   const read = await batch(
     client,
     "WITH b AS (SELECT lead_id, url FROM input.l LIMIT 5) SELECT lead_id, WEB_FETCH(url)[1].fetch_status AS status FROM b",
     set.result_id,
   );
-  assert.equal((await open(read, "read-set")).readsLeadSet, true);
+  assert.equal((await open(read, "read-set")).leadDerived, true);
+  // The mark survives ordinary reuse of a table made from a lead set.
+  const titles = await batch(
+    client,
+    "SELECT title FROM input.l",
+    set.result_id,
+  );
+  assert.equal((await open(titles, "titles")).leadDerived, true);
+  const { result_id } = titles.structuredContent as { result_id: string };
+  const reused = await client.callTool({
+    name: "sourcesql_query",
+    arguments: {
+      request_id: randomUUID(),
+      query: "SELECT title FROM input.intermediate",
+      inputs: {
+        intermediate: {
+          result_id,
+          view: "original",
+          amendment_revision: null,
+        },
+      },
+    },
+  });
+  assert.equal((await open(reused, "reused")).leadDerived, true);
+  // Reuse of a table that never touched a lead set stays unmarked.
+  const plain = await client.callTool({
+    name: "sourcesql_query",
+    arguments: { request_id: randomUUID(), query: "SELECT 1 AS n" },
+  });
+  const again = await client.callTool({
+    name: "sourcesql_query",
+    arguments: {
+      request_id: randomUUID(),
+      query: "SELECT n FROM input.p",
+      inputs: {
+        p: {
+          result_id: (plain.structuredContent as { result_id: string })
+            .result_id,
+          view: "original",
+          amendment_revision: null,
+        },
+      },
+    },
+  });
+  assert.equal((await open(again, "plain-reuse")).leadDerived, undefined);
 });

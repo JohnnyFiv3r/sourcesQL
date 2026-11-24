@@ -60,7 +60,8 @@ a lead input that is bound but unused does not make a batch and keeps #111's
 rules, and `record_lead_batch` refuses such a result. The reply and the receipt name the job's actual fetch limit, and an
 all-skipped result is not offered for recording. Lead-set reads and opens begin with a queue line, the table
 labels host-written columns as Host-asserted. A table built from a lead set (its
-SQL read one; a lead input bound but never used does not count) labels every
+SQL read one, or used a table that did; a lead input bound but never used does not
+count) labels every
 column that no cell cites a source for, except `lead_id`, `lead_status`,
 `fetch_failure` and `batch_result_id`. The engine does not track which input a
 derived column came from, so a derived column of other data with no citation is
