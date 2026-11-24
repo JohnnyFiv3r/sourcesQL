@@ -47,6 +47,17 @@ export const SOURCESQL_FETCH_EXAMPLE = `SELECT url AS source_url,
        SEM_EXTRACT(content, 'the name of the project', evidence := true) AS project_name
 FROM WEB_FETCH($u1, $u2, $u3)`;
 
+export const SOURCESQL_LEAD_FANOUT_GUIDANCE =
+  "If sourcesql_capabilities reports host_search_route.available, for a large search with your own web search tool, send the hits to sourcesQL with add_research_leads, up to 150 per call, reusing the lead_set_id and including each hit's query and rank. Leads are host-asserted: titles, queries, ranks and dates are what you reported, not what sourcesQL observed, and they are never citations. Filter and rank the leads with SQL over the leads view of the newest revision. Fetch the chosen ones with WEB_FETCH, at most 40 per job; select only lead_status = 'pending' and keep lead_id in the output. After every batch, call record_lead_batch with the batch result_id; sourcesQL records what it fetched, so nothing you write in the query output changes the status. Bind the revision it returns for the next batch, so no lead is fetched twice or skipped. Before each batch after the first, tell the user how many leads are fetched, failed and pending, and ask whether to continue. Do not split a job to get around the 40-page limit and do not start a new batch without the user's agreement. Report failed leads and why. Cite only text sourcesQL fetched.";
+
+export const SOURCESQL_LEAD_BATCH_EXAMPLE = `WITH batch AS (
+  SELECT lead_id, url FROM input.leads
+  WHERE lead_status = 'pending'
+  ORDER BY times_found DESC, host_rank
+  LIMIT 40
+)
+SELECT lead_id, WEB_FETCH(url) AS page FROM batch`;
+
 export const SOURCESQL_SERVER_INSTRUCTIONS = `sourcesQL researches the web with SQL and preserves cited, typed results in an interactive workspace. Use sourcesQL for user-requested web research that needs a structured table, comparisons, entity discovery, evidence-backed fields, or follow-up research on saved results. Use sourcesql_query and its configured search provider for discovery requested through sourcesQL.
 
 Usage: when capabilities report usage_mode provider_managed, accumulated application reservations do not block research. Finite per-job search/model/runtime limits still apply. Free-allowance estimates are nonblocking app notices, not proof of account credit exhaustion or a request for billing consent. Providers manage payment methods and credit/rate limits. Use sourcesql_usage_report when available for requested cost reports; distinguish estimated response costs, reported tokens, observed Flight runtime, unknown SQL/storage costs and account-wide bills. Include failed/cancelled work. A real provider refusal is shown through open_research with its saved job_id; inspect retained work before any continuation and never automatically replay uncertain requests.
@@ -80,6 +91,10 @@ Use WEB_FETCH for known URLs only when the chosen profile supports fetching. For
 ${SOURCESQL_HOST_SEARCH_GUIDANCE}
 
 ${SOURCESQL_FETCH_EXAMPLE}
+
+${SOURCESQL_LEAD_FANOUT_GUIDANCE}
+
+${SOURCESQL_LEAD_BATCH_EXAMPLE}
 
 When capabilities advertises the sources input view, bind {result_id,view:"sources",amendment_revision:null} to query authorized retained source documents without another fetch. For entity research, combine complementary evidence only after a shared project, site or address establishes identity; shared company, geography or investment amount alone is insufficient. A source missing one eligibility fact leaves the entity unresolved, not ineligible. Preserve source publication/observation dates explicitly beside status and milestone fields; retrieval time is not the date of the underlying event. Keep historical plans distinct from currently verified status. Use per-field ranked selections and identity projections/joins for exact cell citations. Direct casts, arithmetic, aggregates, DISTINCT and set operations may retain only input-set evidence; inspect evidence before promising cell-level support.
 
@@ -279,4 +294,66 @@ export function leadIntakeText(reply: LeadIntakeReply): string {
     `Filter them with SQL over the leads view of result_id ${reply.result_id}, then fetch the ones you choose, at most 40 per job.`,
   );
   return parts.join(" ");
+}
+
+export const RECORD_LEAD_BATCH_DESCRIPTION =
+  "Record what sourcesQL fetched in a lead-set batch as a new revision. Statuses come only from the engine's fetch record, never the query's columns. Returns the new result_id; bind it for the next batch.";
+
+export type LeadRecordReply = {
+  lead_set_id: string;
+  revision: number;
+  result_id: string;
+  batch_result_id: string;
+  fetched: number;
+  failed: number;
+  failure_counts: Record<string, number>;
+  not_fetched: number;
+  ignored: number;
+  totals: { leads: number; fetched: number; failed: number; pending: number };
+};
+
+/** The record reply as the agent reads it. Plain text from fixed words and the engine's own counts. */
+export function leadRecordText(reply: LeadRecordReply): string {
+  const reasons = Object.entries(reply.failure_counts)
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .map(([code, n]) => `${n} ${code}`)
+    .join(", ");
+  const { totals } = reply;
+  const parts = [
+    `Recorded batch ${reply.batch_result_id} in lead set ${reply.lead_set_id}, revision ${reply.revision}, result_id ${reply.result_id}.`,
+    `${count(reply.fetched, "lead was", "leads were")} fetched, ${reply.failed} failed${reasons ? ` (${reasons})` : ""}, ${reply.not_fetched} ${reply.not_fetched === 1 ? "was" : "were"} not fetched.`,
+  ];
+  if (reply.ignored)
+    parts.push(
+      `${count(reply.ignored, "fetched page was", "fetched pages were")} not ${reply.ignored === 1 ? "a lead" : "leads"} in this set and ${reply.ignored === 1 ? "was" : "were"} ignored.`,
+    );
+  parts.push(
+    `The lead set now has ${count(totals.leads, "lead")}, ${totals.fetched} fetched, ${totals.failed} failed, ${totals.pending} pending.`,
+    `Bind result_id ${reply.result_id} for the next batch and select lead_status = 'pending'. Ask the user before running it.`,
+  );
+  return parts.join(" ");
+}
+
+/** The sentence appended to a query reply that read a lead set and fetched pages. */
+export function leadBatchText(attempted: number, resultId: string): string {
+  return [
+    `Fetched ${attempted} of ${attempted} selected ${attempted === 1 ? "lead" : "leads"}.`,
+    `Next, call record_lead_batch with this result_id, ${resultId}, so the lead set shows what was fetched.`,
+    "Then ask the user whether to continue before running the next batch.",
+    "A next batch is a new query with a new request_id on the newest lead set revision; it picks up the leads that are still pending.",
+  ].join(" ");
+}
+
+/** What follows an over-cap lead batch error: nothing was fetched or recorded. */
+export const LEAD_BATCH_OVER_CAP_TEXT =
+  "This batch selected more leads than the 40 pages one job can fetch, so it was stopped and nothing was recorded. The lead set is unchanged and its leads are still pending. Run the batch again with LIMIT 40 or fewer on lead_status = 'pending'. Ask the user before running further batches.";
+
+/** The top line of a lead-set read or open: where the set stands. */
+export function leadQueueLine(leadSet: {
+  leadSetId: string;
+  revision: number;
+  totals: { leads: number; fetched: number; failed: number; pending: number };
+}): string {
+  const { totals } = leadSet;
+  return `Lead set ${leadSet.leadSetId}, revision ${leadSet.revision}: ${count(totals.leads, "lead")}, ${totals.fetched} fetched, ${totals.failed} failed, ${totals.pending} pending.`;
 }

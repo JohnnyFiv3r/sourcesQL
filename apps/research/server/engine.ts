@@ -8,6 +8,7 @@ import { curatedCitationsSchema } from "./citation-contract.js";
 import { queryFeedbackSchema } from "../src/query-feedback.js";
 import {
   snapshotSchema,
+  leadSetSchema,
   webUrl,
   id,
   key,
@@ -41,6 +42,7 @@ export type EngineResult = {
   cell_diagnostics?: Record<string, unknown>[];
   research_quality?: Record<string, unknown>;
   query_feedback?: unknown;
+  provenance?: Record<string, unknown>;
   receipt: Record<string, unknown>;
   next_offset: number | null;
 };
@@ -564,6 +566,26 @@ function safeResearchQuality(
   return parsed.success ? parsed.data : undefined;
 }
 
+/** The lead-set marker of an engine leads result, or nothing for any other result. */
+export function leadSetMarker(result: EngineResult): Snapshot["leadSet"] {
+  const provenance = result.provenance;
+  const totals = provenance?.totals as Record<string, unknown> | undefined;
+  if (
+    provenance?.kind !== "lead_set" ||
+    provenance.table !== "leads" ||
+    typeof provenance.lead_set_id !== "string" ||
+    typeof provenance.revision !== "number" ||
+    !totals
+  )
+    return undefined;
+  const parsed = leadSetSchema.safeParse({
+    leadSetId: provenance.lead_set_id,
+    revision: provenance.revision,
+    totals,
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function resultSnapshot(
   result: EngineResult,
   reference: ResultReference,
@@ -761,6 +783,7 @@ export function resultSnapshot(
       contentSha256: result.content_sha256,
     },
     previewOffset: 0,
+    ...(leadSetMarker(result) ? { leadSet: leadSetMarker(result) } : {}),
     ...(quality ? { researchQuality: quality } : {}),
     ...(feedback.success ? { queryFeedback: feedback.data } : {}),
   };

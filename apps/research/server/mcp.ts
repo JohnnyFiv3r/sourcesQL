@@ -13,6 +13,7 @@ import {
   withEngineReadScope,
   boundedPreview,
   resultSnapshot,
+  leadSetMarker,
   EngineCallError,
   localJobsUnavailable,
   withLocalCallBudget,
@@ -100,6 +101,12 @@ import {
 import {
   ADD_RESEARCH_LEADS_DESCRIPTION,
   leadIntakeText,
+  leadRecordText,
+  leadBatchText,
+  leadQueueLine,
+  LEAD_BATCH_OVER_CAP_TEXT,
+  RECORD_LEAD_BATCH_DESCRIPTION,
+  type LeadRecordReply,
   type LeadIntakeReply,
   serverInstructions,
   queryDescription,
@@ -442,7 +449,7 @@ export function createServer(
       content: [
         {
           type: "text",
-          text: `${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.${hostSentence(fullView.snapshot, fullView.acceptedSources)}`,
+          text: `${view.snapshot.leadSet ? `${leadQueueLine(view.snapshot.leadSet)}\n` : ""}${view.displayTitle}: ${view.preview!.total} records (${view.snapshot.rows.length} in this preview), captured ${view.snapshot.capturedAt}; ${view.amendments.length} local corrections. Saved snapshot_id: ${view.snapshot.id}. Source result ${originForSnapshot(view.snapshot).engine}:${originForSnapshot(view.snapshot).resultId}. Use find_research_row with this snapshot_id to list or search canonical row IDs for expansion from chat; no UI selection is required. Original observations and amendments are preserved; refreshed evidence, when present, is stored in linked tables.${hostSentence(fullView.snapshot, fullView.acceptedSources)}`,
         },
       ],
       structuredContent: view,
@@ -2466,7 +2473,23 @@ export function createServer(
           amendment_revision: materialization.amendment_revision,
         };
       }
-      const result = await engine.call(method, { ...args, inputs });
+      const readsLeadSet = Object.values(args.inputs).some(
+        (pin) => pin.view === "leads" || pin.view === "hits",
+      );
+      let result: Record<string, unknown>;
+      try {
+        result = await engine.call(method, { ...args, inputs });
+      } catch (error) {
+        // A batch over the fetch cap is refused whole: say so, and that nothing was recorded.
+        if (
+          method === "query" &&
+          readsLeadSet &&
+          error instanceof Error &&
+          /^budget_exhausted: .*max_fetches/.test(error.message)
+        )
+          throw new Error(`${error.message} ${LEAD_BATCH_OVER_CAP_TEXT}`);
+        throw error;
+      }
       if (Object.hasOwn(result, "job_id")) return jobResult(result);
       if (method === "query" && typeof result.result_id === "string") {
         // Fail safe: without a classification on the query's own page, read it.
@@ -2481,7 +2504,23 @@ export function createServer(
               });
         authorizeSnapshot(resultSnapshotForAccess(page), options.access);
       }
-      return engineResult(result);
+      const reply = engineResult(result);
+      const attempted = Array.isArray(result.fetch_outcomes)
+        ? result.fetch_outcomes.length
+        : 0;
+      // A lead-set batch tells the agent what to do next; the engine's fetch record, not
+      // the query's columns, decides that pages were fetched.
+      if (
+        method === "query" &&
+        readsLeadSet &&
+        attempted > 0 &&
+        typeof result.result_id === "string"
+      )
+        reply.content.push({
+          type: "text",
+          text: leadBatchText(attempted, result.result_id),
+        });
+      return reply;
     };
     tools.registerTool(
       "sourcesql_materialize_research",
@@ -2756,7 +2795,7 @@ export function createServer(
               args,
             ))) as EngineResult & Record<string, unknown>;
           authorizeSnapshot(resultSnapshotForAccess(result), options.access);
-          return projected
+          const page = projected
             ? engineResult(
                 resultInspectionPage(
                   sanitizedResult(result) as EngineResult &
@@ -2766,8 +2805,42 @@ export function createServer(
                 true,
               )
             : engineResult(result);
+          const queue = leadSetMarker(result);
+          if (queue)
+            page.content.unshift({ type: "text", text: leadQueueLine(queue) });
+          return page;
         }),
     );
+    if (engine.supportsLeadSets === true)
+      tools.registerTool(
+        "record_lead_batch",
+        {
+          description: RECORD_LEAD_BATCH_DESCRIPTION,
+          inputSchema: z
+            .object({
+              request_id: z.string().uuid(),
+              lead_set_id: z.string().uuid(),
+              batch_result_id: z.string().max(128),
+            })
+            .strict(),
+          annotations: {
+            readOnlyHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        (args) =>
+          safeShort(async () => {
+            const reply = await engine.call<LeadRecordReply>(
+              "record_lead_batch",
+              args,
+            );
+            return {
+              content: [{ type: "text", text: leadRecordText(reply) }],
+              structuredContent: reply as unknown as Record<string, unknown>,
+            };
+          }),
+      );
     if (engine.supportsLeadSets === true)
       tools.registerTool(
         "add_research_leads",

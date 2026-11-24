@@ -410,6 +410,7 @@ test("MCP stdio handshake, UI resource, correction, import and follow-up round t
         "get_research_request",
         "import_research",
         "open_research",
+        "record_lead_batch",
         "refresh_research",
         "remove_research",
         "rename_research",

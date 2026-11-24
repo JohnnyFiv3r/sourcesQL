@@ -22,7 +22,7 @@ const JOB_TOOLS = [
 const CONFIGURATIONS = [
   { name: "local", jobs: false, leads: false, count: 36 },
   { name: "hosted", jobs: true, leads: false, count: 39 },
-  { name: "local with lead sets", jobs: false, leads: true, count: 37 },
+  { name: "local with lead sets", jobs: false, leads: true, count: 38 },
 ] as const;
 
 async function listTools(jobs: boolean, leads = false) {
@@ -57,11 +57,9 @@ for (const { name, jobs, leads, count } of CONFIGURATIONS) {
   test(`the ${name} tool list keeps its names and uses no $ref or $defs`, async () => {
     const tools = await listTools(jobs, leads);
     assert.equal(tools.length, count);
-    assert.equal(
-      tools.some((tool) => tool.name === "add_research_leads"),
-      leads,
-    );
     const listed = tools.map((tool) => tool.name);
+    for (const lead of ["add_research_leads", "record_lead_batch"])
+      assert.equal(listed.includes(lead), leads, lead);
     for (const job of JOB_TOOLS) assert.equal(listed.includes(job), jobs, job);
     const text = JSON.stringify(tools);
     assert.ok(!text.includes('"$ref"'), "tool schemas must not use $ref");
