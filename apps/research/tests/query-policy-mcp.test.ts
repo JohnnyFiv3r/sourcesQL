@@ -67,14 +67,7 @@ test("MCP defaults to retained partial work and forwards an explicit strict choi
       received.map((request) => request.partial_policy),
       ["retain_partial", "strict", "retain_partial"],
     );
-    assert.deepEqual(calls, [
-      "capabilities",
-      "query",
-      "capabilities",
-      "query",
-      "capabilities",
-      "query",
-    ]);
+    assert.deepEqual(calls, ["query", "query", "query"]);
   } finally {
     await client.close();
     await server.close();

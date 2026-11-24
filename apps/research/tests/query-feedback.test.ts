@@ -266,7 +266,7 @@ test("MCP forwards independent intent and returns mismatch feedback without extr
       false,
     );
     assert.deepEqual(received[0].answer_intent, feedback.answer_intent);
-    assert.deepEqual(calls, ["capabilities", "query", "read_result"]);
+    assert.deepEqual(calls, ["query", "read_result"]);
     const inspected = await client.callTool({
       name: "sourcesql_inspect_evidence",
       arguments: { result_id: "wq_feedback" },
