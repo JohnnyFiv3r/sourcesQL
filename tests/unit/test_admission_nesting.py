@@ -204,3 +204,35 @@ def test_too_deep_declared_input_type_is_refused_at_admission():
     with pytest.raises(SourcesQLError) as error:
         admit("SELECT c FROM input.t", input_schemas=schemas)
     assert (error.value.code, error.value.safe_message) == ("invalid_output", TYPE_REFUSAL)
+
+
+@pytest.mark.parametrize(
+    ("digits", "message"),
+    [
+        (4000, "Logical type is outside the installed allowlist"),
+        (5000, "Invalid logical type"),
+        (60000, "Invalid logical type"),
+    ],
+)
+def test_decimal_with_a_huge_precision_is_refused_not_a_conversion_error(digits, message):
+    with pytest.raises(SourcesQLError) as error:
+        validate_type("DECIMAL(" + "9" * digits + ", 2)")
+    assert (error.value.code, error.value.safe_message) == ("invalid_output", message)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "DECIMAL(10," + "9" * 8000 + ")",
+        "DECIMAL(1e" + "9" * 5000 + ")",
+        "STRUCT(" + ", ".join(f"f{i} INTEGER" for i in range(5000)) + ")",
+        "X" * 60000,
+        "é" * 5000,
+        "DECIMAL('" + "9" * 5000 + "')",
+    ],
+)
+def test_over_long_declared_types_are_always_refused_with_a_classified_error(declared):
+    with pytest.raises(SourcesQLError) as error:
+        validate_type(declared)
+    assert error.value.code == "invalid_output"
+    assert_clean(error.value.safe_message)
