@@ -286,7 +286,9 @@ def test_a_thousand_lead_set_filters_fast(tmp_path):
             best = elapsed if best is None else min(best, elapsed)
             if elapsed < ceiling:
                 break
-        assert best < ceiling, f"{name} query: best of {attempts} took {best:.3f}s, ceiling {ceiling}s"
+        assert best < ceiling, (
+            f"{name} query: best of {attempts} took {best:.3f}s, ceiling {ceiling}s"
+        )
     counted = engine.query(
         query="SELECT count(*) AS n FROM input.h", inputs={"h": lead_view(reply, "hits")}
     )
