@@ -34,8 +34,9 @@ checked instead. There is no coverage threshold; the figures are a baseline,
 not a gate.
 
 The Python command splits the test files across up to two processes and combines
-their data, because tracing makes one process slow. `COVERAGE_SHARDS=1` runs it in
-one process.
+their data, because tracing makes one process slow. A run with pytest arguments (for
+example `-k` or `--junitxml`) or `PYTEST_ADDOPTS` set, or with `COVERAGE_SHARDS=1`, runs in
+one process, so pytest's options behave as they do in a plain run.
 
 ## Main branch policy
 

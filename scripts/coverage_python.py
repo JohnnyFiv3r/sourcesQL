@@ -1,7 +1,7 @@
 """Run the Python and Flight suites under coverage and print per-module figures.
 
 Run from the repository root: uv run --frozen python scripts/coverage_python.py
-Extra arguments are added to the pytest command line. The exit status is pytest's; a low figure never
+Extra arguments are added to the pytest command line, and then the suite runs in one process. The exit status is pytest's; a low figure never
 fails the run (docs/coverage.md).
 """
 
@@ -14,7 +14,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / "coverage" / "python" / "coverage.json"
@@ -72,40 +71,16 @@ def shards(count: int) -> list[list[str]]:
     return [bucket for bucket in buckets if bucket]
 
 
-def take_junit_path(extra: list[str]) -> tuple[list[str], str | None]:
-    """Split a --junitxml option out of the pytest arguments, so each shard can write its own file."""
-    rest: list[str] = []
-    path = None
-    args = iter(extra)
-    for arg in args:
-        if arg in ("--junitxml", "--junit-xml"):
-            path = next(args, None)
-        elif arg.startswith(("--junitxml=", "--junit-xml=")):
-            path = arg.partition("=")[2]
-        else:
-            rest.append(arg)
-    return rest, path
+def shard_count_for(extra: list[str]) -> int:
+    """Shards for this run: one whenever pytest options could change what a shard would do.
 
-
-def merge_junit(parts: list[Path], target: str) -> None:
-    """Write one JUnit report holding every shard's test cases, as a single pytest run would."""
-    merged = ET.Element("testsuite", name="pytest")
-    totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
-    seconds = 0.0
-    for part in parts:
-        if not part.exists():  # a shard that collected nothing writes no report
-            continue
-        for suite in ET.parse(part).getroot().iter("testsuite"):
-            for key in totals:
-                totals[key] += int(suite.get(key, 0))
-            seconds += float(suite.get("time", 0))
-            merged.extend(suite)
-    merged.set("time", f"{seconds:.3f}")
-    for key, value in totals.items():
-        merged.set(key, str(value))
-    root = ET.Element("testsuites")
-    root.append(merged)
-    ET.ElementTree(root).write(target, encoding="utf-8", xml_declaration=True)
+    Options on the command line or in PYTEST_ADDOPTS (a report path, a file pattern, -k, -x) are
+    meant for one pytest run. Handing them to several would write one report from many processes
+    or collect different files than a plain run, so such runs stay single-process.
+    """
+    if extra or os.environ.get("PYTEST_ADDOPTS"):
+        return 1
+    return shard_count()
 
 
 def run_suite(run: list[str], extra: list[str]) -> int:
@@ -113,25 +88,19 @@ def run_suite(run: list[str], extra: list[str]) -> int:
 
     Tracing slows a single process a lot, and the tests do not share state, so the files are
     split across processes whose coverage data is combined afterwards. One shard is the plain
-    single-process run.
+    single-process run, which is also what any run with pytest options gets.
     """
-    count = shard_count()
+    count = shard_count_for(extra)
     subprocess.run([*run, "erase"], cwd=ROOT, check=True)
     if count == 1:
         return subprocess.run(
             [*run, "run", "-m", "pytest", "-q", *DEFAULT_SUITE, *extra], cwd=ROOT
         ).returncode
-    extra, junit = take_junit_path(extra)
     with tempfile.TemporaryDirectory() as scratch:
         running = []
-        parts = []
         for index, files in enumerate(shards(count)):
             log = open(Path(scratch) / f"shard{index}.log", "w+")
-            part = Path(scratch) / f"shard{index}.xml"
-            parts.append(part)
-            command = [*run, "run", "-p", "-m", "pytest", "-q", *files, *extra]
-            if junit:
-                command += ["--junitxml", str(part)]
+            command = [*run, "run", "-p", "-m", "pytest", "-q", *files]
             running.append((subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=log), log))
         codes = []
         for index, (process, log) in enumerate(running):
@@ -140,8 +109,6 @@ def run_suite(run: list[str], extra: list[str]) -> int:
             print(f"--- shard {index + 1} of {len(running)} (exit {codes[-1]}) ---")
             print(log.read().rstrip())
             log.close()
-        if junit:
-            merge_junit(parts, junit)
     subprocess.run([*run, "combine", "-q"], cwd=ROOT, check=True)
     # Exit status 5 means a shard collected nothing, which `-k` can cause; it is not a failure.
     failed = [code for code in codes if code not in (0, 5)]
