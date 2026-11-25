@@ -76,6 +76,8 @@ The app decorates column labels and source addresses without rewriting data. Mis
 
 Every path starts in **fixture mode**. Live search and model calls require credentials, an enabled trusted profile and explicit execution budgets.
 
+For a live result from a source checkout, follow [First live result (local, about 9 steps)](docs/first-live-result.md).
+
 ### Local Docker
 
 Clone this repository and run from its root with Docker running:
@@ -170,6 +172,8 @@ Connect ChatGPT or Claude to the stable HTTPS `/mcp` URL using OAuth. Both have 
 Eligible personal, non-commercial adopters can choose Vercel Hobby; no Pro-only feature is required by this configuration. MotherDuck, search and model consumption are separate. Included allowances may cover light use, but application budgets do not guarantee that a platform account with billing enabled stops before overage.
 
 ## Configure live search and models
+
+For a first live result from a source checkout, follow [First live result (local, about 9 steps)](docs/first-live-result.md).
 
 Start with the [provider guide](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/docs/providers.md) and [profile template](https://github.com/JohnnyFiv3r/sourcesQL/blob/main/examples/profiles.example.json). Keep real configuration and secrets outside version control.
 

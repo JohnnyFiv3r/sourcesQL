@@ -6,6 +6,17 @@ with the release pinned to its reviewed package hashes and tested container.
 See the [0.2.3 release](https://github.com/JohnnyFiv3r/sourcesQL/releases/tag/v0.2.3)
 and [release notes](docs/releases/0.2.3.md).
 
+## Unreleased local first-live-result recipe
+
+[First live result (local)](docs/first-live-result.md) is a 9-step route from a clone
+to a live cited result, with a live profile template and MCP config. It is documented,
+not live-qualified: no run with a real provider key has been made. The bridge now starts
+in fixture mode when `SOURCESQL_PROFILES_FILE` names a file that does not exist yet and
+reports `profiles_file` in capabilities; capabilities profiles show `allow_live` and
+`approved_cost_microusd`; the missing search key and missing fetch hosts refusals say
+what to set; and the served guidance tells agents to put a per-query budget on live
+queries.
+
 ## Unreleased host-found URL research
 
 A host agent can search with its own tool and have sourcesQL fetch the URLs, with

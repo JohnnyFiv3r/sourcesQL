@@ -296,6 +296,18 @@ class ProviderRegistry:
         if "WEB_SEARCH" in operators and not self.search_provider.capabilities().get(
             "configured", True
         ):
+            key_env = self.profile.get("api_key_env")
+            if (
+                self.mode == "live"
+                and isinstance(key_env, str)
+                and key_env
+                and not self.profile.get("api_key")
+            ):
+                raise SourcesQLError(
+                    "provider_unavailable",
+                    refusal("search_key_missing", env=key_env),
+                    "acquisition",
+                )
             raise SourcesQLError(
                 "provider_unavailable",
                 "No search provider is configured for this profile, so WEB_SEARCH cannot run. "
@@ -324,9 +336,7 @@ class ProviderRegistry:
             and not self.profile.get("allowed_source_hosts")
             and self.profile.get("allow_public_source_hosts") is not True
         ):
-            raise SourcesQLError(
-                "unauthorized", "Live fetch requires permitted source hosts", "acquisition"
-            )
+            raise SourcesQLError("unauthorized", refusal("fetch_hosts_missing"), "acquisition")
 
     def search(self, queries: list[str], options: dict, budget: Budget) -> list[dict]:
         self._authorize(budget)
@@ -456,9 +466,7 @@ class ProviderRegistry:
             allowed = self.profile.get("allowed_source_hosts")
             public_sources = self.profile.get("allow_public_source_hosts") is True
             if not public_sources and (not isinstance(allowed, list) or not allowed):
-                raise SourcesQLError(
-                    "unauthorized", "Live fetch requires permitted source hosts", "acquisition"
-                )
+                raise SourcesQLError("unauthorized", refusal("fetch_hosts_missing"), "acquisition")
             if isinstance(self.fetch_provider, DeepSeekProvider):
                 prepared_fetch = self.fetch_provider.prepare_fetch(
                     urls, options, allowed_hosts=None if public_sources else allowed
