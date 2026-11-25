@@ -7,6 +7,22 @@ export const key = z
   .regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/)
   .refine((v) => !["constructor", "prototype", "__proto__"].includes(v));
 export const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
+
+export const leadSetSchema = z
+  .object({
+    leadSetId: id,
+    revision: z.number().int().positive(),
+    totals: z
+      .object({
+        leads: z.number().int().nonnegative(),
+        fetched: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        pending: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const scalarCell = z.union([
   z.string().max(8000),
   z.number().finite(),
@@ -310,6 +326,13 @@ export const v2SnapshotSchema = z
       })
       .strict()
       .optional(),
+    // Set only from an engine lead-set result; a host cannot supply it, since a dataRef
+    // snapshot is replaced by the engine's own copy when it is saved.
+    leadSet: leadSetSchema.optional(),
+    // True when the engine recorded that this result holds lead-set data: its SQL read a lead
+    // set, or used a result that did. A bound but unused lead input does not set it.
+    // Replaced by the engine's own copy when saved.
+    leadDerived: z.boolean().optional(),
     previewOffset: z.number().int().nonnegative().default(0),
     researchQuality: researchQualitySchema.optional(),
     queryFeedback: queryFeedbackSchema.optional(),
@@ -417,6 +440,12 @@ export type Snapshot = {
     verificationNote: string;
   }[];
   dataRef?: { resultId: string; contentSha256: string };
+  leadDerived?: boolean;
+  leadSet?: {
+    leadSetId: string;
+    revision: number;
+    totals: { leads: number; fetched: number; failed: number; pending: number };
+  };
   previewOffset?: number;
   researchQuality?: ResearchQuality;
   queryFeedback?: QueryFeedback;

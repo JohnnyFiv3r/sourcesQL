@@ -1994,3 +1994,49 @@ label .input {
     padding-inline: 6px;
   }
 }
+
+.column-assertion {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  margin-top: 2px;
+}
+.lead-set-banner {
+  position: sticky;
+  left: 0;
+  width: 100%;
+  padding: 6px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+.lead-set-banner p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.lead-set-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+}
+.lead-set-note span {
+  flex: 1;
+  min-width: 0;
+}
+.lead-set-dismiss {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px;
+}
+.lead-failure-detail {
+  margin: 0 12px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}

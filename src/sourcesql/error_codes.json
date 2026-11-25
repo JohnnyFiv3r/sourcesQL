@@ -177,6 +177,31 @@
       "code": "invalid_request",
       "message": "This request ID was already used with different leads",
       "hint": "Use a new request ID, or resend the original leads unchanged."
+    },
+    "lead_batch_nothing_fetched": {
+      "code": "invalid_request",
+      "message": "This result fetched no pages, so there is nothing to record",
+      "hint": "Fetch leads with WEB_FETCH first."
+    },
+    "lead_batch_other_set": {
+      "code": "invalid_request",
+      "message": "This result did not read this lead set, so its fetches cannot be recorded here",
+      "hint": "Run the batch over the leads view of this lead set."
+    },
+    "lead_batch_no_match": {
+      "code": "invalid_request",
+      "message": "None of the pages this result fetched are leads in this lead set",
+      "hint": "Fetch URLs from the leads view of this lead set."
+    },
+    "lead_batch_fetch_order": {
+      "code": "invalid_query",
+      "message": "In a lead batch, put ORDER BY and LIMIT in a CTE before WEB_FETCH",
+      "hint": "An ORDER BY or LIMIT in the same SELECT as WEB_FETCH does not choose which pages are fetched."
+    },
+    "lead_record_reused": {
+      "code": "invalid_request",
+      "message": "This request ID was already used with a different batch",
+      "hint": "Use a new request ID."
     }
   }
 }
