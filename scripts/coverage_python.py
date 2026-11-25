@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / "coverage" / "python" / "coverage.json"
@@ -52,10 +53,14 @@ def shard_count() -> int:
 
 def shards(count: int) -> list[list[str]]:
     """Test files dealt to the shards, slowest first, each to the lightest shard so far."""
+    # Both of pytest's default file patterns, so sharding finds what a plain run finds.
     files = sorted(
-        str(path.relative_to(ROOT))
-        for suite in DEFAULT_SUITE
-        for path in (ROOT / suite).rglob("test_*.py")
+        {
+            str(path.relative_to(ROOT))
+            for suite in DEFAULT_SUITE
+            for pattern in ("test_*.py", "*_test.py")
+            for path in (ROOT / suite).rglob(pattern)
+        }
     )
     weight = {name: SLOW_FILE_SECONDS.get(name, 1) for name in files}
     buckets: list[list[str]] = [[] for _ in range(count)]
@@ -65,6 +70,42 @@ def shards(count: int) -> list[list[str]]:
         buckets[lightest].append(name)
         loads[lightest] += weight[name]
     return [bucket for bucket in buckets if bucket]
+
+
+def take_junit_path(extra: list[str]) -> tuple[list[str], str | None]:
+    """Split a --junitxml option out of the pytest arguments, so each shard can write its own file."""
+    rest: list[str] = []
+    path = None
+    args = iter(extra)
+    for arg in args:
+        if arg in ("--junitxml", "--junit-xml"):
+            path = next(args, None)
+        elif arg.startswith(("--junitxml=", "--junit-xml=")):
+            path = arg.partition("=")[2]
+        else:
+            rest.append(arg)
+    return rest, path
+
+
+def merge_junit(parts: list[Path], target: str) -> None:
+    """Write one JUnit report holding every shard's test cases, as a single pytest run would."""
+    merged = ET.Element("testsuite", name="pytest")
+    totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    seconds = 0.0
+    for part in parts:
+        if not part.exists():  # a shard that collected nothing writes no report
+            continue
+        for suite in ET.parse(part).getroot().iter("testsuite"):
+            for key in totals:
+                totals[key] += int(suite.get(key, 0))
+            seconds += float(suite.get("time", 0))
+            merged.extend(suite)
+    merged.set("time", f"{seconds:.3f}")
+    for key, value in totals.items():
+        merged.set(key, str(value))
+    root = ET.Element("testsuites")
+    root.append(merged)
+    ET.ElementTree(root).write(target, encoding="utf-8", xml_declaration=True)
 
 
 def run_suite(run: list[str], extra: list[str]) -> int:
@@ -80,11 +121,17 @@ def run_suite(run: list[str], extra: list[str]) -> int:
         return subprocess.run(
             [*run, "run", "-m", "pytest", "-q", *DEFAULT_SUITE, *extra], cwd=ROOT
         ).returncode
+    extra, junit = take_junit_path(extra)
     with tempfile.TemporaryDirectory() as scratch:
         running = []
+        parts = []
         for index, files in enumerate(shards(count)):
             log = open(Path(scratch) / f"shard{index}.log", "w+")
+            part = Path(scratch) / f"shard{index}.xml"
+            parts.append(part)
             command = [*run, "run", "-p", "-m", "pytest", "-q", *files, *extra]
+            if junit:
+                command += ["--junitxml", str(part)]
             running.append((subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=log), log))
         codes = []
         for index, (process, log) in enumerate(running):
@@ -93,6 +140,8 @@ def run_suite(run: list[str], extra: list[str]) -> int:
             print(f"--- shard {index + 1} of {len(running)} (exit {codes[-1]}) ---")
             print(log.read().rstrip())
             log.close()
+        if junit:
+            merge_junit(parts, junit)
     subprocess.run([*run, "combine", "-q"], cwd=ROOT, check=True)
     # Exit status 5 means a shard collected nothing, which `-k` can cause; it is not a failure.
     failed = [code for code in codes if code not in (0, 5)]
