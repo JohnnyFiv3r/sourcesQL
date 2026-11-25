@@ -226,6 +226,14 @@ def test_the_other_refusals_raise_the_code_the_table_names(engine):
             lambda: Budget({"max_fetches": 0}).reserve("fetches", limit="max_fetches")
         ),
         "missing_cost_budget": refused(lambda: live_registry()._authorize(Budget())),
+        "search_key_missing": refused(
+            lambda: live_registry(api_key="", api_key_env="SYNTHETIC_UNSET_KEY").preflight(
+                ["WEB_SEARCH"], Budget({"max_cost_microusd": 1})
+            )
+        ),
+        "fetch_hosts_missing": refused(
+            lambda: live_registry().preflight(["WEB_FETCH"], Budget({"max_cost_microusd": 1}))
+        ),
     }
     for refusal_id, error in codes.items():
         assert error.code == table[refusal_id]["code"], refusal_id

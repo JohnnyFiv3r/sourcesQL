@@ -1,0 +1,34 @@
+{
+  "fixture": {
+    "mode": "fixture",
+    "provider": "fixture",
+    "fixture_version": "t1"
+  },
+  "live-search": {
+    "mode": "live",
+    "provider": "exa",
+    "api_key_env": "EXA_API_KEY",
+    "allow_live": false,
+    "approved_cost_microusd": 0,
+    "metering_policy": "estimated",
+    "allowed_source_hosts": [],
+    "model": {
+      "name": "SET_APPROVED_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY",
+      "retries": 0
+    }
+  },
+  "live-fetch": {
+    "mode": "live",
+    "provider": "exa",
+    "allow_live": false,
+    "approved_cost_microusd": 0,
+    "metering_policy": "estimated",
+    "allowed_source_hosts": [],
+    "model": {
+      "name": "SET_APPROVED_MODEL_NAME",
+      "api_key_env": "OPENAI_API_KEY",
+      "retries": 0
+    }
+  }
+}
