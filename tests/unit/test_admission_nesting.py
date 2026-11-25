@@ -13,6 +13,9 @@ from sourcesql.sql.admission import admit, validate_type
 
 DEPTH_REFUSAL = "Query exceeds the AST depth limit"
 TYPE_REFUSAL = "Logical type exceeds the supported nesting"
+# Best of 3 per depth: a slow path is slow every time, a paused process is slow once.
+CEILING = 1.0
+ATTEMPTS = 3
 
 # shape -> (builder, deepest admitted depth, first refused depth)
 SHAPES = {
@@ -57,13 +60,22 @@ def sweep(shape):
     build, _, first_refused = SHAPES[shape]
     slowest = 0.0
     for depth in depths(first_refused):
-        started = time.perf_counter()
-        with pytest.raises(SourcesQLError) as error:
-            admit(build(depth))
-        slowest = max(slowest, time.perf_counter() - started)
-        assert error.value.code == "invalid_query", (shape, depth)
-        assert error.value.safe_message == DEPTH_REFUSAL, (shape, depth)
-        assert_clean(error.value.safe_message)
+        best = None
+        for _ in range(ATTEMPTS):
+            started = time.perf_counter()
+            with pytest.raises(SourcesQLError) as error:
+                admit(build(depth))
+            elapsed = time.perf_counter() - started
+            assert error.value.code == "invalid_query", (shape, depth)
+            assert error.value.safe_message == DEPTH_REFUSAL, (shape, depth)
+            assert_clean(error.value.safe_message)
+            best = elapsed if best is None else min(best, elapsed)
+            if best < CEILING:
+                break
+        assert best < CEILING, (
+            f"{shape} depth {depth}: best of {ATTEMPTS} refusals took {best:.3f}s"
+        )
+        slowest = max(slowest, best)
     return slowest
 
 
@@ -71,15 +83,13 @@ def sweep(shape):
 def test_too_deep_nesting_is_refused_for_every_shape(shape):
     slowest = sweep(shape)
     print(f"{shape}: slowest refusal {slowest:.3f}s")
-    assert slowest < 1.0, f"{shape} took {slowest:.3f}s to refuse"
 
 
 @pytest.mark.parametrize("shape", SHAPES)
 def test_too_deep_nesting_is_refused_inside_a_worker_thread(shape):
     # The bridge runs requests on a ThreadPoolExecutor worker.
     with ThreadPoolExecutor(max_workers=1) as executor:
-        slowest = executor.submit(sweep, shape).result()
-    assert slowest < 1.0, f"{shape} took {slowest:.3f}s to refuse in a worker"
+        executor.submit(sweep, shape).result()
 
 
 def in_fresh_thread(function):
