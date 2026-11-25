@@ -87,6 +87,17 @@ async function discover(
   }
 }
 
+test("served guidance tells a live query to carry a per-query budget within the approved amount", () => {
+  for (const rule of [
+    /every sourcesql_query must carry budgets\.max_cost_microusd/,
+    /no larger than the profile's approved amount shown in sourcesql_capabilities/,
+    /ask for one rather than choosing it/,
+    /never raise the profile's own approved amount/,
+  ]) {
+    assert.match(SOURCESQL_SERVER_INSTRUCTIONS, rule);
+  }
+});
+
 test("MCP initialize exposes the research workflow before any tool or provider is called", async () => {
   const wire = await discover();
   assert.equal(wire.instructions, SOURCESQL_SERVER_INSTRUCTIONS);
