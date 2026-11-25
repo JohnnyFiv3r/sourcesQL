@@ -11,11 +11,13 @@ from contextlib import contextmanager
 import re
 import sqlite3
 import threading
+import time
 from uuid import uuid4
 
 import duckdb
 import pytest
 
+from sourcesql import contracts
 from sourcesql.contracts import Column, SourcesQLError, Table, canonical, digest
 from sourcesql.engine import Engine
 from sourcesql.execution.worker_process import evaluate
@@ -478,9 +480,17 @@ def test_recovery_tolerates_continuation_publication_between_key_page_and_payloa
     assert stage_bytes(store) == 0
 
 
+# Largest gap between stage finishes: ~22 s under 3 busy loops per CPU, from the start to the first
+# finish (setup); 120 s is about 5x that, and a real hang still fails well inside 300 s.
+STALL_SECONDS = 120
+
+
 def test_admitted_null_semantic_query_finishes_more_than_256_stages_without_provider_calls(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
+    # 257 checkpoints take ~45 s idle and 2.5-3x that on a loaded shared machine; the
+    # production 180 s deadline is not what this test checks. The stall watchdog below catches hangs.
+    monkeypatch.setitem(contracts.DEFAULT_LIMITS, "dispatch_deadline_seconds", 360)
     engine = Engine(tmp_path / "wide_engine", worker=reference_worker)
     saved = engine.import_table(
         [{"key": "content"}], [{"content": None}], data_classification="synthetic_fixture"
@@ -492,11 +502,42 @@ def test_admitted_null_semantic_query_finishes_more_than_256_stages_without_prov
         f"second AS (SELECT {second} FROM first) "
         "SELECT SEM_EXTRACT(g0, 'field 256') AS result FROM second"
     )
-    result = engine.query(
-        query=query,
-        inputs={"saved": {"result_id": saved["result_id"]}},
-        budgets={"max_model_requests": 0},
-    )
+    progress = {"finished": 0, "last": time.monotonic()}
+    finish = engine.store.stage_finish
+
+    def counting_finish(*args, **kwargs):
+        outcome = finish(*args, **kwargs)
+        progress["finished"] += 1
+        progress["last"] = time.monotonic()
+        return outcome
+
+    monkeypatch.setattr(engine.store, "stage_finish", counting_finish)
+    outcome = {}
+
+    def run_query():
+        try:
+            outcome["result"] = engine.query(
+                query=query,
+                inputs={"saved": {"result_id": saved["result_id"]}},
+                budgets={"max_model_requests": 0},
+            )
+        except BaseException as error:
+            outcome["error"] = error
+
+    # A daemon thread, so a hung stage cannot also hang pytest at interpreter exit.
+    worker = threading.Thread(target=run_query, daemon=True)
+    progress["last"] = time.monotonic()
+    worker.start()
+    while worker.is_alive():
+        worker.join(timeout=1)
+        if time.monotonic() - progress["last"] > STALL_SECONDS:
+            pytest.fail(
+                f"No stage finished for {STALL_SECONDS} s after {progress['finished']} of 257 "
+                "stages: the stage loop is hung."
+            )
+    if "error" in outcome:
+        raise outcome["error"]
+    result = outcome["result"]
     assert result["rows"] == [{"result": None}]
     assert result["receipt"]["counts"].get("model_requests", 0) == 0
     assert result["receipt"]["provider_events"] == []
