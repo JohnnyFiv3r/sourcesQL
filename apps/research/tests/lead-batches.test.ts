@@ -74,13 +74,32 @@ async function connect(t: { after(callback: () => Promise<void>): void }) {
   return { client, engine };
 }
 
+// The SDK's 60 s default is for hosts; the fixture flow does three 40-page fetches and runs
+// on loaded shared machines. 240 s sits above the bridge's own 200 s dispatch limit, so the
+// engine's named timeout normally reports first, and below the spec's 300 s hang bound.
+const FLOW_CALL = { timeout: 240_000 };
+type CallParams = Parameters<Client["callTool"]>[0];
+async function call(
+  client: Client,
+  label: string | undefined,
+  params: CallParams,
+) {
+  if (label === undefined) return client.callTool(params);
+  try {
+    return await client.callTool(params, FLOW_CALL);
+  } catch (error) {
+    throw new Error(`${label} did not return: ${(error as Error).message}`);
+  }
+}
+
 type Intake = { lead_set_id: string; result_id: string };
 async function intake(
   client: Client,
   urls: string[],
   lead_set_id?: string,
+  label?: string,
 ): Promise<Intake> {
-  const result = await client.callTool({
+  const result = await call(client, label, {
     name: "add_research_leads",
     arguments: {
       request_id: randomUUID(),
@@ -93,11 +112,20 @@ async function intake(
       })),
     },
   });
-  assert.notEqual(result.isError, true, textOf(result));
+  assert.notEqual(
+    result.isError,
+    true,
+    `${label ?? "intake"}: ${textOf(result)}`,
+  );
   return result.structuredContent as unknown as Intake;
 }
-const batch = (client: Client, query: string, result_id: string) =>
-  client.callTool({
+const batch = (
+  client: Client,
+  query: string,
+  result_id: string,
+  label?: string,
+) =>
+  call(client, label, {
     name: "sourcesql_query",
     arguments: {
       request_id: randomUUID(),
@@ -436,18 +464,29 @@ test("MCP fixture flow: intake, three batches, three records, final cited table"
       { length: to - from },
       (_, n) => `https://site${from + n}.example/page`,
     );
-  const first = await intake(client, [...known, ...filler(0, 147)]);
-  const second = await intake(client, filler(500, 650), first.lead_set_id);
+  const first = await intake(
+    client,
+    [...known, ...filler(0, 147)],
+    undefined,
+    "intake 1",
+  );
+  const second = await intake(
+    client,
+    filler(500, 650),
+    first.lead_set_id,
+    "intake 2",
+  );
   let head = second.result_id;
   let totals = { leads: 0, fetched: 0, failed: 0, pending: 0 };
-  for (let call = 0; call < 3; call++) {
+  for (let n = 0; n < 3; n++) {
     const ran = await batch(
       client,
       `WITH batch AS (SELECT lead_id, url FROM input.l WHERE lead_status = 'pending' ORDER BY url LIMIT 40) SELECT lead_id, WEB_FETCH(url) AS page FROM batch`,
       head,
+      `batch ${n + 1} query`,
     );
-    assert.notEqual(ran.isError, true, textOf(ran));
-    const recorded = await client.callTool({
+    assert.notEqual(ran.isError, true, `batch ${n + 1} query: ${textOf(ran)}`);
+    const recorded = await call(client, `batch ${n + 1} record`, {
       name: "record_lead_batch",
       arguments: {
         request_id: randomUUID(),
@@ -456,7 +495,11 @@ test("MCP fixture flow: intake, three batches, three records, final cited table"
           .result_id,
       },
     });
-    assert.notEqual(recorded.isError, true, textOf(recorded));
+    assert.notEqual(
+      recorded.isError,
+      true,
+      `batch ${n + 1} record: ${textOf(recorded)}`,
+    );
     const reply = recorded.structuredContent as unknown as LeadRecordReply;
     head = reply.result_id;
     totals = reply.totals;
