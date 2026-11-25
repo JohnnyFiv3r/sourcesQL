@@ -276,6 +276,7 @@ def test_a_thousand_lead_set_filters_fast(tmp_path):
         "row_number": "SELECT url FROM (SELECT url, ROW_NUMBER() OVER (PARTITION BY host_query ORDER BY host_rank) AS n FROM input.l) AS ranked WHERE n = 1",
     }
     # Best of 5 per query: a slow filter path is slow every time, a paused process is slow once.
+    # A query takes 0.5-1.8s on a shared machine against the 2s ceiling, so 3 samples were not enough.
     ceiling, attempts = 2.0, 5
     for name, sql in queries.items():
         best = None
