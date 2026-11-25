@@ -31,11 +31,27 @@ jobs:
           python -m pip install uv==0.13.1
           uv sync --locked --all-extras
       - name: Lint
-        run: uv run --frozen ruff check src tests scripts/qualify_python.py
+        run: uv run --frozen ruff check src tests scripts/qualify_python.py scripts/coverage_python.py
       - name: Type check
         run: uv run --frozen mypy src
       - name: Engine and Flight regressions
-        run: uv run --frozen pytest -q tests hosted/flight/tests
+        run: uv run --frozen python scripts/coverage_python.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: coverage-python
+          path: coverage/python/
+          if-no-files-found: ignore
+      - name: Python coverage summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          totals = json.load(open("coverage/python/coverage.json"))["totals"]
+          lines = round(totals["percent_statements_covered"])
+          branches = round(100 * totals["covered_branches"] / totals["num_branches"])
+          print(f"Python coverage: {lines}% lines, {branches}% branches. Not a gate.")
+          EOF
 
   app:
     name: App and onboarding
@@ -61,6 +77,23 @@ jobs:
           uv sync --locked --all-extras
           npm ci --prefix apps/research
       - name: Build and test app
-        run: npm run check --prefix apps/research
+        run: |
+          npm run build --prefix apps/research
+          npm run coverage --prefix apps/research
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: coverage-app
+          path: apps/research/coverage/
+          if-no-files-found: ignore
+      - name: App coverage summary
+        if: always()
+        run: |
+          {
+            echo "App coverage (not a gate):"
+            echo '```'
+            grep -E '^TOTAL' apps/research/coverage/summary.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Test hosted setup and onboarding
         run: node --test hosted/setup.test.mjs hosted/personal-cloud.test.mjs
