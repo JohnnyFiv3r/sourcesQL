@@ -33,12 +33,12 @@ The approved amount you set in step 5 is a ceiling for authorizing work. It is n
    - Replace `SET_APPROVED_MODEL_NAME` with a model you can use, or delete the `model` block if you will not use `SEM_` functions. *Your choice.*
    - To search with another provider, change `provider` and `api_key_env` on `live-search`; see [providers.md](providers.md) and `examples/profiles.example.json`.
 6. **Set your keys in your shell or the client's `env`, never in the profile file.** `EXA_API_KEY` for search (skip for `live-fetch`) and `OPENAI_API_KEY` for extraction (skip if you will not use `SEM_` functions).
-7. **Add the server to your MCP client.** Copy `apps/research/mcp-config.live.example.json` into your client's configuration, replace `/absolute/path/sourcesql` with your clone path, and fill in the two key values if you do not set them in your shell. Leave them empty otherwise: an empty value counts as no key.
-8. **Restart the client and ask for a result.** Each query on a live profile needs its own budget, so your prompt must give an amount, within the approved amount. *Your choice.* Example:
-   > Use the live-search profile. Find three public pages about X and give me a table with a cited quote for each. Use source_mode allow_excerpt. Spend at most 50,000 micro-USD on the query.
+7. **Add the server to your MCP client.** Copy `apps/research/mcp-config.live.example.json` into your client's configuration and start the client from the clone root; its paths are relative to that folder. If your client cannot start servers there, replace the relative paths with absolute ones. The file has no key entries. If your client passes your shell's environment to the server, the keys from step 6 reach it as they are. If it does not, add `"EXA_API_KEY"` and `"OPENAI_API_KEY"` to the `env` block of your own copy, not the shipped file.
+8. **Restart the client and ask for a result.** Each query on a live profile needs its own budget, so your prompt must give an amount within the approved amount. *Your choice.* Searching and fetching are two asks, so the fetch is explicit. Example:
+   > Use the live-search profile. Search for public pages about X with source_mode allow_excerpt, then fetch the three best pages with WEB_FETCH and give me a table with a cited quote from each fetched page. Spend at most 50,000 micro-USD on each query.
 
-   Ask the agent to call `sourcesql_capabilities` first. It shows each profile's `allow_live`, `approved_cost_microusd` and `profiles_file`.
-9. **Check it is real.** Open the table, choose Sources, and confirm each cited quote is shown with its page. The receipt should say `mode: live` and evidence greater than 0.
+   Ask the agent to call `sourcesql_capabilities` first. Its reply says at the top level whether `profiles_file` is `not_set`, `missing` or `loaded`, and lists each profile's `allow_live` and `approved_cost_microusd`.
+9. **Check it is real.** Open the saved table and click a cited cell: it shows a **Visit source** link to the page. Ask the agent to read the result's receipt: `data_classification` should be `public_web`, not `synthetic_fixture`, and `counts.fetches` should be above 0.
 
 The recipe is 9 numbered actions. The personal-cloud route is about 10 steps over a longer guide, with three accounts.
 

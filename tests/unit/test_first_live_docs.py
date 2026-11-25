@@ -36,11 +36,15 @@ def test_recipe_is_labelled_not_live_qualified():
     assert "documented, not live-qualified" in RECIPE
 
 
-def test_live_mcp_config_holds_no_key_values_and_points_at_the_profiles_file():
+def test_live_mcp_config_has_no_key_entries_and_points_at_the_profiles_file():
     config = json.loads((ROOT / "apps" / "research" / "mcp-config.live.example.json").read_text())
     env = config["mcpServers"]["sourcesql-research"]["env"]
-    keys = [name for name in env if name.endswith("_API_KEY")]
-    assert keys
-    assert all(env[name] == "" for name in keys)
-    assert "SOURCESQL_PROFILES_FILE" in env
+    assert not [name for name in env if name.endswith("_API_KEY")]
+    assert env["SOURCESQL_PROFILES_FILE"] == "local/profiles.json"
     assert env["SOURCESQL_ALLOW_PRIVATE"] == "0"
+
+
+def test_recipe_step_nine_names_fields_a_live_result_really_has():
+    assert "Visit source" in RECIPE
+    assert "data_classification" in RECIPE
+    assert "receipt.mode" not in RECIPE
