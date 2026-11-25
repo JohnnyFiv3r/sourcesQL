@@ -21,9 +21,10 @@ test("the live MCP example holds no key entries, so a key set elsewhere is never
     [],
   );
   assert.equal(config.env.SOURCESQL_ALLOW_PRIVATE, "0");
+  assert.equal(config.env.SOURCESQL_PROFILES_FILE, "local/profiles.json");
 });
 
-test("the live MCP example starts from the clone root in fixture mode before any profile file exists", async (t) => {
+test("the live MCP example starts from the clone root in fixture mode when its profiles file is absent", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "sourcesql-live-config-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
   const transport = new StdioClientTransport({
@@ -37,11 +38,12 @@ test("the live MCP example starts from the clone root in fixture mode before any
         ),
       ),
       ...config.env,
-      // Only the stores move, so the test writes nothing under the clone's local folder.
+      // The stores and the profiles path move, so the test writes nothing under the clone's local
+      // folder and does not depend on a profiles file the reader created in recipe step 4.
       RESEARCH_DATA_DIR: join(scratch, "research"),
       SOURCESQL_DATA_DIR: join(scratch, "engine"),
       SOURCESQL_PYTHON: testPython(),
-      SOURCESQL_PROFILES_FILE: config.env.SOURCESQL_PROFILES_FILE,
+      SOURCESQL_PROFILES_FILE: join(scratch, "no-profiles.json"),
     },
     stderr: "pipe",
   });

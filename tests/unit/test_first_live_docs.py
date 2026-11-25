@@ -48,3 +48,4 @@ def test_recipe_step_nine_names_fields_a_live_result_really_has():
     assert "Visit source" in RECIPE
     assert "data_classification" in RECIPE
     assert "receipt.mode" not in RECIPE
+    assert "fetch ran in an earlier query" in RECIPE

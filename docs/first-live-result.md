@@ -38,7 +38,9 @@ The approved amount you set in step 5 is a ceiling for authorizing work. It is n
    > Use the live-search profile. Search for public pages about X with source_mode allow_excerpt, then fetch the three best pages with WEB_FETCH and give me a table with a cited quote from each fetched page. Spend at most 50,000 micro-USD on each query.
 
    Ask the agent to call `sourcesql_capabilities` first. Its reply says at the top level whether `profiles_file` is `not_set`, `missing` or `loaded`, and lists each profile's `allow_live` and `approved_cost_microusd`.
-9. **Check it is real.** Open the saved table and click a cited cell: it shows a **Visit source** link to the page. Ask the agent to read the result's receipt: `data_classification` should be `public_web`, not `synthetic_fixture`, and `counts.fetches` should be above 0.
+9. **Check it is real.** Check the fetch and the citations separately; they can be different results.
+   - The fetch: ask the agent to read the receipt of the result from your fetch query. `data_classification` should be `public_web`, not `synthetic_fixture`, and `counts.fetches` should be above 0.
+   - The citations: open the saved table and click a cited cell. It shows a **Visit source** link to the page, and the table's evidence list has an item for each cited cell. The final table's own receipt may show no fetch count when the fetch ran in an earlier query, and it does not need a model key.
 
 The recipe is 9 numbered actions. The personal-cloud route is about 10 steps over a longer guide, with three accounts.
 
