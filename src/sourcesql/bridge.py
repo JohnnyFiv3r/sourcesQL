@@ -14,8 +14,15 @@ from sourcesql.engine import Engine, strict_json
 def main():
     profiles = {}
     path = os.environ.get("SOURCESQL_PROFILES_FILE")
+    profiles_file = "not_set"
     if path:
-        profiles = strict_json(Path(path).read_bytes())
+        # A path whose file is not written yet starts in fixture mode; capabilities report it.
+        # Unreadable or malformed files still stop the bridge.
+        try:
+            profiles = strict_json(Path(path).read_bytes())
+            profiles_file = "loaded"
+        except FileNotFoundError:
+            profiles_file = "missing"
     principal = os.environ.get("SOURCESQL_PRINCIPAL", "local-owner")
     store_root = (
         Path(os.environ.get("SOURCESQL_DATA_DIR", "local/engine"))
@@ -28,7 +35,7 @@ def main():
         allow_private=os.environ.get("SOURCESQL_ALLOW_PRIVATE", "1") == "1",
     )
     methods = {
-        "capabilities": engine.capabilities,
+        "capabilities": lambda: {**engine.capabilities(), "profiles_file": profiles_file},
         "lookup_request": engine.lookup_request,
         "query": engine.query,
         "explain": engine.explain,

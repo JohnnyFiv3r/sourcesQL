@@ -151,6 +151,18 @@
       "hint": "Set budgets.max_cost_microusd to a positive amount no larger than the profile's approved amount.",
       "slots": {"approved": "int"}
     },
+    "search_key_missing": {
+      "code": "provider_unavailable",
+      "message": "Search credentials are not configured",
+      "detail": "Set the environment variable {env} for this profile.",
+      "hint": "Or use WEB_FETCH with URLs you already have.",
+      "slots": {"env": "name"}
+    },
+    "fetch_hosts_missing": {
+      "code": "unauthorized",
+      "message": "Live fetch requires permitted source hosts",
+      "hint": "Add the sites to allowed_source_hosts in the profile."
+    },
     "unsupported_construct": {
       "code": "unsupported_query",
       "message": "Unsupported SQL construct: {construct}",

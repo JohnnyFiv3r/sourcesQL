@@ -313,6 +313,12 @@ class Engine:
                         "provider", "fixture" if v.get("mode", "fixture") == "fixture" else "brave"
                     ),
                     "live_qualified": False,
+                    "allow_live": v.get("allow_live") is True,
+                    "approved_cost_microusd": (
+                        v["approved_cost_microusd"]
+                        if type(v.get("approved_cost_microusd")) is int
+                        else 0
+                    ),
                     **route_capabilities(v),
                 }
                 for k, v in self.profiles.items()

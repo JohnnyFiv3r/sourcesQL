@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "sourcesql-research": {
+      "command": "node",
+      "args": [
+        "--import",
+        "/absolute/path/sourcesql/apps/research/node_modules/tsx/dist/loader.mjs",
+        "/absolute/path/sourcesql/apps/research/server/main.ts",
+        "--stdio"
+      ],
+      "env": {
+        "RESEARCH_DATA_DIR": "/absolute/path/sourcesql/local/research",
+        "SOURCESQL_DATA_DIR": "/absolute/path/sourcesql/local/engine",
+        "SOURCESQL_PRINCIPAL": "local-owner",
+        "SOURCESQL_ALLOW_PRIVATE": "0",
+        "SOURCESQL_PYTHON": "/absolute/path/sourcesql/.venv/bin/python",
+        "SOURCESQL_PROFILES_FILE": "/absolute/path/sourcesql/local/profiles.json",
+        "EXA_API_KEY": "",
+        "OPENAI_API_KEY": ""
+      }
+    }
+  }
+}
