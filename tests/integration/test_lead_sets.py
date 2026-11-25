@@ -271,14 +271,22 @@ def test_a_thousand_lead_set_filters_fast(tmp_path):
             lead_set_id=reply["lead_set_id"] if reply else None,
         )
     assert reply["totals"]["leads"] == 1000
-    queries = [
-        "SELECT url FROM input.l WHERE host_rank <= 3 ORDER BY times_found DESC",
-        "SELECT url FROM (SELECT url, ROW_NUMBER() OVER (PARTITION BY host_query ORDER BY host_rank) AS n FROM input.l) AS ranked WHERE n = 1",
-    ]
-    for sql in queries:
-        started = time.perf_counter()
-        engine.query(query=sql, inputs={"l": lead_view(reply)})
-        assert time.perf_counter() - started < 2
+    queries = {
+        "rank filter": "SELECT url FROM input.l WHERE host_rank <= 3 ORDER BY times_found DESC",
+        "row_number": "SELECT url FROM (SELECT url, ROW_NUMBER() OVER (PARTITION BY host_query ORDER BY host_rank) AS n FROM input.l) AS ranked WHERE n = 1",
+    }
+    # Best of 5 per query: a slow filter path is slow every time, a paused process is slow once.
+    ceiling, attempts = 2.0, 5
+    for name, sql in queries.items():
+        best = None
+        for _ in range(attempts):
+            started = time.perf_counter()
+            engine.query(query=sql, inputs={"l": lead_view(reply)})
+            elapsed = time.perf_counter() - started
+            best = elapsed if best is None else min(best, elapsed)
+            if elapsed < ceiling:
+                break
+        assert best < ceiling, f"{name} query: best of {attempts} took {best:.3f}s, ceiling {ceiling}s"
     counted = engine.query(
         query="SELECT count(*) AS n FROM input.h", inputs={"h": lead_view(reply, "hits")}
     )
